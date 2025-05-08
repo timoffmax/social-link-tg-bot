@@ -53,7 +53,7 @@ func GetTwitterLinks(message *response.TgMessage) []string {
 
 func fixInstagramLink(link string) string {
 	searchFor := "instagram"
-	replaceWith := "ddinstagram"
+	replaceWith := "instagramez"
 	result := strings.Replace(link, searchFor, replaceWith, -1)
 
 	return result
