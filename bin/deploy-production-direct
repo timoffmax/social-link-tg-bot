@@ -1,0 +1,105 @@
+#!/bin/bash
+
+# deploy-production-direct - Deploy to production (direct process)
+# ==============================================================
+
+set -euo pipefail
+
+# Configuration
+SERVER_IP="YOUR_SERVER_IP"
+SERVER_USER="YOUR_USER"
+REMOTE_PATH="/var/www/social-link-tg-bot"
+BINARY_NAME="social-link-bot"
+
+# Colors
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m'
+
+echo "🚀 Production Deployment (Direct Process)"
+echo "========================================"
+echo ""
+
+# Add Go to PATH if needed
+if ! command -v go &> /dev/null && [ -x "$HOME/go/bin/go" ]; then
+    export PATH="$HOME/go/bin:$PATH"
+    export GOPATH="$HOME/go"
+fi
+
+# Build
+echo -e "${BLUE}[INFO]${NC} Building application..."
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o $BINARY_NAME .
+
+if [ ! -f "$BINARY_NAME" ]; then
+    echo -e "${RED}[ERROR]${NC} Build failed"
+    exit 1
+fi
+
+echo -e "${GREEN}[SUCCESS]${NC} Build completed"
+
+# Upload
+echo -e "${BLUE}[INFO]${NC} Uploading binary..."
+scp $BINARY_NAME ${SERVER_USER}@${SERVER_IP}:~/social-link-bot-new
+echo -e "${GREEN}[SUCCESS]${NC} Binary uploaded"
+
+# Clean up
+rm -f $BINARY_NAME
+
+# Show manual steps
+echo ""
+echo -e "${YELLOW}[MANUAL STEPS REQUIRED]${NC}"
+echo "========================"
+echo ""
+echo "SSH to server and run:"
+echo ""
+echo -e "${BLUE}ssh ${SERVER_USER}@${SERVER_IP}${NC}"
+echo ""
+echo "Then execute:"
+echo ""
+cat << 'EOF'
+# 1. Find and stop the current bot process
+sudo pkill -f "/var/www/social-link-tg-bot/social-link-bot"
+
+# 2. Wait a moment
+sleep 2
+
+# 3. Backup current binary (optional)
+sudo cp /var/www/social-link-tg-bot/social-link-bot /var/www/social-link-tg-bot/social-link-bot.backup
+
+# 4. Copy new binary
+sudo cp ~/social-link-bot-new /var/www/social-link-tg-bot/social-link-bot
+
+# 5. Set permissions
+sudo chown tgbot:tgbot /var/www/social-link-tg-bot/social-link-bot
+sudo chmod +x /var/www/social-link-tg-bot/social-link-bot
+
+# 6. Start the bot (check how it's normally started)
+# If it's started by a service manager like supervisor or a cron job, 
+# it might restart automatically. Otherwise:
+cd /var/www/social-link-tg-bot
+sudo -u tgbot nohup ./social-link-bot --name=social-link-bot > /dev/null 2>&1 &
+
+# 7. Verify it's running
+sleep 2
+ps aux | grep social-link-bot | grep -v grep
+
+# 8. Clean up
+rm ~/social-link-bot-new
+EOF
+
+echo ""
+echo -e "${BLUE}[TIP]${NC} To run all at once (copy and paste):"
+echo ""
+echo 'sudo pkill -f "/var/www/social-link-tg-bot/social-link-bot" && \'
+echo 'sleep 2 && \'
+echo 'sudo cp /var/www/social-link-tg-bot/social-link-bot /var/www/social-link-tg-bot/social-link-bot.backup && \'
+echo 'sudo cp ~/social-link-bot-new /var/www/social-link-tg-bot/social-link-bot && \'
+echo 'sudo chown tgbot:tgbot /var/www/social-link-tg-bot/social-link-bot && \'
+echo 'sudo chmod +x /var/www/social-link-tg-bot/social-link-bot && \'
+echo 'cd /var/www/social-link-tg-bot && \'
+echo 'sudo -u tgbot nohup ./social-link-bot --name=social-link-bot > /dev/null 2>&1 & && \'
+echo 'sleep 2 && \'
+echo 'ps aux | grep social-link-bot | grep -v grep && \'
+echo 'rm ~/social-link-bot-new'

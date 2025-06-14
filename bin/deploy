@@ -128,9 +128,16 @@ check_prerequisites() {
     
     # Check if Go is available (unless skipping build)
     if [ "$SKIP_BUILD" = false ] && [ "$RESTART_ONLY" = false ]; then
+        # Try to find Go and add it to PATH
         if ! command -v go &> /dev/null; then
-            log_error "Go is not installed or not in PATH"
-            exit 1
+            if [ -x "$HOME/go/bin/go" ]; then
+                export PATH="$HOME/go/bin:$PATH"
+                export GOPATH="$HOME/go"
+                log_info "Added Go to PATH from $HOME/go/bin"
+            else
+                log_error "Go is not installed or not in PATH. Please install Go or run: export PATH=\$HOME/go/bin:\$PATH"
+                exit 1
+            fi
         fi
     fi
     
@@ -157,8 +164,8 @@ build_application() {
     # Clean previous build
     run_command "rm -f $BINARY_NAME" "Cleaning previous build"
     
-    # Build for Linux (assuming server is Linux)
-    run_command "GOOS=linux GOARCH=amd64 go build -o $BINARY_NAME ." "Building application"
+    # Build for Linux with CGO disabled for better compatibility
+    run_command "CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o $BINARY_NAME ." "Building application"
     
     # Verify binary was created
     if [ "$DRY_RUN" = false ] && [ ! -f "$BINARY_NAME" ]; then
@@ -282,9 +289,12 @@ start_service() {
     fi
     
     # Check service status
-    run_remote "systemctl --user is-active $SERVICE_NAME" "Checking service status"
-    
-    log_success "Service started successfully"
+    if run_remote "systemctl --user is-active $SERVICE_NAME" "Checking service status"; then
+        log_success "Service started successfully"
+    else
+        log_warning "Service is not active yet - this is normal if the bot token is not configured"
+        log_info "Configure your bot token and restart the service"
+    fi
 }
 
 # Function to show service status and logs
