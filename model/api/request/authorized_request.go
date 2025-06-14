@@ -6,8 +6,12 @@ import (
 	"fmt"
 	"github.com/google/go-querystring/query"
 	"github.com/timoffmax/social-link-bot/config"
+	"io"
 	"io/ioutil"
+	"mime/multipart"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -42,6 +46,11 @@ type AbstractTgPayload struct {
 	Result      interface{} `json:"result"`
 }
 
+type MediaPayload interface {
+	GetFilePath() string
+	GetFileField() string
+}
+
 func (r *AuthorizedRequest) Send(respPayload interface{}) (ResponseInfo, error) {
 	var result ResponseInfo
 	request, err := prepareRequest(r)
@@ -68,13 +77,73 @@ func prepareRequest(r *AuthorizedRequest) (*http.Request, error) {
 	authorizeRequest(r)
 
 	requestURL := prepareRequestURL(r)
+	
+	if r.RequestContentType == ContentTypeFormData {
+		return prepareMultipartRequest(r, requestURL)
+	}
+	
 	jsonPayload, _ := json.Marshal(r.Payload)
-
 	request, err := http.NewRequest(r.RequestMethod, requestURL, bytes.NewBuffer(jsonPayload))
 	request.Header.Set(HeaderContentType, r.RequestContentType)
 
 	return request, err
+}
 
+/*
+Creates multipart form data request for file uploads
+*/
+func prepareMultipartRequest(r *AuthorizedRequest, requestURL string) (*http.Request, error) {
+	var buf bytes.Buffer
+	writer := multipart.NewWriter(&buf)
+
+	var mediaPayload MediaPayload
+	var isMediaPayload bool
+	
+	// Check if payload implements MediaPayload interface
+	if mediaPayload, isMediaPayload = r.Payload.(MediaPayload); isMediaPayload {
+		filePath := mediaPayload.GetFilePath()
+		fieldName := mediaPayload.GetFileField()
+		
+		// Add file to form
+		file, err := os.Open(filePath)
+		if err != nil {
+			return nil, err
+		}
+		defer file.Close()
+
+		fileWriter, err := writer.CreateFormFile(fieldName, filepath.Base(filePath))
+		if err != nil {
+			return nil, err
+		}
+
+		_, err = io.Copy(fileWriter, file)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	// Add other fields as form data
+	payloadBytes, _ := json.Marshal(r.Payload)
+	var payloadMap map[string]interface{}
+	json.Unmarshal(payloadBytes, &payloadMap)
+
+	for key, value := range payloadMap {
+		if !isMediaPayload || key != mediaPayload.GetFileField() {
+			if value != nil && fmt.Sprintf("%v", value) != "" {
+				writer.WriteField(key, fmt.Sprintf("%v", value))
+			}
+		}
+	}
+
+	writer.Close()
+
+	request, err := http.NewRequest(r.RequestMethod, requestURL, &buf)
+	if err != nil {
+		return nil, err
+	}
+
+	request.Header.Set(HeaderContentType, writer.FormDataContentType())
+	return request, nil
 }
 
 /*
