@@ -134,8 +134,16 @@ func (te *TwitterExtractor) extractViaWebInterface(tweetID string) ([]*MediaInfo
 		return nil, fmt.Errorf("failed to read response: %v", err)
 	}
 	
+	// Debug: Log the first 500 characters of response  
+	bodyStr := string(body)
+	if len(bodyStr) > 500 {
+		log.Printf("🔍 Response preview: %s...", bodyStr[:500])
+	} else {
+		log.Printf("🔍 Full response: %s", bodyStr)
+	}
+	
 	// Parse HTML and extract media URLs
-	return te.parseHTMLForMedia(string(body), tweetID)
+	return te.parseHTMLForMedia(bodyStr, tweetID)
 }
 
 func (te *TwitterExtractor) extractViaEmbedAPI(tweetID string) ([]*MediaInfo, error) {
@@ -260,17 +268,29 @@ func (te *TwitterExtractor) extractTweetText(html string) string {
 		`<div[^>]*data-testid="tweetText"[^>]*>(.*?)</div>`,
 		`<div[^>]*class="[^"]*tweet-text[^"]*"[^>]*>(.*?)</div>`,
 		`<p[^>]*class="[^"]*TweetTextSize[^"]*"[^>]*>(.*?)</p>`,
+		`"full_text":"([^"]*)"`,                          // JSON text
+		`"text":"([^"]*)"`,                               // JSON text alternative
+		`<meta[^>]*property="og:description"[^>]*content="([^"]*)"`, // OG meta
 	}
 	
 	for _, pattern := range patterns {
-		re := regexp.MustCompile(pattern)
+		re := regexp.MustCompile(`(?s)` + pattern) // (?s) makes . match newlines
 		matches := re.FindStringSubmatch(html)
 		if len(matches) > 1 {
 			// Clean up HTML tags and decode entities
 			text := strings.ReplaceAll(matches[1], "<br>", "\n")
+			text = strings.ReplaceAll(text, "<br/>", "\n")
+			text = strings.ReplaceAll(text, "<br />", "\n")
 			text = regexp.MustCompile(`<[^>]*>`).ReplaceAllString(text, "")
+			
+			// Decode JSON escape sequences
+			text = strings.ReplaceAll(text, `\"`, `"`)
+			text = strings.ReplaceAll(text, `\\n`, "\n")
+			text = strings.ReplaceAll(text, `\\t`, "\t")
+			text = strings.ReplaceAll(text, `\\r`, "\r")
+			
 			text = strings.TrimSpace(text)
-			if text != "" {
+			if text != "" && text != "null" {
 				return text
 			}
 		}
@@ -284,21 +304,56 @@ func (te *TwitterExtractor) extractMediaURLs(html string) []string {
 	
 	// Patterns to match image and video URLs
 	patterns := []string{
-		`https://pbs\.twimg\.com/media/[^"'\s]+\.(?:jpg|jpeg|png|gif|webp)`,
+		// Standard Twitter media URLs
+		`https://pbs\.twimg\.com/media/[A-Za-z0-9_-]+\?format=(?:jpg|jpeg|png|gif|webp)`,
+		`https://pbs\.twimg\.com/media/[A-Za-z0-9_-]+\.(?:jpg|jpeg|png|gif|webp)`,
 		`https://video\.twimg\.com/[^"'\s]+\.(?:mp4|m3u8)`,
 		`https://pbs\.twimg\.com/tweet_video/[^"'\s]+\.(?:mp4|gif)`,
+		
+		// JSON embedded media URLs  
+		`"media_url_https":"(https://pbs\.twimg\.com/media/[^"]+)"`,
+		`"video_info"[^}]*"url":"([^"]*\.mp4[^"]*)"`,
+		
+		// Additional patterns for different formats
+		`https://pbs\.twimg\.com/media/[A-Za-z0-9_-]+`,
+		`"(?:src|data-src)":"(https://pbs\.twimg\.com/[^"]+)"`,
 	}
 	
 	for _, pattern := range patterns {
 		re := regexp.MustCompile(pattern)
-		matches := re.FindAllString(html, -1)
-		urls = append(urls, matches...)
+		if strings.Contains(pattern, "(") {
+			// Pattern has capture group
+			matches := re.FindAllStringSubmatch(html, -1)
+			for _, match := range matches {
+				if len(match) > 1 {
+					urls = append(urls, match[1])
+				}
+			}
+		} else {
+			// Pattern matches full URL
+			matches := re.FindAllString(html, -1)
+			urls = append(urls, matches...)
+		}
+	}
+	
+	// Clean up and add format params for images without extensions
+	var cleanURLs []string
+	for _, url := range urls {
+		// Add format parameter if missing for pbs.twimg.com URLs
+		if strings.Contains(url, "pbs.twimg.com/media/") && !strings.Contains(url, "format=") && !strings.Contains(url, ".jpg") && !strings.Contains(url, ".png") {
+			if strings.Contains(url, "?") {
+				url += "&format=jpg&name=large"
+			} else {
+				url += "?format=jpg&name=large"
+			}
+		}
+		cleanURLs = append(cleanURLs, url)
 	}
 	
 	// Remove duplicates
 	seen := make(map[string]bool)
 	var uniqueURLs []string
-	for _, url := range urls {
+	for _, url := range cleanURLs {
 		if !seen[url] {
 			seen[url] = true
 			uniqueURLs = append(uniqueURLs, url)
@@ -422,6 +477,10 @@ func (te *TwitterExtractor) addCookiesToRequest(req *http.Request) {
 			
 			// Only add cookies for twitter/x domains
 			if strings.Contains(domain, "twitter.com") || strings.Contains(domain, "x.com") {
+				// Clean up cookie value - remove quotes and invalid characters
+				value = strings.Trim(value, `"`)
+				value = strings.ReplaceAll(value, `\"`, `"`)
+				
 				cookie := &http.Cookie{
 					Name:  name,
 					Value: value,
