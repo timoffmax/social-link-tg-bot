@@ -36,17 +36,14 @@ echo "🚀 Deploying Social Link Bot"
 echo "============================"
 
 if [ "$RESTART_ONLY" = false ]; then
-    # Build locally
-    log_info "Building application..."
-    cd "$PROJECT_DIR"
-    export GOOS=linux GOARCH=amd64
-    go build -o social-link-bot .
-    log_success "Build completed"
-
-    # Copy binary to server
-    log_info "Copying binary to server..."
-    scp -i "$SERVER_SSH_KEY" social-link-bot "$SERVER_USER@$SERVER_IP:$REMOTE_DIR/"
-    log_success "Binary uploaded"
+    # Push latest code to server
+    log_info "Pushing latest code to server..."
+    ssh -i "$SERVER_SSH_KEY" YOUR_USER@$SERVER_IP "cd $REMOTE_DIR && git pull origin master"
+    
+    # Build on server (to avoid GLIBC issues)
+    log_info "Building application on server..."
+    ssh -i "$SERVER_SSH_KEY" YOUR_USER@$SERVER_IP "cd $REMOTE_DIR && go build -o social-link-bot ."
+    log_success "Build completed on server"
 fi
 
 # Restart service
