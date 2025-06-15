@@ -218,8 +218,12 @@ func prepareMultipartRequest(r *AuthorizedRequest, requestURL string) (*http.Req
 	for key, value := range payloadMap {
 		if !isMediaPayload || key != mediaPayload.GetFileField() {
 			if value != nil && fmt.Sprintf("%v", value) != "" {
-				writer.WriteField(key, fmt.Sprintf("%v", value))
+				fieldValue := fmt.Sprintf("%v", value)
+				fmt.Printf("🔍 DEBUG: Adding form field: %s = %s\n", key, fieldValue)
+				writer.WriteField(key, fieldValue)
 			}
+		} else {
+			fmt.Printf("🔍 DEBUG: Skipping file field: %s\n", key)
 		}
 	}
 
