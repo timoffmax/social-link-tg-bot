@@ -71,28 +71,10 @@ func (r *AuthorizedRequest) Send(respPayload interface{}) (ResponseInfo, error) 
 	request, err := prepareRequest(r)
 
 	if nil == err {
-		// Debug: Log request details for file uploads
-		if r.RequestContentType == ContentTypeFormData {
-			fmt.Printf("🔍 DEBUG: Sending multipart request to %s\n", request.URL.String())
-			fmt.Printf("🔍 DEBUG: Content-Type: %s\n", request.Header.Get("Content-Type"))
-			fmt.Printf("🔍 DEBUG: Content-Length: %d\n", request.ContentLength)
-		}
-		
 		response, err := sendRequest(request)
 		defer response.Body.Close()
 
-		result = parseResponse(response, err, &respPayload) // Fixed: removed variable shadowing
-
-		// Enhanced logging for debugging
-		if 200 != result.StatusCode {
-			fmt.Printf("❌ Response error: %d - %s\n", result.StatusCode, result.Message)
-			fmt.Printf("🔍 DEBUG: Request URL: %s\n", request.URL.String())
-			if r.RequestContentType == ContentTypeFormData {
-				fmt.Printf("🔍 DEBUG: This was a file upload request\n")
-			}
-		} else {
-			fmt.Printf("✅ Request successful: %s\n", request.URL.String())
-		}
+		result = parseResponse(response, err, &respPayload)
 		
 		// Return error for non-200 status codes
 		if 200 != result.StatusCode {
@@ -132,14 +114,9 @@ func prepareMultipartRequest(r *AuthorizedRequest, requestURL string) (*http.Req
 	var mediaPayload MediaPayload
 	var isMediaPayload bool
 	
-	// Check if payload implements MediaPayload interface
-	fmt.Printf("🔍 DEBUG: Checking MediaPayload interface for type: %T\n", r.Payload)
-	
 	// Use reflection to check for required methods since interface assertion fails across package boundaries
 	payloadValue := reflect.ValueOf(r.Payload)
 	payloadType := payloadValue.Type()
-	
-	fmt.Printf("🔍 DEBUG: Original payload value kind: %s, type: %s\n", payloadValue.Kind(), payloadType)
 	
 	// For struct values with pointer receiver methods, we need to create a pointer
 	if payloadValue.Kind() == reflect.Struct {
@@ -148,7 +125,6 @@ func prepareMultipartRequest(r *AuthorizedRequest, requestURL string) (*http.Req
 		newPtr.Elem().Set(payloadValue)
 		payloadValue = newPtr
 		payloadType = payloadValue.Type()
-		fmt.Printf("🔍 DEBUG: Created pointer type: %s\n", payloadType)
 	}
 	
 	// Check if both methods exist
@@ -164,51 +140,28 @@ func prepareMultipartRequest(r *AuthorizedRequest, requestURL string) (*http.Req
 			filePath := filePathResult[0].String()
 			fieldName := fileFieldResult[0].String()
 			
-			fmt.Printf("✅ DEBUG: File methods detected via reflection - FilePath: %s, FieldName: %s\n", filePath, fieldName)
 			isMediaPayload = true
 			
 			// Create an adapter to implement MediaPayload interface
 			mediaPayload = &mediaAdapter{filePath: filePath, fileField: fieldName}
 		
 		// Add file to form
-		fmt.Printf("🔍 DEBUG: Opening file: %s\n", filePath)
-		
-		// Check file exists and get size
-		fileInfo, err := os.Stat(filePath)
-		if err != nil {
-			fmt.Printf("❌ File stat error: %v\n", err)
-			return nil, err
-		}
-		fmt.Printf("🔍 DEBUG: File size: %d bytes\n", fileInfo.Size())
-		
 		file, err := os.Open(filePath)
 		if err != nil {
-			fmt.Printf("❌ File open error: %v\n", err)
 			return nil, err
 		}
 		defer file.Close()
 
 		fileWriter, err := writer.CreateFormFile(fieldName, filepath.Base(filePath))
 		if err != nil {
-			fmt.Printf("❌ CreateFormFile error: %v\n", err)
 			return nil, err
 		}
 
-		bytesWritten, err := io.Copy(fileWriter, file)
+		_, err = io.Copy(fileWriter, file)
 		if err != nil {
-			fmt.Printf("❌ File copy error: %v\n", err)
 			return nil, err
 		}
-		fmt.Printf("🔍 DEBUG: Bytes written to form: %d\n", bytesWritten)
 		}
-	} else {
-		fmt.Printf("❌ DEBUG: Required methods NOT detected via reflection! Type %T missing GetFilePath/GetFileField methods\n", r.Payload)
-		fmt.Printf("🔍 DEBUG: Available methods: ")
-		for i := 0; i < payloadType.NumMethod(); i++ {
-			method := payloadType.Method(i)
-			fmt.Printf("%s ", method.Name)
-		}
-		fmt.Printf("\n")
 	}
 	// Add other fields as form data
 	payloadBytes, _ := json.Marshal(r.Payload)
@@ -231,11 +184,8 @@ func prepareMultipartRequest(r *AuthorizedRequest, requestURL string) (*http.Req
 					fieldValue = fmt.Sprintf("%v", value)
 				}
 				
-				fmt.Printf("🔍 DEBUG: Adding form field: %s = %s\n", key, fieldValue)
 				writer.WriteField(key, fieldValue)
 			}
-		} else {
-			fmt.Printf("🔍 DEBUG: Skipping file field: %s\n", key)
 		}
 	}
 
