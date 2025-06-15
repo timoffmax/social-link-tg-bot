@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"path/filepath"
 	"strings"
 	"github.com/timoffmax/social-link-bot/model/api/request/message"
 	"github.com/timoffmax/social-link-bot/model/api/request/payload"
