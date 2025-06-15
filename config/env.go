@@ -3,6 +3,7 @@ package config
 import (
 	"github.com/joho/godotenv"
 	"os"
+	"strings"
 )
 
 const tgBotTokenKey = "TG_BOT_TOKEN"
@@ -47,4 +48,28 @@ func GetTwitterPassword() string {
 // Proxy configuration
 func GetYtDlpProxy() string {
 	return os.Getenv("YTDLP_PROXY")
+}
+
+// Get list of proxies from YTDLP_PROXIES environment variable
+// Format: proxy1,proxy2,proxy3 (comma-separated)
+func GetYtDlpProxies() []string {
+	proxiesStr := os.Getenv("YTDLP_PROXIES")
+	if proxiesStr == "" {
+		// Fallback to single proxy if available
+		if proxy := GetYtDlpProxy(); proxy != "" {
+			return []string{proxy}
+		}
+		return []string{}
+	}
+	
+	// Split by comma and trim spaces
+	var proxies []string
+	for _, proxy := range strings.Split(proxiesStr, ",") {
+		proxy = strings.TrimSpace(proxy)
+		if proxy != "" {
+			proxies = append(proxies, proxy)
+		}
+	}
+	
+	return proxies
 }

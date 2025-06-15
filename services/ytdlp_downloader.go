@@ -99,8 +99,46 @@ func (yd *YtDlpDownloader) DownloadMedia(url string) ([]*MediaInfo, error) {
 	
 	log.Printf("Using output template: %s", outputTemplate)
 	
-	// Platform-specific arguments
-	args := yd.buildDownloadArgs(url, outputTemplate)
+	// Get list of proxies to try
+	proxies := config.GetYtDlpProxies()
+	
+	// For TikTok, skip proxies and try direct connection first
+	if strings.Contains(url, "tiktok.com") {
+		proxies = []string{} // Start with no proxy for TikTok
+	}
+	
+	// Add empty string to try without proxy as last resort
+	proxies = append(proxies, "")
+	
+	var lastErr error
+	for i, proxy := range proxies {
+		if proxy == "" {
+			log.Printf("Attempt %d/%d: Trying without proxy", i+1, len(proxies))
+		} else {
+			log.Printf("Attempt %d/%d: Trying with proxy %s", i+1, len(proxies), proxy)
+		}
+		
+		// Try download with current proxy
+		result, err := yd.attemptDownload(url, outputTemplate, proxy)
+		if err == nil {
+			return result, nil
+		}
+		
+		lastErr = err
+		log.Printf("Download failed with proxy '%s': %v", proxy, err)
+	}
+	
+	return nil, fmt.Errorf("all download attempts failed, last error: %v", lastErr)
+}
+
+// attemptDownload tries to download with a specific proxy (or empty string for no proxy)
+func (yd *YtDlpDownloader) attemptDownload(url string, outputTemplate string, proxy string) ([]*MediaInfo, error) {
+	// Extract timestamp from output template
+	var timestamp int64
+	fmt.Sscanf(filepath.Base(outputTemplate), "%d_", &timestamp)
+	
+	// Build arguments with specific proxy
+	args := yd.buildDownloadArgsWithProxy(url, outputTemplate, proxy)
 	
 	cmd := exec.Command(yd.BinaryPath, args...)
 	
@@ -109,8 +147,6 @@ func (yd *YtDlpDownloader) DownloadMedia(url string) ([]*MediaInfo, error) {
 	// Execute download
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		log.Printf("Command failed with error: %v", err)
-		log.Printf("Command output: %s", string(output))
 		return nil, fmt.Errorf("download failed: %v\nOutput: %s", err, string(output))
 	}
 	
@@ -182,6 +218,28 @@ func (yd *YtDlpDownloader) findDownloadedFiles(timestamp int64) ([]string, error
 	})
 	
 	return files, err
+}
+
+// buildDownloadArgsWithProxy builds download args with a specific proxy
+func (yd *YtDlpDownloader) buildDownloadArgsWithProxy(url string, outputTemplate string, proxy string) []string {
+	args := yd.buildDownloadArgs(url, outputTemplate)
+	
+	// Remove any existing proxy from args (it's added at the end by buildDownloadArgs)
+	var cleanArgs []string
+	for i := 0; i < len(args); i++ {
+		if args[i] == "--proxy" {
+			i++ // Skip the proxy value
+			continue
+		}
+		cleanArgs = append(cleanArgs, args[i])
+	}
+	
+	// Add specific proxy if provided
+	if proxy != "" {
+		cleanArgs = append(cleanArgs, "--proxy", proxy)
+	}
+	
+	return cleanArgs
 }
 
 // buildDownloadArgs creates platform-specific arguments for yt-dlp
@@ -262,10 +320,7 @@ func (yd *YtDlpDownloader) buildDownloadArgs(url string, outputTemplate string) 
 		baseArgs = append(baseArgs, twitterArgs...)
 	}
 	
-	// Add proxy if configured (skip for TikTok due to connection issues)
-	if proxy := config.GetYtDlpProxy(); proxy != "" && !strings.Contains(url, "tiktok.com") {
-		baseArgs = append(baseArgs, "--proxy", proxy)
-	}
+	// Don't add proxy here, it's handled by buildDownloadArgsWithProxy
 	
 	baseArgs = append(baseArgs, url)
 	return baseArgs
