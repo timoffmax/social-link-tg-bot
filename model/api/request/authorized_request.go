@@ -56,14 +56,27 @@ func (r *AuthorizedRequest) Send(respPayload interface{}) (ResponseInfo, error) 
 	request, err := prepareRequest(r)
 
 	if nil == err {
+		// Debug: Log request details for file uploads
+		if r.RequestContentType == ContentTypeFormData {
+			fmt.Printf("🔍 DEBUG: Sending multipart request to %s\n", request.URL.String())
+			fmt.Printf("🔍 DEBUG: Content-Type: %s\n", request.Header.Get("Content-Type"))
+			fmt.Printf("🔍 DEBUG: Content-Length: %d\n", request.ContentLength)
+		}
+		
 		response, err := sendRequest(request)
 		defer response.Body.Close()
 
 		result = parseResponse(response, err, &respPayload) // Fixed: removed variable shadowing
 
-		// TODO: Use a logger
+		// Enhanced logging for debugging
 		if 200 != result.StatusCode {
-			fmt.Println("Response error: ", result.StatusCode, " - ", result.Message)
+			fmt.Printf("❌ Response error: %d - %s\n", result.StatusCode, result.Message)
+			fmt.Printf("🔍 DEBUG: Request URL: %s\n", request.URL.String())
+			if r.RequestContentType == ContentTypeFormData {
+				fmt.Printf("🔍 DEBUG: This was a file upload request\n")
+			}
+		} else {
+			fmt.Printf("✅ Request successful: %s\n", request.URL.String())
 		}
 		
 		// Return error for non-200 status codes

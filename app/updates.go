@@ -162,6 +162,27 @@ func processMediaDownload(url string, origChat *response.TgChat, downloader *ser
 			
 			// Try fallback: send as document instead of video
 			log.Printf("Trying fallback: sending video as document...")
+			
+			// First, try creating a simple text file to test file uploads
+			testFile := "temp/test.txt"
+			os.WriteFile(testFile, []byte("Test file upload - Instagram video download"), 0644)
+			
+			testDocPayload := payload.TgPlSendDocument{
+				ChatId:   origChat.Id,
+				Document: "test.txt",
+				Caption:  "🧪 Testing file upload capability",
+				FilePath: testFile,
+			}
+			testSend := message.NewSendDocument(testDocPayload)
+			_, testErr := testSend.Request.Send(testSend.ResponsePayload)
+			if testErr != nil {
+				log.Printf("❌ Even simple text file upload failed: %v", testErr)
+			} else {
+				log.Printf("✅ Simple text file upload worked!")
+				os.Remove(testFile)
+			}
+			
+			// Now try the video as document
 			documentPayload := payload.TgPlSendDocument{
 				ChatId:   origChat.Id,
 				Document: "video.mp4",
