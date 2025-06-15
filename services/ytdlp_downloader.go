@@ -90,25 +90,40 @@ func (yd *YtDlpDownloader) GetMediaInfo(url string) (*YtDlpInfo, error) {
 }
 
 func (yd *YtDlpDownloader) DownloadMedia(url string) ([]*MediaInfo, error) {
+	log.Printf("Starting media download from: %s", url)
+	
+	// Ensure temp directory exists
+	if err := os.MkdirAll(yd.TempDir, 0755); err != nil {
+		return nil, fmt.Errorf("failed to create temp directory: %v", err)
+	}
+	
 	// Create unique filename with timestamp
 	timestamp := time.Now().Unix()
 	outputTemplate := filepath.Join(yd.TempDir, fmt.Sprintf("%d_%%(title)s.%%(ext)s", timestamp))
+	
+	log.Printf("Using output template: %s", outputTemplate)
 	
 	// Download command
 	args := []string{
 		"--no-playlist",
 		"--output", outputTemplate,
-		"--format", "best[height<=720]", // Limit quality to reduce file size
+		"--format", "best[filesize<50M]/best", // Prefer smaller files, fallback to best
 		url,
 	}
 	
 	cmd := exec.Command(yd.BinaryPath, args...)
 	
+	log.Printf("Executing command: %s %v", yd.BinaryPath, args)
+	
 	// Execute download
 	output, err := cmd.CombinedOutput()
 	if err != nil {
+		log.Printf("Command failed with error: %v", err)
+		log.Printf("Command output: %s", string(output))
 		return nil, fmt.Errorf("download failed: %v\nOutput: %s", err, string(output))
 	}
+	
+	log.Printf("Download completed successfully")
 	
 	// Find downloaded files
 	downloadedFiles, err := yd.findDownloadedFiles(timestamp)
