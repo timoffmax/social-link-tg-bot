@@ -19,8 +19,21 @@ vendor/
 
 # Local configuration
 .env
+bin/deploy.conf
 
 # Executable files
 social-link-bot
 main
+
+# Logs
+*.log
+logs/
+
+# Downloaded media
+downloads/
+temp/
+*.mp4
+*.jpg
+*.png
+*.webm
 
