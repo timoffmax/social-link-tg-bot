@@ -10,7 +10,12 @@ func GetAllLinks(message *response.TgMessage) []string {
 	instagramLinks := GetInstagramLinks(message)
 	tikTokLinks := GetTikTokLinks(message)
 	twitterLinks := GetTwitterLinks(message)
+	nineGagLinks := GetNineGagLinks(message)
+	youtubeLinks := GetYouTubeLinks(message)
+	
 	result := append(append(instagramLinks, tikTokLinks...), twitterLinks...)
+	result = append(result, nineGagLinks...)
+	result = append(result, youtubeLinks...)
 
 	return result
 }
@@ -19,7 +24,12 @@ func GetAllSocialLinks(message *response.TgMessage) []string {
 	instagramLinks := GetOriginalInstagramLinks(message)
 	tikTokLinks := GetOriginalTikTokLinks(message)
 	twitterLinks := GetOriginalTwitterLinks(message)
+	nineGagLinks := GetOriginalNineGagLinks(message)
+	youtubeLinks := GetOriginalYouTubeLinks(message)
+	
 	result := append(append(instagramLinks, tikTokLinks...), twitterLinks...)
+	result = append(result, nineGagLinks...)
+	result = append(result, youtubeLinks...)
 
 	return result
 }
@@ -96,5 +106,33 @@ func GetOriginalTikTokLinks(message *response.TgMessage) []string {
 
 func GetOriginalTwitterLinks(message *response.TgMessage) []string {
 	regex := regexp.MustCompile(`https:\/\/x\.com\/[^\s]+`)
+	return regex.FindAllString(message.Text, -1)
+}
+
+func GetNineGagLinks(message *response.TgMessage) []string {
+	regex := regexp.MustCompile(`https:\/\/(www\.)?9gag\.com\/[^\s]+`)
+	result := regex.FindAllString(message.Text, -1)
+	
+	// No fixed link service for 9gag, return as-is
+	return result
+}
+
+func GetOriginalNineGagLinks(message *response.TgMessage) []string {
+	regex := regexp.MustCompile(`https:\/\/(www\.)?9gag\.com\/[^\s]+`)
+	return regex.FindAllString(message.Text, -1)
+}
+
+func GetYouTubeLinks(message *response.TgMessage) []string {
+	// Match YouTube Shorts URLs: youtube.com/shorts/*, youtu.be/*, m.youtube.com/shorts/*
+	regex := regexp.MustCompile(`https:\/\/(www\.|m\.)?(youtube\.com\/shorts\/|youtu\.be\/)[^\s]+`)
+	result := regex.FindAllString(message.Text, -1)
+	
+	// No fixed link service for YouTube, return as-is
+	return result
+}
+
+func GetOriginalYouTubeLinks(message *response.TgMessage) []string {
+	// Match YouTube Shorts URLs: youtube.com/shorts/*, youtu.be/*, m.youtube.com/shorts/*
+	regex := regexp.MustCompile(`https:\/\/(www\.|m\.)?(youtube\.com\/shorts\/|youtu\.be\/)[^\s]+`)
 	return regex.FindAllString(message.Text, -1)
 }

@@ -318,6 +318,20 @@ func (yd *YtDlpDownloader) buildDownloadArgs(url string, outputTemplate string) 
 		}
 		
 		baseArgs = append(baseArgs, twitterArgs...)
+	} else if strings.Contains(url, "9gag.com") {
+		// 9GAG-specific args
+		ninegagArgs := []string{
+			"--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+			"--referer", "https://9gag.com/",
+		}
+		baseArgs = append(baseArgs, ninegagArgs...)
+	} else if strings.Contains(url, "youtube.com") || strings.Contains(url, "youtu.be") {
+		// YouTube Shorts-specific args
+		youtubeArgs := []string{
+			"--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+			"--referer", "https://www.youtube.com/",
+		}
+		baseArgs = append(baseArgs, youtubeArgs...)
 	}
 	
 	// Don't add proxy here, it's handled by buildDownloadArgsWithProxy
@@ -352,6 +366,10 @@ func (yd *YtDlpDownloader) getPlatformName(url string) string {
 		return "TikTok"
 	} else if strings.Contains(url, "twitter.com") || strings.Contains(url, "x.com") {
 		return "Twitter"
+	} else if strings.Contains(url, "9gag.com") {
+		return "9GAG"
+	} else if strings.Contains(url, "youtube.com") || strings.Contains(url, "youtu.be") {
+		return "YouTube"
 	}
 	return "social media"
 }

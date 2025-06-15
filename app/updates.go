@@ -146,8 +146,9 @@ func processMediaDownload(url string, origChat *response.TgChat, downloader *ser
 	log.Printf("✅ Successfully sent confirmation message to chat %d", origChat.Id)
 
 	// Send each downloaded media file
-	for _, mediaInfo := range mediaInfos {
-		log.Printf("Attempting to send media file: %s (type: %s)", mediaInfo.Filename, mediaInfo.Type)
+	log.Printf("Downloaded %d media files from %s", len(mediaInfos), url)
+	for i, mediaInfo := range mediaInfos {
+		log.Printf("Sending media file %d/%d: %s (type: %s)", i+1, len(mediaInfos), mediaInfo.Filename, mediaInfo.Type)
 		
 		// Check if file exists before sending
 		if _, err := os.Stat(mediaInfo.Filename); os.IsNotExist(err) {
@@ -252,6 +253,9 @@ func getFixedUrl(url string) string {
 	if strings.Contains(url, "x.com") {
 		return strings.Replace(url, "x.com", "fixupx.com", 1)
 	}
+	
+	// 9GAG and YouTube don't have fixed link services
+	// Return empty string to trigger fallback message
 	
 	return ""
 }
