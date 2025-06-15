@@ -159,8 +159,24 @@ func processMediaDownload(url string, origChat *response.TgChat, downloader *ser
 		err := sendMediaFile(mediaInfo, origChat)
 		if err != nil {
 			log.Printf("Failed to send media file %s: %v", mediaInfo.Filename, err)
-			// Don't clean up failed files immediately for debugging
-			log.Printf("Keeping file for debugging: %s", mediaInfo.Filename)
+			
+			// Try fallback: send as document instead of video
+			log.Printf("Trying fallback: sending video as document...")
+			documentPayload := payload.TgPlSendDocument{
+				ChatId:   origChat.Id,
+				Document: "video.mp4",
+				Caption:  "📹 Instagram video (sent as document due to upload issue)",
+				FilePath: mediaInfo.Filename,
+			}
+			sendDocument := message.NewSendDocument(documentPayload)
+			_, docErr := sendDocument.Request.Send(sendDocument.ResponsePayload)
+			if docErr != nil {
+				log.Printf("Document fallback also failed: %v", docErr)
+				log.Printf("Keeping file for debugging: %s", mediaInfo.Filename)
+			} else {
+				log.Printf("✅ Successfully sent video as document: %s", mediaInfo.Filename)
+				downloader.CleanupFile(mediaInfo.Filename)
+			}
 		} else {
 			log.Printf("Successfully sent media file: %s", mediaInfo.Filename)
 			// Clean up the file after successful sending
