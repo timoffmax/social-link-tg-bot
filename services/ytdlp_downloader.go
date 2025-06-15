@@ -239,11 +239,31 @@ func (yd *YtDlpDownloader) attemptDownload(url string, outputTemplate string, pr
 }
 
 func (yd *YtDlpDownloader) DownloadInstagramMedia(url string) ([]*MediaInfo, error) {
-	return yd.DownloadMedia(url)
+	// For Instagram, try multiple strategies for different content types
+	
+	// Strategy 1: Try normal download first 
+	mediaInfos, err := yd.DownloadMedia(url)
+	if err == nil && len(mediaInfos) > 0 {
+		return mediaInfos, nil
+	}
+	
+	// Strategy 2: Try thumbnails-only approach for image posts/carousels
+	log.Printf("Normal download failed, trying thumbnails-only approach for Instagram")
+	return yd.downloadThumbnailsOnly(url, "Instagram")
 }
 
 func (yd *YtDlpDownloader) DownloadTikTokMedia(url string) ([]*MediaInfo, error) {
-	return yd.DownloadMedia(url)
+	// For TikTok, try multiple strategies for different content types
+	
+	// Strategy 1: Try normal download first 
+	mediaInfos, err := yd.DownloadMedia(url)
+	if err == nil && len(mediaInfos) > 0 {
+		return mediaInfos, nil
+	}
+	
+	// Strategy 2: Try thumbnails-only approach for image slideshows
+	log.Printf("Normal download failed, trying thumbnails-only approach for TikTok")
+	return yd.downloadThumbnailsOnly(url, "TikTok")
 }
 
 func (yd *YtDlpDownloader) DownloadTwitterMedia(url string) ([]*MediaInfo, error) {
@@ -257,11 +277,11 @@ func (yd *YtDlpDownloader) DownloadTwitterMedia(url string) ([]*MediaInfo, error
 	
 	// Strategy 2: Try thumbnails-only approach for image tweets
 	log.Printf("Normal download failed, trying thumbnails-only approach for Twitter")
-	return yd.downloadTwitterThumbnailsOnly(url)
+	return yd.downloadThumbnailsOnly(url, "Twitter")
 }
 
-// downloadTwitterThumbnailsOnly tries to download only thumbnails and metadata for Twitter posts
-func (yd *YtDlpDownloader) downloadTwitterThumbnailsOnly(url string) ([]*MediaInfo, error) {
+// downloadThumbnailsOnly tries to download only thumbnails and metadata for posts
+func (yd *YtDlpDownloader) downloadThumbnailsOnly(url string, platform string) ([]*MediaInfo, error) {
 	// Ensure temp directory exists
 	if err := os.MkdirAll(yd.TempDir, 0755); err != nil {
 		return nil, fmt.Errorf("failed to create temp directory: %v", err)
@@ -271,7 +291,7 @@ func (yd *YtDlpDownloader) downloadTwitterThumbnailsOnly(url string) ([]*MediaIn
 	timestamp := time.Now().Unix()
 	outputTemplate := filepath.Join(yd.TempDir, fmt.Sprintf("%d_%%(title)s.%%(ext)s", timestamp))
 	
-	log.Printf("Trying thumbnails-only download with template: %s", outputTemplate)
+	log.Printf("Trying thumbnails-only download for %s with template: %s", platform, outputTemplate)
 	
 	// Build special args for thumbnails and metadata only
 	args := []string{
@@ -330,8 +350,8 @@ func (yd *YtDlpDownloader) downloadTwitterThumbnailsOnly(url string) ([]*MediaIn
 		
 		mediaType := yd.detectMediaType(filePath)
 		
-		// Use tweet text as caption if available
-		caption := "Downloaded from Twitter"
+		// Use description text as caption if available
+		caption := fmt.Sprintf("Downloaded from %s", platform)
 		if tweetDescription != "" {
 			caption = tweetDescription
 		}
@@ -346,9 +366,9 @@ func (yd *YtDlpDownloader) downloadTwitterThumbnailsOnly(url string) ([]*MediaIn
 		mediaInfos = append(mediaInfos, mediaInfo)
 	}
 	
-	// If no images found, try to extract at least the text content
+	// If no images found, log the description content
 	if len(mediaInfos) == 0 && tweetDescription != "" {
-		log.Printf("No images found, but have tweet text: %s", tweetDescription)
+		log.Printf("No images found, but have %s text: %s", platform, tweetDescription)
 		// Return an empty slice, the calling function will handle text-only fallback
 	}
 	
@@ -457,11 +477,19 @@ func (yd *YtDlpDownloader) buildDownloadArgs(url string, outputTemplate string) 
 			"--add-header", "sec-fetch-user:?1",
 		}
 		
-		// Add TikTok credentials if available
-		if username := config.GetTikTokUsername(); username != "" {
-			if password := config.GetTikTokPassword(); password != "" {
-				log.Printf("Using TikTok credentials for user: %s", username)
-				tiktokArgs = append(tiktokArgs, "--username", username, "--password", password)
+		// Check for TikTok-specific cookies file first
+		tiktokCookiesPath := yd.getFilePath("tiktok_cookies.txt")
+		if _, err := os.Stat(tiktokCookiesPath); err == nil {
+			tiktokArgs = append(tiktokArgs, "--cookies", tiktokCookiesPath)
+			log.Printf("Using TikTok cookies for authentication: %s", tiktokCookiesPath)
+		} else {
+			log.Printf("⚠️ TikTok cookies not found at %s. Using credentials if available.", tiktokCookiesPath)
+			// Add TikTok credentials if available
+			if username := config.GetTikTokUsername(); username != "" {
+				if password := config.GetTikTokPassword(); password != "" {
+					log.Printf("Using TikTok credentials for user: %s", username)
+					tiktokArgs = append(tiktokArgs, "--username", username, "--password", password)
+				}
 			}
 		}
 		
