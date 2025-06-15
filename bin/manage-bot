@@ -6,7 +6,7 @@
 set -euo pipefail
 
 SERVICE_NAME="social-link-bot"
-REMOTE_DIR="/path/to/social-link-bot"
+REMOTE_DIR="/var/www/social-link-tg-bot"
 
 # Colors
 GREEN='\033[0;32m'

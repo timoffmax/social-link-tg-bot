@@ -42,7 +42,7 @@ if [ "$RESTART_ONLY" = false ]; then
     
     # Build on server (to avoid GLIBC issues)
     log_info "Building application on server..."
-    ssh -i "$SERVER_SSH_KEY" YOUR_USER@$SERVER_IP "cd $REMOTE_DIR && go build -o social-link-bot ."
+    ssh -i "$SERVER_SSH_KEY" YOUR_USER@$SERVER_IP "cd $REMOTE_DIR && /usr/local/go/bin/go build -o social-link-bot ."
     log_success "Build completed on server"
 fi
 

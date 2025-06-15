@@ -29,7 +29,7 @@ SSH into the server and use the management script:
 ssh -i ~/.ssh/your_deploy_key botuser@YOUR_SERVER_IP
 
 # On the server:
-cd /path/to/social-link-bot
+cd /var/www/social-link-tg-bot
 ./manage-bot status    # Check if bot is running
 ./manage-bot logs      # Show recent logs
 ./manage-bot follow    # Follow logs in real-time

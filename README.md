@@ -30,7 +30,8 @@ go build -o social-link-bot .
 # SSH into server
 ssh -i ~/.ssh/your_deploy_key botuser@YOUR_SERVER_IP
 
-# Manage the bot
+# Navigate to bot directory and manage
+cd /var/www/social-link-tg-bot
 ./manage-bot status    # Check status
 ./manage-bot logs      # Show logs  
 ./manage-bot restart   # Restart bot

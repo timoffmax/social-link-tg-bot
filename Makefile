@@ -60,7 +60,7 @@ setup: install-deps
 
 ## logs: Show recent logs (for production)
 logs:
-	ssh -i ~/.ssh/your_deploy_key botuser@YOUR_SERVER_IP 'tail -f /path/to/social-link-bot/logs/bot.log'
+	ssh -i ~/.ssh/your_deploy_key botuser@YOUR_SERVER_IP 'tail -f /var/www/social-link-tg-bot/logs/bot.log'
 
 ## deploy: Deploy to production
 deploy:
