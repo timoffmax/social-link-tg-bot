@@ -334,7 +334,15 @@ func (yd *YtDlpDownloader) DownloadTikTokMedia(url string) ([]*MediaInfo, error)
 	
 	// Strategy 2: Try thumbnails-only approach for image slideshows
 	log.Printf("Normal download failed, trying thumbnails-only approach for TikTok")
-	return yd.downloadThumbnailsOnly(url, "TikTok")
+	mediaInfos, err = yd.downloadThumbnailsOnly(url, "TikTok")
+	if err == nil && len(mediaInfos) > 0 {
+		return mediaInfos, nil
+	}
+	
+	// Strategy 3: Use custom TikTok extractor as fallback for photo slideshows
+	log.Printf("yt-dlp failed completely, trying custom TikTok extractor")
+	tiktokExtractor := NewTikTokExtractor(yd.WorkingDir, yd.TempDir)
+	return tiktokExtractor.ExtractTikTokPost(url)
 }
 
 func (yd *YtDlpDownloader) DownloadTwitterMedia(url string) ([]*MediaInfo, error) {
