@@ -45,6 +45,15 @@ func GetTwitterPassword() string {
 	return os.Getenv("TWITTER_PASSWORD")
 }
 
+// 9GAG authentication configuration
+func GetNineGagUsername() string {
+	return os.Getenv("NINEGAG_USERNAME")
+}
+
+func GetNineGagPassword() string {
+	return os.Getenv("NINEGAG_PASSWORD")
+}
+
 // Proxy configuration
 func GetYtDlpProxy() string {
 	return os.Getenv("YTDLP_PROXY")

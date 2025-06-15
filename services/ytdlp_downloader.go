@@ -335,6 +335,15 @@ func (yd *YtDlpDownloader) buildDownloadArgs(url string, outputTemplate string) 
 			"--add-header", "sec-ch-ua-platform:\"Windows\"",
 			"--fragment-retries", "2",  // Reduce retries for faster failure
 		}
+		
+		// Add 9GAG credentials if available (may not be supported by yt-dlp)
+		if username := config.GetNineGagUsername(); username != "" {
+			if password := config.GetNineGagPassword(); password != "" {
+				log.Printf("Attempting to use 9GAG credentials for user: %s", username)
+				ninegagArgs = append(ninegagArgs, "--username", username, "--password", password)
+			}
+		}
+		
 		baseArgs = append(baseArgs, ninegagArgs...)
 	} else if strings.Contains(url, "youtube.com") || strings.Contains(url, "youtu.be") {
 		// YouTube Shorts-specific args
