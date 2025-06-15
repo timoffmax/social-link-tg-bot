@@ -304,8 +304,33 @@ func (yd *YtDlpDownloader) downloadThumbnailsOnly(url string, platform string) (
 		"--ignore-errors",               // Continue on errors
 		"--no-check-certificate",
 		"--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
-		url,
 	}
+	
+	// Add platform-specific authentication for thumbnails download
+	if strings.Contains(url, "twitter.com") || strings.Contains(url, "x.com") {
+		// Check for Twitter-specific cookies file
+		twitterCookiesPath := yd.getFilePath("twitter_cookies.txt")
+		if _, err := os.Stat(twitterCookiesPath); err == nil {
+			args = append(args, "--cookies", twitterCookiesPath)
+			log.Printf("Using Twitter cookies for thumbnails download: %s", twitterCookiesPath)
+		}
+	} else if strings.Contains(url, "tiktok.com") {
+		// Check for TikTok-specific cookies file
+		tiktokCookiesPath := yd.getFilePath("tiktok_cookies.txt")
+		if _, err := os.Stat(tiktokCookiesPath); err == nil {
+			args = append(args, "--cookies", tiktokCookiesPath)
+			log.Printf("Using TikTok cookies for thumbnails download: %s", tiktokCookiesPath)
+		}
+	} else if strings.Contains(url, "instagram.com") {
+		// Use general cookies file for Instagram
+		cookiesPath := yd.getFilePath("cookies.txt")
+		if _, err := os.Stat(cookiesPath); err == nil {
+			args = append(args, "--cookies", cookiesPath)
+			log.Printf("Using Instagram cookies for thumbnails download: %s", cookiesPath)
+		}
+	}
+	
+	args = append(args, url)
 	
 	cmd := exec.Command(yd.BinaryPath, args...)
 	
