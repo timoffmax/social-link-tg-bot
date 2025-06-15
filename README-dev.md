@@ -43,6 +43,42 @@ make logs
 make help
 ```
 
+## Production Service Management
+
+The bot runs as a systemd service on the production server:
+
+```bash
+# Deploy code and build
+make deploy
+
+# Restart the service (on server)
+ssh YOUR_USER@YOUR_SERVER_IP
+sudo systemctl restart tg-social-link-bot
+sudo systemctl status tg-social-link-bot
+
+# Check service logs
+sudo journalctl -u tg-social-link-bot -f
+
+# Service management commands
+sudo systemctl start tg-social-link-bot
+sudo systemctl stop tg-social-link-bot
+sudo systemctl restart tg-social-link-bot
+sudo systemctl status tg-social-link-bot
+```
+
+## Helper Scripts
+
+```bash
+# Restart service helper
+./bin/restart-service
+
+# Manual bot management (for debugging)
+ssh YOUR_USER@YOUR_SERVER_IP
+cd /var/www/social-link-tg-bot
+./manage-bot status
+./manage-bot logs
+```
+
 ## Testing Bot Locally
 
 1. **Create a test bot** via @BotFather on Telegram
