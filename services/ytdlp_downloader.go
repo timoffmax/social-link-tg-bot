@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 	
-	"github.com/timoffmax/social-link-tg-bot/config"
+	"github.com/timoffmax/social-link-bot/config"
 )
 
 type YtDlpInfo struct {
