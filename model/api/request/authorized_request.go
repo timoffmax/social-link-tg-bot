@@ -59,11 +59,16 @@ func (r *AuthorizedRequest) Send(respPayload interface{}) (ResponseInfo, error) 
 		response, err := sendRequest(request)
 		defer response.Body.Close()
 
-		result := parseResponse(response, err, &respPayload)
+		result = parseResponse(response, err, &respPayload) // Fixed: removed variable shadowing
 
 		// TODO: Use a logger
 		if 200 != result.StatusCode {
 			fmt.Println("Response error: ", result.StatusCode, " - ", result.Message)
+		}
+		
+		// Return error for non-200 status codes
+		if 200 != result.StatusCode {
+			return result, fmt.Errorf("API error: %d - %s", result.StatusCode, result.Message)
 		}
 	}
 
@@ -192,7 +197,16 @@ func parseResponse(response *http.Response, error error, respPayload *interface{
 
 	result.StatusCode = response.StatusCode
 
-	if "" != tgPayload.Description {
+	// Check Telegram API's 'ok' field for API-level errors
+	if !tgPayload.Ok {
+		// Telegram API returned an error, treat as 400 status
+		result.StatusCode = 400
+		if "" != tgPayload.Description {
+			result.Message = tgPayload.Description
+		} else {
+			result.Message = "Telegram API error"
+		}
+	} else if "" != tgPayload.Description {
 		result.Message = tgPayload.Description
 	}
 

@@ -163,7 +163,10 @@ func sendMediaFile(mediaInfo *services.MediaInfo, origChat *response.TgChat) err
 			Caption:  mediaInfo.Caption,
 			FilePath: mediaInfo.Filename,
 		}
-		message.NewSendPhoto(photoPayload)
+		sendPhoto := message.NewSendPhoto(photoPayload)
+		if sendPhoto.Request.Send(sendPhoto.ResponsePayload); sendPhoto.ResponsePayload == nil {
+			return fmt.Errorf("failed to send photo")
+		}
 
 	case "video":
 		videoPayload := payload.TgPlSendVideo{
@@ -172,7 +175,11 @@ func sendMediaFile(mediaInfo *services.MediaInfo, origChat *response.TgChat) err
 			Caption:  mediaInfo.Caption,
 			FilePath: mediaInfo.Filename,
 		}
-		message.NewSendVideo(videoPayload)
+		sendVideo := message.NewSendVideo(videoPayload)
+		_, err := sendVideo.Request.Send(sendVideo.ResponsePayload)
+		if err != nil {
+			return fmt.Errorf("failed to send video: %v", err)
+		}
 
 	default:
 		documentPayload := payload.TgPlSendDocument{
@@ -181,7 +188,11 @@ func sendMediaFile(mediaInfo *services.MediaInfo, origChat *response.TgChat) err
 			Caption:  mediaInfo.Caption,
 			FilePath: mediaInfo.Filename,
 		}
-		message.NewSendDocument(documentPayload)
+		sendDocument := message.NewSendDocument(documentPayload)
+		_, err := sendDocument.Request.Send(sendDocument.ResponsePayload)
+		if err != nil {
+			return fmt.Errorf("failed to send document: %v", err)
+		}
 	}
 
 	return nil
