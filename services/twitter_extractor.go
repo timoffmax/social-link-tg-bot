@@ -288,8 +288,8 @@ func (te *TwitterExtractor) extractViaNitterProxy(tweetID string) ([]*MediaInfo,
 		bodyStr := string(body)
 		if len(bodyStr) > 100 {
 			log.Printf("✅ Got response from %s, parsing...", url)
-			result := te.parseHTMLForMedia(bodyStr, tweetID)
-			if len(result) > 0 {
+			result, err := te.parseHTMLForMedia(bodyStr, tweetID)
+			if err == nil && len(result) > 0 {
 				return result, nil
 			}
 		}
