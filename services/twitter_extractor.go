@@ -47,18 +47,20 @@ func NewTwitterExtractor(workingDir, tempDir string) *TwitterExtractor {
 func (te *TwitterExtractor) ExtractTweet(twitterURL string) ([]*MediaInfo, error) {
 	log.Printf("🐦 Starting custom Twitter extraction for: %s", twitterURL)
 	
-	// Extract tweet ID from URL
-	tweetID, err := te.extractTweetID(twitterURL)
+	// Extract tweet ID and username from URL
+	tweetID, username, err := te.extractTweetDetails(twitterURL)
 	if err != nil {
-		return nil, fmt.Errorf("failed to extract tweet ID: %v", err)
+		return nil, fmt.Errorf("failed to extract tweet details: %v", err)
 	}
 	
-	log.Printf("🔍 Extracted tweet ID: %s", tweetID)
+	log.Printf("🔍 Extracted tweet ID: %s, username: %s", tweetID, username)
 	
 	// Try multiple extraction methods
-	methods := []func(string) ([]*MediaInfo, error){
-		te.extractViaWebInterface,
+	// Prioritize embed API since it's most reliable
+	methods := []func(string, string) ([]*MediaInfo, error){
 		te.extractViaEmbedAPI,
+		te.extractViaWebInterface,
+		te.extractViaSyndicationAPI,
 		te.extractViaDirectScraping,
 		te.extractViaNitterProxy,
 		te.extractViaSimpleTextFallback,
@@ -66,7 +68,7 @@ func (te *TwitterExtractor) ExtractTweet(twitterURL string) ([]*MediaInfo, error
 	
 	for i, method := range methods {
 		log.Printf("📡 Trying extraction method %d/%d", i+1, len(methods))
-		mediaInfos, err := method(tweetID)
+		mediaInfos, err := method(tweetID, username)
 		if err == nil && len(mediaInfos) > 0 {
 			log.Printf("✅ Success with method %d: found %d items", i+1, len(mediaInfos))
 			return mediaInfos, nil
@@ -77,27 +79,29 @@ func (te *TwitterExtractor) ExtractTweet(twitterURL string) ([]*MediaInfo, error
 	return nil, fmt.Errorf("all extraction methods failed")
 }
 
-func (te *TwitterExtractor) extractTweetID(twitterURL string) (string, error) {
-	// Extract tweet ID from various Twitter URL formats
+func (te *TwitterExtractor) extractTweetDetails(twitterURL string) (string, string, error) {
+	// Extract tweet ID and username from various Twitter URL formats
 	patterns := []string{
-		`twitter\.com/\w+/status/(\d+)`,
-		`x\.com/\w+/status/(\d+)`,
-		`mobile\.twitter\.com/\w+/status/(\d+)`,
+		`twitter\.com/(\w+)/status/(\d+)`,
+		`x\.com/(\w+)/status/(\d+)`,
+		`mobile\.twitter\.com/(\w+)/status/(\d+)`,
 	}
 	
 	for _, pattern := range patterns {
 		re := regexp.MustCompile(pattern)
 		matches := re.FindStringSubmatch(twitterURL)
-		if len(matches) > 1 {
-			return matches[1], nil
+		if len(matches) > 2 {
+			username := matches[1]
+			tweetID := matches[2]
+			return tweetID, username, nil
 		}
 	}
 	
-	return "", fmt.Errorf("no tweet ID found in URL: %s", twitterURL)
+	return "", "", fmt.Errorf("no tweet details found in URL: %s", twitterURL)
 }
 
-func (te *TwitterExtractor) extractViaWebInterface(tweetID string) ([]*MediaInfo, error) {
-	log.Printf("🌐 Trying web interface extraction for tweet %s", tweetID)
+func (te *TwitterExtractor) extractViaWebInterface(tweetID string, username string) ([]*MediaInfo, error) {
+	log.Printf("🌐 Trying web interface extraction for tweet %s by @%s", tweetID, username)
 	
 	// Construct tweet URL
 	tweetURL := fmt.Sprintf("https://x.com/i/web/status/%s", tweetID)
@@ -172,16 +176,19 @@ func (te *TwitterExtractor) extractViaWebInterface(tweetID string) ([]*MediaInfo
 	return te.parseHTMLForMedia(bodyStr, tweetID)
 }
 
-func (te *TwitterExtractor) extractViaEmbedAPI(tweetID string) ([]*MediaInfo, error) {
-	log.Printf("🔗 Trying embed API extraction for tweet %s", tweetID)
+func (te *TwitterExtractor) extractViaEmbedAPI(tweetID string, username string) ([]*MediaInfo, error) {
+	log.Printf("🔗 Trying embed API extraction for tweet %s by @%s", tweetID, username)
 	
-	// Use Twitter's oembed API
-	embedURL := fmt.Sprintf("https://publish.twitter.com/oembed?url=https://x.com/i/web/status/%s", tweetID)
+	// Use Twitter's oembed API - note: using omit_script to get cleaner HTML
+	embedURL := fmt.Sprintf("https://publish.twitter.com/oembed?url=https://x.com/%s/status/%s&omit_script=true", username, tweetID)
 	
 	req, err := http.NewRequest("GET", embedURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create embed request: %v", err)
 	}
+	
+	// Add user agent
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
 	
 	resp, err := te.client.Do(req)
 	if err != nil {
@@ -198,12 +205,114 @@ func (te *TwitterExtractor) extractViaEmbedAPI(tweetID string) ([]*MediaInfo, er
 		return nil, fmt.Errorf("failed to read embed response: %v", err)
 	}
 	
+	log.Printf("✅ Got embed response: %d bytes", len(body))
+	
 	// Parse embed response
 	return te.parseEmbedResponse(string(body), tweetID)
 }
 
-func (te *TwitterExtractor) extractViaDirectScraping(tweetID string) ([]*MediaInfo, error) {
-	log.Printf("🔧 Trying direct scraping for tweet %s", tweetID)
+func (te *TwitterExtractor) extractUsernameFromEmbedData(embedData map[string]interface{}) (string, error) {
+	// Try to extract username from author_url
+	if authorURL, ok := embedData["author_url"].(string); ok {
+		// Extract username from URL like "https://twitter.com/politvidchannel"
+		parts := strings.Split(authorURL, "/")
+		if len(parts) > 0 {
+			return parts[len(parts)-1], nil
+		}
+	}
+	
+	// Try author_name as fallback
+	if authorName, ok := embedData["author_name"].(string); ok {
+		return strings.ToLower(strings.ReplaceAll(authorName, " ", "")), nil
+	}
+	
+	return "", fmt.Errorf("no username found in embed data")
+}
+
+func (te *TwitterExtractor) extractViaSyndicationAPI(tweetID string, username string) ([]*MediaInfo, error) {
+	log.Printf("🔄 Trying syndication API extraction for tweet %s by @%s", tweetID, username)
+	
+	// Twitter's syndication API - sometimes works without auth
+	syndicationURL := fmt.Sprintf("https://cdn.syndication.twimg.com/tweet-result?id=%s&lang=en", tweetID)
+	
+	req, err := http.NewRequest("GET", syndicationURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create syndication request: %v", err)
+	}
+	
+	// Add headers
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+	req.Header.Set("Referer", "https://platform.twitter.com/")
+	
+	resp, err := te.client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch syndication: %v", err)
+	}
+	defer resp.Body.Close()
+	
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("syndication API HTTP %d: %s", resp.StatusCode, resp.Status)
+	}
+	
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read syndication response: %v", err)
+	}
+	
+	// Parse JSON response
+	var synData map[string]interface{}
+	if err := json.Unmarshal(body, &synData); err != nil {
+		return nil, fmt.Errorf("failed to parse syndication JSON: %v", err)
+	}
+	
+	var mediaInfos []*MediaInfo
+	
+	// Extract tweet text
+	tweetText := ""
+	if text, ok := synData["text"].(string); ok {
+		tweetText = text
+		log.Printf("📝 Got tweet text from syndication: %s", tweetText)
+	}
+	
+	// Extract photos
+	if photos, ok := synData["photos"].([]interface{}); ok {
+		log.Printf("📸 Found %d photos in syndication data", len(photos))
+		for i, photo := range photos {
+			if photoMap, ok := photo.(map[string]interface{}); ok {
+				if url, ok := photoMap["url"].(string); ok {
+					mediaInfo, err := te.downloadMedia(url, tweetID, i)
+					if err != nil {
+						log.Printf("⚠️ Failed to download photo %d: %v", i, err)
+						continue
+					}
+					mediaInfos = append(mediaInfos, mediaInfo)
+				}
+			}
+		}
+	}
+	
+	// Extract video
+	if _, ok := synData["video"].(map[string]interface{}); ok {
+		log.Printf("🎥 Found video in syndication data")
+		// TODO: Extract video URL from video object
+	}
+	
+	// If no media but have text, return text
+	if len(mediaInfos) == 0 && tweetText != "" {
+		textMedia := &MediaInfo{
+			Type:    "text",
+			URL:     fmt.Sprintf("https://x.com/i/web/status/%s", tweetID),
+			Caption: tweetText,
+			Filename: "",
+		}
+		mediaInfos = append(mediaInfos, textMedia)
+	}
+	
+	return mediaInfos, nil
+}
+
+func (te *TwitterExtractor) extractViaDirectScraping(tweetID string, username string) ([]*MediaInfo, error) {
+	log.Printf("🔧 Trying direct scraping for tweet %s by @%s", tweetID, username)
 	
 	// Try to get tweet via mobile interface (sometimes more permissive)
 	mobileURL := fmt.Sprintf("https://mobile.x.com/i/web/status/%s", tweetID)
@@ -248,14 +357,14 @@ func (te *TwitterExtractor) extractViaDirectScraping(tweetID string) ([]*MediaIn
 	return te.parseHTMLForMedia(string(body), tweetID)
 }
 
-func (te *TwitterExtractor) extractViaNitterProxy(tweetID string) ([]*MediaInfo, error) {
-	log.Printf("🔄 Trying Nitter-style extraction for tweet %s", tweetID)
+func (te *TwitterExtractor) extractViaNitterProxy(tweetID string, username string) ([]*MediaInfo, error) {
+	log.Printf("🔄 Trying Nitter-style extraction for tweet %s by @%s", tweetID, username)
 	
 	// Try some alternative URL patterns that might be more accessible
 	urls := []string{
-		fmt.Sprintf("https://nitter.net/politvidchannel/status/%s", tweetID),
-		fmt.Sprintf("https://nitter.it/politvidchannel/status/%s", tweetID),
-		fmt.Sprintf("https://mobile.twitter.com/politvidchannel/status/%s", tweetID),
+		fmt.Sprintf("https://nitter.net/%s/status/%s", username, tweetID),
+		fmt.Sprintf("https://nitter.it/%s/status/%s", username, tweetID),
+		fmt.Sprintf("https://mobile.twitter.com/%s/status/%s", username, tweetID),
 	}
 	
 	for _, url := range urls {
@@ -298,11 +407,11 @@ func (te *TwitterExtractor) extractViaNitterProxy(tweetID string) ([]*MediaInfo,
 	return nil, fmt.Errorf("no accessible alternative URLs found")
 }
 
-func (te *TwitterExtractor) extractViaSimpleTextFallback(tweetID string) ([]*MediaInfo, error) {
-	log.Printf("📝 Trying simple text fallback for tweet %s", tweetID)
+func (te *TwitterExtractor) extractViaSimpleTextFallback(tweetID string, username string) ([]*MediaInfo, error) {
+	log.Printf("📝 Trying simple text fallback for tweet %s by @%s", tweetID, username)
 	
 	// As a last resort, just return a message with the fixed link
-	fixedURL := fmt.Sprintf("https://fixupx.com/politvidchannel/status/%s", tweetID)
+	fixedURL := fmt.Sprintf("https://fixupx.com/%s/status/%s", username, tweetID)
 	
 	textMediaInfo := &MediaInfo{
 		Type:    "text",
@@ -365,12 +474,81 @@ func (te *TwitterExtractor) parseEmbedResponse(response, tweetID string) ([]*Med
 		return nil, fmt.Errorf("no HTML in embed response")
 	}
 	
-	return te.parseHTMLForMedia(html, tweetID)
+	// Extract tweet text from the HTML
+	tweetText := ""
+	textPattern := regexp.MustCompile(`<p[^>]*lang="[^"]*"[^>]*dir="[^"]*"[^>]*>(.*?)</p>`)
+	if matches := textPattern.FindStringSubmatch(html); len(matches) > 1 {
+		tweetText = matches[1]
+		// Clean up HTML entities
+		tweetText = strings.ReplaceAll(tweetText, "&#39;", "'")
+		tweetText = strings.ReplaceAll(tweetText, "&amp;", "&")
+		tweetText = strings.ReplaceAll(tweetText, "&lt;", "<")
+		tweetText = strings.ReplaceAll(tweetText, "&gt;", ">")
+		tweetText = strings.ReplaceAll(tweetText, "&quot;", `"`)
+		// Remove any remaining HTML tags
+		tweetText = regexp.MustCompile(`<[^>]*>`).ReplaceAllString(tweetText, "")
+		tweetText = strings.TrimSpace(tweetText)
+	}
+	
+	log.Printf("📝 Extracted tweet text from embed: %s", tweetText)
+	
+	// Extract pic.twitter.com URLs and convert them
+	picPattern := regexp.MustCompile(`pic\.twitter\.com/([a-zA-Z0-9]+)`)
+	picMatches := picPattern.FindAllStringSubmatch(html, -1)
+	
+	var mediaInfos []*MediaInfo
+	
+	// Check if we have media references
+	hasMedia := len(picMatches) > 0
+	
+	if hasMedia {
+		log.Printf("🖼️ Found %d pic.twitter.com references", len(picMatches))
+		
+		// For each pic.twitter.com URL, we need to try to get the actual image
+		// Since we can't directly resolve these without authentication,
+		// we'll add a note about media being present
+		for _, match := range picMatches {
+			if len(match) > 1 {
+				picID := match[1]
+				log.Printf("📸 Found pic.twitter.com/%s", picID)
+			}
+		}
+	}
+	
+	// Create the response with appropriate caption
+	caption := tweetText
+	if hasMedia && caption != "" {
+		// Add fixupx link for media access
+		username, _ := te.extractUsernameFromEmbedData(embedData)
+		if username == "" {
+			username = "user"
+		}
+		fixedURL := fmt.Sprintf("https://fixupx.com/%s/status/%s", username, tweetID)
+		caption = fmt.Sprintf("%s\n\n🖼️ Media available at: %s", tweetText, fixedURL)
+	}
+	
+	if caption != "" {
+		textMedia := &MediaInfo{
+			Type:    "text",
+			URL:     fmt.Sprintf("https://x.com/i/web/status/%s", tweetID),
+			Caption: caption,
+			Filename: "",
+		}
+		mediaInfos = append(mediaInfos, textMedia)
+	}
+	
+	return mediaInfos, nil
 }
 
 func (te *TwitterExtractor) extractTweetText(html string) string {
-	// Multiple patterns to extract tweet text - updated for modern Twitter
+	// Multiple patterns to extract tweet text - updated for Nitter and modern Twitter
 	patterns := []string{
+		// Nitter-specific patterns (high priority since it worked)
+		`<div[^>]*class="[^"]*tweet-content[^"]*"[^>]*>(.*?)</div>`,
+		`<div[^>]*class="[^"]*media-body[^"]*"[^>]*>(.*?)</div>`,
+		`<p[^>]*class="[^"]*tweet-content[^"]*"[^>]*>(.*?)</p>`,
+		`<div[^>]*class="[^"]*timeline-tweet[^"]*"[^>]*>.*?<div[^>]*class="[^"]*tweet-text[^"]*"[^>]*>(.*?)</div>`,
+		
 		// Modern Twitter data-testid patterns
 		`<div[^>]*data-testid="tweetText"[^>]*>(.*?)</div>`,
 		`<span[^>]*data-testid="tweetText"[^>]*>(.*?)</span>`,
@@ -396,6 +574,10 @@ func (te *TwitterExtractor) extractTweetText(html string) string {
 		// Tweet URL patterns in title/description
 		`"([^"]*)" / X`,
 		`"([^"]*)" on X:`,
+		
+		// Additional Nitter patterns
+		`<div[^>]*class="[^"]*quote-text[^"]*"[^>]*>(.*?)</div>`,
+		`<span[^>]*class="[^"]*tweet-text[^"]*"[^>]*>(.*?)</span>`,
 	}
 	
 	for _, pattern := range patterns {
@@ -427,8 +609,22 @@ func (te *TwitterExtractor) extractTweetText(html string) string {
 func (te *TwitterExtractor) extractMediaURLs(html string) []string {
 	var urls []string
 	
-	// Patterns to match image and video URLs - updated for modern Twitter
+	// Patterns to match image and video URLs - updated for Nitter and modern Twitter
 	patterns := []string{
+		// Nitter-specific patterns (high priority)
+		`<img[^>]*src="([^"]*nitter[^"]*pic[^"]*\.jpg[^"]*)"`,
+		`<img[^>]*src="([^"]*nitter[^"]*pic[^"]*\.png[^"]*)"`,
+		`<img[^>]*src="([^"]*nitter[^"]*pic[^"]*\.gif[^"]*)"`,
+		`<img[^>]*src="([^"]*nitter[^"]*pic[^"]*\.webp[^"]*)"`,
+		`<video[^>]*src="([^"]*nitter[^"]*vid[^"]*\.mp4[^"]*)"`,
+		`<source[^>]*src="([^"]*nitter[^"]*vid[^"]*\.mp4[^"]*)"`,
+		
+		// Nitter proxy URLs for Twitter media
+		`https://[^/]*nitter[^/]*/pic/media%2F[A-Za-z0-9_%-]+`,
+		`https://[^/]*nitter[^/]*/pic/orig/media%2F[A-Za-z0-9_%-]+`,
+		`/pic/media%2F[A-Za-z0-9_%-]+`,
+		`/pic/orig/media%2F[A-Za-z0-9_%-]+`,
+		
 		// Standard Twitter media URLs
 		`https://pbs\.twimg\.com/media/[A-Za-z0-9_-]+\?format=(?:jpg|jpeg|png|gif|webp)`,
 		`https://pbs\.twimg\.com/media/[A-Za-z0-9_-]+\.(?:jpg|jpeg|png|gif|webp)`,
@@ -455,6 +651,10 @@ func (te *TwitterExtractor) extractMediaURLs(html string) []string {
 		// Additional flexible patterns
 		`https://pbs\.twimg\.com/media/[A-Za-z0-9_-]+`,
 		`"(https://pbs\.twimg\.com/media/[A-Za-z0-9_%-]+)"`,
+		
+		// Generic image patterns in Nitter
+		`<img[^>]*src="([^"]*\.(jpg|jpeg|png|gif|webp)[^"]*)"`,
+		`src="([^"]*pic[^"]*\.(jpg|jpeg|png|gif|webp)[^"]*)"`,
 	}
 	
 	for _, pattern := range patterns {
@@ -477,6 +677,19 @@ func (te *TwitterExtractor) extractMediaURLs(html string) []string {
 	// Clean up and add format params for images without extensions
 	var cleanURLs []string
 	for _, url := range urls {
+		// Convert Nitter proxy URLs to direct Twitter URLs if possible
+		if strings.Contains(url, "nitter") && strings.Contains(url, "/pic/") {
+			// Extract media ID from Nitter URL and convert to Twitter URL
+			if strings.Contains(url, "media%2F") {
+				re := regexp.MustCompile(`media%2F([A-Za-z0-9_-]+)`)
+				matches := re.FindStringSubmatch(url)
+				if len(matches) > 1 {
+					mediaID := matches[1]
+					url = fmt.Sprintf("https://pbs.twimg.com/media/%s?format=jpg&name=large", mediaID)
+				}
+			}
+		}
+		
 		// Add format parameter if missing for pbs.twimg.com URLs
 		if strings.Contains(url, "pbs.twimg.com/media/") && !strings.Contains(url, "format=") && !strings.Contains(url, ".jpg") && !strings.Contains(url, ".png") {
 			if strings.Contains(url, "?") {

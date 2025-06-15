@@ -196,12 +196,29 @@ func (yd *YtDlpDownloader) attemptDownload(url string, outputTemplate string, pr
 	
 	// Execute download
 	output, err := cmd.CombinedOutput()
+	outputStr := string(output)
+	
+	// Check if download was actually successful despite error code
+	// yt-dlp can return error codes for non-critical failures like missing ffmpeg
+	downloadSuccess := false
 	if err != nil {
-		return nil, fmt.Errorf("download failed: %v\nOutput: %s", err, string(output))
+		// Check if the error is only due to missing ffmpeg (post-processing failure)
+		if strings.Contains(outputStr, "ffmpeg not found") && 
+		   (strings.Contains(outputStr, "[download] 100%") || 
+		    strings.Contains(outputStr, "Destination:")) {
+			log.Printf("Download succeeded but ffmpeg post-processing failed (non-critical)")
+			downloadSuccess = true
+		} else {
+			return nil, fmt.Errorf("download failed: %v\nOutput: %s", err, outputStr)
+		}
+	} else {
+		downloadSuccess = true
 	}
 	
-	log.Printf("Download completed successfully")
-	log.Printf("Output: %s", string(output))
+	if downloadSuccess {
+		log.Printf("Download completed successfully")
+		log.Printf("Output: %s", outputStr)
+	}
 	
 	// List all files in temp directory for debugging
 	if files, err := os.ReadDir(yd.TempDir); err == nil {
@@ -399,9 +416,63 @@ func (yd *YtDlpDownloader) downloadThumbnailsOnly(url string, platform string) (
 		}
 	}
 	
-	// Process files (skip metadata files)
+	// Process files (skip metadata files and select best thumbnail for videos)
+	bestThumbnail := ""
+	thumbnailPriority := map[string]int{
+		"orig": 5,    // Highest priority
+		"large": 4,
+		"medium": 3,
+		"small": 2,
+		"thumb": 1,   // Lowest priority
+	}
+	
+	// First pass: find best thumbnail if multiple exist
 	for _, filePath := range downloadedFiles {
 		if strings.HasSuffix(filePath, ".info.json") || strings.HasSuffix(filePath, ".description") {
+			continue
+		}
+		
+		// Check if this is a thumbnail file
+		filename := filepath.Base(filePath)
+		for size, priority := range thumbnailPriority {
+			if strings.Contains(filename, "."+size+".jpg") {
+				if bestThumbnail == "" {
+					bestThumbnail = filePath
+				} else {
+					// Compare priorities
+					currentFilename := filepath.Base(bestThumbnail)
+					for currentSize, currentPriority := range thumbnailPriority {
+						if strings.Contains(currentFilename, "."+currentSize+".jpg") {
+							if priority > currentPriority {
+								bestThumbnail = filePath
+							}
+							break
+						}
+					}
+				}
+				break
+			}
+		}
+	}
+	
+	// Second pass: process files, using only the best thumbnail
+	for _, filePath := range downloadedFiles {
+		if strings.HasSuffix(filePath, ".info.json") || strings.HasSuffix(filePath, ".description") {
+			continue
+		}
+		
+		// Skip other thumbnails if we have a best one
+		filename := filepath.Base(filePath)
+		isThumbnail := false
+		for size := range thumbnailPriority {
+			if strings.Contains(filename, "."+size+".jpg") {
+				isThumbnail = true
+				break
+			}
+		}
+		
+		if isThumbnail && filePath != bestThumbnail {
+			log.Printf("Skipping thumbnail %s (keeping best: %s)", filePath, bestThumbnail)
 			continue
 		}
 		
