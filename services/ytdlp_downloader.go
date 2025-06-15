@@ -557,19 +557,26 @@ func (yd *YtDlpDownloader) buildDownloadArgs(url string, outputTemplate string) 
 		twitterArgs := []string{
 			"--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
 			"--write-all-thumbnails",          // Download all available images
+			"--write-thumbnail",               // Also try regular thumbnail extraction
 			"--write-description",             // Save tweet text
 			"--add-metadata",                  // Add metadata to files
+			"--no-abort-on-error",             // Don't stop on errors
 		}
 		
-		// Override format selection for Twitter - use a more permissive format that works with images
-		// Remove the default format from baseArgs and add Twitter-specific format
-		for i, arg := range baseArgs {
-			if arg == "--format" && i+1 < len(baseArgs) {
-				// Use a more flexible format that handles both video and image content
-				baseArgs[i+1] = "best[filesize<50M]/worst/best"
-				break
+		// For Twitter, we need to remove the --format entirely and let yt-dlp handle it naturally
+		// Remove the default format from baseArgs since Twitter images don't work with standard format selectors
+		var newBaseArgs []string
+		i := 0
+		for i < len(baseArgs) {
+			if baseArgs[i] == "--format" && i+1 < len(baseArgs) {
+				// Skip both --format and its value
+				i += 2
+			} else {
+				newBaseArgs = append(newBaseArgs, baseArgs[i])
+				i++
 			}
 		}
+		baseArgs = newBaseArgs
 		
 		// Check for Twitter-specific cookies file first
 		twitterCookiesPath := yd.getFilePath("twitter_cookies.txt")
