@@ -203,7 +203,8 @@ func (yd *YtDlpDownloader) attemptDownload(url string, outputTemplate string, pr
 	downloadSuccess := false
 	if err != nil {
 		// Check if the error is only due to missing ffmpeg (post-processing failure)
-		if strings.Contains(outputStr, "ffmpeg not found") && 
+		if (strings.Contains(outputStr, "ffmpeg not found") || 
+		    strings.Contains(outputStr, "Postprocessing: ffmpeg not found")) && 
 		   (strings.Contains(outputStr, "[download] 100%") || 
 		    strings.Contains(outputStr, "Destination:")) {
 			log.Printf("Download succeeded but ffmpeg post-processing failed (non-critical)")
