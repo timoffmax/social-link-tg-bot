@@ -163,37 +163,21 @@ func processMediaDownload(url string, origChat *response.TgChat, downloader *ser
 			// Try fallback: send as document instead of video
 			log.Printf("Trying fallback: sending video as document...")
 			
-			// First, try creating a simple text file to test file uploads
-			testFile := "temp/test.txt"
-			os.WriteFile(testFile, []byte("Test file upload - Instagram video download"), 0644)
-			
-			testDocPayload := payload.TgPlSendDocument{
-				ChatId:   origChat.Id,
-				Document: "test.txt",
-				Caption:  "🧪 Testing file upload capability",
-				FilePath: testFile,
-			}
-			testSend := message.NewSendDocument(testDocPayload)
-			_, testErr := testSend.Request.Send(testSend.ResponsePayload)
-			if testErr != nil {
-				log.Printf("❌ Even simple text file upload failed: %v", testErr)
-			} else {
-				log.Printf("✅ Simple text file upload worked!")
-				os.Remove(testFile)
-			}
-			
-			// Now try the video as document
 			documentPayload := payload.TgPlSendDocument{
 				ChatId:   origChat.Id,
 				Document: "video.mp4",
-				Caption:  "📹 Instagram video (sent as document due to upload issue)",
+				Caption:  "📹 Downloaded media (sent as document)",
 				FilePath: mediaInfo.Filename,
 			}
 			sendDocument := message.NewSendDocument(documentPayload)
 			_, docErr := sendDocument.Request.Send(sendDocument.ResponsePayload)
 			if docErr != nil {
 				log.Printf("Document fallback also failed: %v", docErr)
-				log.Printf("Keeping file for debugging: %s", mediaInfo.Filename)
+				
+				// Final fallback: send fixed link and clean up file
+				log.Printf("Falling back to fixed link due to upload failure")
+				sendFixedLinkFallback(url, origChat)
+				downloader.CleanupFile(mediaInfo.Filename)
 			} else {
 				log.Printf("✅ Successfully sent video as document: %s", mediaInfo.Filename)
 				downloader.CleanupFile(mediaInfo.Filename)
@@ -249,6 +233,26 @@ func sendMediaFile(mediaInfo *services.MediaInfo, origChat *response.TgChat) err
 	}
 
 	return nil
+}
+
+func sendFixedLinkFallback(originalUrl string, origChat *response.TgChat) {
+	fixedUrl := getFixedUrl(originalUrl)
+	if fixedUrl != "" {
+		log.Printf("Sending fixed link fallback: %s", fixedUrl)
+		fallbackMsg := payload.TgPlSendMessage{
+			ChatId:    origChat.Id,
+			ParseMode: payload.ParseModeHTML,
+			Text:      fmt.Sprintf("⚠️ Media upload failed, here's a fixed link:\n%s", fixedUrl),
+		}
+		message.NewSendMessage(fallbackMsg)
+	} else {
+		// If no fixed link available, send error
+		errorMsg := payload.TgPlSendMessage{
+			ChatId: origChat.Id,
+			Text:   fmt.Sprintf("❌ Failed to download and send media from %s", originalUrl),
+		}
+		message.NewSendMessage(errorMsg)
+	}
 }
 
 func getFixedUrl(url string) string {
