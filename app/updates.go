@@ -115,6 +115,20 @@ func processMediaDownload(url string, origChat *response.TgChat, downloader *ser
 	if err != nil {
 		log.Printf("Failed to download media from %s: %v", url, err)
 		
+		// For Twitter/X posts, try to get text content even if no media found
+		if strings.Contains(url, "twitter.com") || strings.Contains(url, "x.com") {
+			if tweetText := tryGetTweetText(url, downloader); tweetText != "" {
+				log.Printf("No media found, but extracted tweet text: %s", tweetText)
+				textMsg := payload.TgPlSendMessage{
+					ChatId:    origChat.Id,
+					ParseMode: payload.ParseModeHTML,
+					Text:      fmt.Sprintf("📝 Tweet content:\n\n%s\n\n🔗 <a href=\"%s\">View original</a>", tweetText, url),
+				}
+				message.NewSendMessage(textMsg)
+				return
+			}
+		}
+		
 		// Fallback to sending fixed link
 		fixedUrl := getFixedUrl(url)
 		if fixedUrl != "" {
@@ -273,4 +287,25 @@ func getErrorMessage(url string) string {
 	}
 	
 	return fmt.Sprintf("❌ Failed to download media from %s", url)
+}
+
+func tryGetTweetText(url string, downloader *services.YtDlpDownloader) string {
+	// Try to get tweet info using yt-dlp JSON dump
+	info, err := downloader.GetMediaInfo(url)
+	if err != nil {
+		log.Printf("Failed to get tweet info: %v", err)
+		return ""
+	}
+	
+	// Return the description (tweet text) if available
+	if info.Description != "" {
+		return info.Description
+	}
+	
+	// Fallback to title if description is empty
+	if info.Title != "" {
+		return info.Title
+	}
+	
+	return ""
 }

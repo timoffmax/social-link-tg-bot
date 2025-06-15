@@ -195,15 +195,40 @@ func (yd *YtDlpDownloader) attemptDownload(url string, outputTemplate string, pr
 	
 	log.Printf("Found %d downloaded files: %v", len(downloadedFiles), downloadedFiles)
 	
-	// Convert to MediaInfo
+	// Convert to MediaInfo with enhanced handling for Twitter content
 	var mediaInfos []*MediaInfo
+	var tweetDescription string
+	
+	// Look for description file for Twitter posts
+	if strings.Contains(url, "twitter.com") || strings.Contains(url, "x.com") {
+		for _, filePath := range downloadedFiles {
+			if strings.HasSuffix(filePath, ".description") {
+				if content, err := os.ReadFile(filePath); err == nil {
+					tweetDescription = strings.TrimSpace(string(content))
+				}
+				break
+			}
+		}
+	}
+	
 	for _, filePath := range downloadedFiles {
+		// Skip metadata files from being sent as media
+		if strings.HasSuffix(filePath, ".info.json") || strings.HasSuffix(filePath, ".description") {
+			continue
+		}
+		
 		mediaType := yd.detectMediaType(filePath)
+		
+		// Use tweet text as caption if available, otherwise use default
+		caption := "Downloaded from " + yd.getPlatformName(url)
+		if tweetDescription != "" && (strings.Contains(url, "twitter.com") || strings.Contains(url, "x.com")) {
+			caption = tweetDescription
+		}
 		
 		mediaInfo := &MediaInfo{
 			Type:     mediaType,
 			URL:      url,
-			Caption:  "Downloaded from " + yd.getPlatformName(url),
+			Caption:  caption,
 			Filename: filePath,
 		}
 		
@@ -284,6 +309,7 @@ func (yd *YtDlpDownloader) buildDownloadArgs(url string, outputTemplate string) 
 		"--ignore-errors",                 // Continue on download errors
 		"--no-check-certificate",          // Ignore SSL certificate errors (for proxies)
 		"--cache-dir", cacheDir,           // Set cache directory to avoid permission issues
+		"--write-info-json",               // Write metadata for better handling
 	}
 	
 	// Add cookies if available
@@ -336,9 +362,21 @@ func (yd *YtDlpDownloader) buildDownloadArgs(url string, outputTemplate string) 
 		
 		baseArgs = append(baseArgs, tiktokArgs...)
 	} else if strings.Contains(url, "twitter.com") || strings.Contains(url, "x.com") {
-		// Twitter/X-specific args
+		// Twitter/X-specific args with support for images and mixed content
 		twitterArgs := []string{
 			"--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+			"--write-all-thumbnails",          // Download all available images
+			"--write-description",             // Save tweet text
+			"--add-metadata",                  // Add metadata to files
+		}
+		
+		// Override format selection for Twitter to include images
+		// Remove the default format from baseArgs and add Twitter-specific format
+		for i, arg := range baseArgs {
+			if arg == "--format" && i+1 < len(baseArgs) {
+				baseArgs[i+1] = "best[filesize<50M]/best,thumbnail"
+				break
+			}
 		}
 		
 		// Add Twitter credentials if available
