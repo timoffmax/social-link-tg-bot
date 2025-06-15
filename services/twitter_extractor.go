@@ -1,6 +1,7 @@
 package services
 
 import (
+	"compress/gzip"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -108,7 +109,7 @@ func (te *TwitterExtractor) extractViaWebInterface(tweetID string) ([]*MediaInfo
 	// Add cookies if available
 	te.addCookiesToRequest(req)
 	
-	// Add headers to mimic a real browser
+	// Add headers to mimic a real browser  
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
 	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8")
 	req.Header.Set("Accept-Language", "en-US,en;q=0.5")
@@ -128,8 +129,19 @@ func (te *TwitterExtractor) extractViaWebInterface(tweetID string) ([]*MediaInfo
 		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, resp.Status)
 	}
 	
+	// Handle compressed response
+	var reader io.Reader = resp.Body
+	if resp.Header.Get("Content-Encoding") == "gzip" {
+		gzipReader, err := gzip.NewReader(resp.Body)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create gzip reader: %v", err)
+		}
+		defer gzipReader.Close()
+		reader = gzipReader
+	}
+	
 	// Read response
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(reader)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read response: %v", err)
 	}
@@ -189,6 +201,7 @@ func (te *TwitterExtractor) extractViaDirectScraping(tweetID string) ([]*MediaIn
 	
 	// Mobile user agent
 	req.Header.Set("User-Agent", "Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.0 Mobile/15E148 Safari/604.1")
+	req.Header.Set("Accept-Encoding", "gzip, deflate")
 	
 	te.addCookiesToRequest(req)
 	
@@ -202,7 +215,18 @@ func (te *TwitterExtractor) extractViaDirectScraping(tweetID string) ([]*MediaIn
 		return nil, fmt.Errorf("mobile HTTP %d: %s", resp.StatusCode, resp.Status)
 	}
 	
-	body, err := io.ReadAll(resp.Body)
+	// Handle compressed response
+	var reader io.Reader = resp.Body
+	if resp.Header.Get("Content-Encoding") == "gzip" {
+		gzipReader, err := gzip.NewReader(resp.Body)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create mobile gzip reader: %v", err)
+		}
+		defer gzipReader.Close()
+		reader = gzipReader
+	}
+	
+	body, err := io.ReadAll(reader)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read mobile response: %v", err)
 	}
