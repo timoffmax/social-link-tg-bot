@@ -180,22 +180,36 @@ func (yd *YtDlpDownloader) buildDownloadArgs(url string, outputTemplate string) 
 		"--extractor-retries", "3",
 		"--sleep-interval", "1",
 		"--max-sleep-interval", "3",
+		"--geo-bypass",                    // Bypass geographic restrictions
+		"--geo-bypass-country", "US",      // Use US geolocation
+		"--ignore-errors",                 // Continue on download errors
+	}
+	
+	// Add cookies if available
+	if yd.cookiesExist() {
+		baseArgs = append(baseArgs, "--cookies", "./cookies.txt")
 	}
 	
 	// Platform-specific optimizations
 	if strings.Contains(url, "instagram.com") {
-		// Instagram-specific args
+		// Instagram-specific args with enhanced anti-blocking
 		instagramArgs := []string{
-			"--user-agent", "Mozilla/5.0 (iPhone; CPU iPhone OS 14_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.0.3 Mobile/15E148 Safari/604.1",
+			"--user-agent", "Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.0 Mobile/15E148 Safari/604.1",
 			"--referer", "https://www.instagram.com/",
 			"--no-check-certificate",
+			"--extractor-args", "instagram:api_version=v1",  // Use older API
+			"--add-header", "Accept-Language:en-US,en;q=0.9",
+			"--add-header", "Accept:text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
 		}
 		baseArgs = append(baseArgs, instagramArgs...)
 	} else if strings.Contains(url, "tiktok.com") {
-		// TikTok-specific args
+		// TikTok-specific args with enhanced anti-blocking
 		tiktokArgs := []string{
-			"--user-agent", "Mozilla/5.0 (Linux; Android 10; SM-G973F) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/86.0.4240.198 Mobile Safari/537.36",
+			"--user-agent", "Mozilla/5.0 (Linux; Android 11; SM-G998B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/94.0.4606.81 Mobile Safari/537.36",
 			"--referer", "https://www.tiktok.com/",
+			"--add-header", "Accept-Language:en-US,en;q=0.9",
+			"--add-header", "sec-fetch-dest:document",
+			"--add-header", "sec-fetch-mode:navigate",
 		}
 		baseArgs = append(baseArgs, tiktokArgs...)
 	} else if strings.Contains(url, "twitter.com") || strings.Contains(url, "x.com") {
@@ -206,8 +220,19 @@ func (yd *YtDlpDownloader) buildDownloadArgs(url string, outputTemplate string) 
 		baseArgs = append(baseArgs, twitterArgs...)
 	}
 	
+	// Add proxy if configured
+	if proxy := os.Getenv("YTDLP_PROXY"); proxy != "" {
+		baseArgs = append(baseArgs, "--proxy", proxy)
+	}
+	
 	baseArgs = append(baseArgs, url)
 	return baseArgs
+}
+
+// cookiesExist checks if cookies file exists
+func (yd *YtDlpDownloader) cookiesExist() bool {
+	_, err := os.Stat("./cookies.txt")
+	return err == nil
 }
 
 func (yd *YtDlpDownloader) detectMediaType(filePath string) string {

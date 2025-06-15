@@ -95,6 +95,34 @@ The bot requires:
 - **yt-dlp** for media downloading
 - **ffmpeg** for video processing (optional, enables better quality)
 
+## Anti-Blocking Configuration
+
+To improve download success rates:
+
+### 1. **Cookies (Recommended)**
+```bash
+# Copy cookies template
+cp cookies.txt.sample cookies.txt
+
+# Export cookies from browser using browser extension
+# Or manually extract from browser dev tools
+# Edit cookies.txt with real session cookies
+```
+
+### 2. **Proxy Support**
+```bash
+# Set proxy in environment
+export YTDLP_PROXY="socks5://proxy-server:port"
+# or
+export YTDLP_PROXY="http://proxy-server:port"
+```
+
+### 3. **Built-in Anti-Blocking**
+- Platform-specific mobile user agents
+- Request delays and retry logic  
+- Geographic bypass (US)
+- Enhanced headers and referers
+
 ## Project Structure
 
 ```
