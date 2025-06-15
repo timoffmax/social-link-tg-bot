@@ -102,9 +102,9 @@ func (yd *YtDlpDownloader) DownloadMedia(url string) ([]*MediaInfo, error) {
 	// Get list of proxies to try
 	proxies := config.GetYtDlpProxies()
 	
-	// For TikTok, skip proxies and try direct connection first
-	if strings.Contains(url, "tiktok.com") {
-		proxies = []string{} // Start with no proxy for TikTok
+	// For TikTok and YouTube, skip proxies and try direct connection first
+	if strings.Contains(url, "tiktok.com") || strings.Contains(url, "youtube.com") || strings.Contains(url, "youtu.be") {
+		proxies = []string{} // Start with no proxy for TikTok and YouTube
 	}
 	
 	// Add empty string to try without proxy as last resort
