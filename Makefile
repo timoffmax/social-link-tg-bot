@@ -53,14 +53,14 @@ setup: install-deps
 	@echo "Setting up local development environment..."
 	@if [ ! -f .env ]; then \
 		echo "Creating .env file from template..."; \
-		cp .env.dist .env; \
+		cp .env.example .env; \
 		echo "Please edit .env file with your bot token"; \
 	fi
 	@echo "Setup complete!"
 
 ## logs: Show recent logs (for production)
 logs:
-	ssh YOUR_USER@YOUR_SERVER_IP 'tail -f /var/www/social-link-tg-bot/bot.log'
+	ssh -i ~/.ssh/your_deploy_key botuser@YOUR_SERVER_IP 'tail -f /path/to/social-link-bot/logs/bot.log'
 
 ## deploy: Deploy to production
 deploy:
@@ -68,7 +68,7 @@ deploy:
 
 ## status: Check production status
 status:
-	ssh YOUR_USER@YOUR_SERVER_IP 'ps aux | grep social-link-bot | grep -v grep'
+	ssh -i ~/.ssh/your_deploy_key botuser@YOUR_SERVER_IP './manage-bot status'
 
 ## help: Show this help
 help:

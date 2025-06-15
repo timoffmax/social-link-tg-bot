@@ -51,30 +51,24 @@ The bot runs as a systemd service on the production server:
 # Deploy code and build
 make deploy
 
-# Restart the service (on server)
-ssh YOUR_USER@YOUR_SERVER_IP
-sudo systemctl restart tg-social-link-bot
-sudo systemctl status tg-social-link-bot
+# Server management (as tgbot user)
+ssh -i ~/.ssh/your_deploy_key botuser@YOUR_SERVER_IP
+./manage-bot restart
+./manage-bot status
+./manage-bot logs
 
-# Check service logs
-sudo journalctl -u tg-social-link-bot -f
-
-# Service management commands
-sudo systemctl start tg-social-link-bot
-sudo systemctl stop tg-social-link-bot
-sudo systemctl restart tg-social-link-bot
-sudo systemctl status tg-social-link-bot
+# Service management commands (tgbot user has sudo access)
+sudo systemctl start social-link-bot
+sudo systemctl stop social-link-bot
+sudo systemctl restart social-link-bot
+sudo systemctl status social-link-bot
 ```
 
 ## Helper Scripts
 
 ```bash
-# Restart service helper
-./bin/restart-service
-
 # Manual bot management (for debugging)
-ssh YOUR_USER@YOUR_SERVER_IP
-cd /var/www/social-link-tg-bot
+ssh -i ~/.ssh/your_deploy_key botuser@YOUR_SERVER_IP
 ./manage-bot status
 ./manage-bot logs
 ```

@@ -1,243 +1,75 @@
 #!/bin/bash
 
-# manage-bot - Bot Management Script for Social Link Telegram Bot
-# ==============================================================
-#
-# This script provides management commands for the bot in production
-#
-# Usage: ./bin/manage-bot <command>
+# Bot Management Script - Run this on the server
+# ==============================================
 
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
-CONFIG_FILE="$SCRIPT_DIR/deploy.conf"
+SERVICE_NAME="social-link-bot"
+REMOTE_DIR="/path/to/social-link-bot"
 
-# Colors for output
-RED='\033[0;31m'
+# Colors
 GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
+RED='\033[0;31m'
+YELLOW='\033[1;33m'
 NC='\033[0m'
 
-# Logging functions
-log_info() {
-    echo -e "${BLUE}[INFO]${NC} $1"
-}
+log_info() { echo -e "${BLUE}[INFO]${NC} $1"; }
+log_success() { echo -e "${GREEN}[SUCCESS]${NC} $1"; }
+log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
+log_warning() { echo -e "${YELLOW}[WARNING]${NC} $1"; }
 
-log_success() {
-    echo -e "${GREEN}[SUCCESS]${NC} $1"
-}
-
-log_warning() {
-    echo -e "${YELLOW}[WARNING]${NC} $1"
-}
-
-log_error() {
-    echo -e "${RED}[ERROR]${NC} $1"
-}
-
-# Load configuration if available
-if [ -f "$CONFIG_FILE" ]; then
-    source "$CONFIG_FILE"
-else
-    # Default values for when running on server
-    REMOTE_DIR="${REMOTE_DIR:-/var/www/social-link-tg-bot}"
-    REMOTE_BIN_NAME="${REMOTE_BIN_NAME:-social-link-bot}"
-    SERVICE_USER="${SERVICE_USER:-tgbot}"
-fi
-
-# Set working directory
-cd "$REMOTE_DIR"
-
-# Function to check if running as correct user
-check_permissions() {
-    if [ "$(whoami)" != "root" ] && [ "$(whoami)" != "$SERVICE_USER" ]; then
-        log_warning "Running as $(whoami), may need sudo for some operations"
-    fi
-}
-
-# Function to run command as service user
-run_as_service_user() {
-    local cmd="$1"
-    if [ "$(whoami)" = "$SERVICE_USER" ]; then
-        bash -c "$cmd"
-    else
-        # Use sudo with -n flag to avoid hanging on password prompt
-        if sudo -n -u "$SERVICE_USER" bash -c "echo test" >/dev/null 2>&1; then
-            sudo -u "$SERVICE_USER" bash -c "$cmd"
-        else
-            log_warning "Cannot sudo to $SERVICE_USER, trying as current user"
-            bash -c "$cmd"
-        fi
-    fi
-}
-
-# Function to start the bot
-start_bot() {
-    log_info "Starting bot..."
-    
-    # Check if already running
-    if pgrep -f "$REMOTE_BIN_NAME" > /dev/null; then
-        log_warning "Bot is already running"
-        show_status
-        return 0
-    fi
-    
-    # Ensure logs directory exists
-    mkdir -p logs
-    
-    # Set PATH to include our bin directory with yt-dlp
-    local start_cmd="cd '$REMOTE_DIR' && export PATH='$REMOTE_DIR/bin:\$PATH' && (./'$REMOTE_BIN_NAME' --name='$REMOTE_BIN_NAME' > logs/bot.log 2>&1 &)"
-    
-    run_as_service_user "$start_cmd"
-    sleep 2
-    
-    if pgrep -f "$REMOTE_BIN_NAME" > /dev/null; then
-        log_success "Bot started successfully"
-        show_status
-    else
-        log_error "Failed to start bot"
-        log_info "Recent logs:"
-        tail -10 logs/bot.log 2>/dev/null || echo "No logs available"
-        return 1
-    fi
-}
-
-# Function to stop the bot
-stop_bot() {
-    log_info "Stopping bot..."
-    
-    if ! pgrep -f "$REMOTE_BIN_NAME" > /dev/null; then
-        log_info "Bot is not running"
-        return 0
-    fi
-    
-    # Try graceful shutdown first
-    pkill -TERM -f "$REMOTE_BIN_NAME" 2>/dev/null || true
-    sleep 3
-    
-    # Force kill if still running
-    if pgrep -f "$REMOTE_BIN_NAME" > /dev/null; then
-        log_warning "Graceful shutdown failed, force killing..."
-        pkill -KILL -f "$REMOTE_BIN_NAME" 2>/dev/null || true
-        sleep 2
-    fi
-    
-    if ! pgrep -f "$REMOTE_BIN_NAME" > /dev/null; then
-        log_success "Bot stopped successfully"
-    else
-        log_error "Failed to stop bot"
-        return 1
-    fi
-}
-
-# Function to restart the bot
-restart_bot() {
-    log_info "Restarting bot..."
-    stop_bot
-    sleep 2
-    start_bot
-}
-
-# Function to show bot status
-show_status() {
-    log_info "Bot status:"
-    
-    local processes=$(ps aux | grep "$REMOTE_BIN_NAME" | grep -v grep || true)
-    if [ -n "$processes" ]; then
-        echo "$processes"
-        log_success "Bot is running"
-    else
-        log_warning "Bot is not running"
-    fi
-}
-
-# Function to show logs
-show_logs() {
-    local lines=${1:-20}
-    log_info "Recent bot logs (last $lines lines):"
-    
-    if [ -f "logs/bot.log" ]; then
-        tail -n "$lines" logs/bot.log
-    else
-        log_warning "No log file found at logs/bot.log"
-    fi
-}
-
-# Function to test yt-dlp
-test_ytdlp() {
-    log_info "Testing yt-dlp access for $SERVICE_USER user:"
-    
-    local test_cmd="cd '$REMOTE_DIR' && export PATH='$REMOTE_DIR/bin:\$PATH' && which yt-dlp && yt-dlp --version"
-    
-    if run_as_service_user "$test_cmd"; then
-        log_success "yt-dlp is working correctly"
-    else
-        log_error "yt-dlp test failed"
-        return 1
-    fi
-}
-
-# Function to show help
 show_help() {
-    echo "🤖 Social Link Bot Management"
-    echo "=========================="
+    echo "🤖 Bot Management Commands"
+    echo "========================="
     echo ""
-    echo "Usage: $0 <command> [options]"
+    echo "Usage: $0 <command>"
     echo ""
     echo "Commands:"
-    echo "  start         - Start the bot"
-    echo "  stop          - Stop the bot"
-    echo "  restart       - Restart the bot"
-    echo "  status        - Show bot status"
-    echo "  logs [lines]  - Show recent logs (default: 20 lines)"
-    echo "  test-ytdlp    - Test yt-dlp functionality"
-    echo "  help          - Show this help"
-    echo ""
-    echo "Examples:"
-    echo "  $0 start"
-    echo "  $0 logs 50"
-    echo "  $0 restart"
+    echo "  start    - Start the bot service"
+    echo "  stop     - Stop the bot service"
+    echo "  restart  - Restart the bot service"
+    echo "  status   - Show service status"
+    echo "  logs     - Show recent logs"
+    echo "  follow   - Follow logs in real-time"
     echo ""
 }
 
-# Main function
-main() {
-    local command="${1:-help}"
-    
-    check_permissions
-    
-    case "$command" in
-        start)
-            start_bot
-            ;;
-        stop)
-            stop_bot
-            ;;
-        restart)
-            restart_bot
-            ;;
-        status)
-            show_status
-            ;;
-        logs)
-            show_logs "${2:-20}"
-            ;;
-        test-ytdlp)
-            test_ytdlp
-            ;;
-        help|--help|-h)
-            show_help
-            ;;
-        *)
-            log_error "Unknown command: $command"
-            echo ""
-            show_help
-            exit 1
-            ;;
-    esac
-}
-
-# Run main function with all arguments
-main "$@"
+case "${1:-help}" in
+    start)
+        log_info "Starting $SERVICE_NAME..."
+        sudo systemctl start "$SERVICE_NAME"
+        sudo systemctl status "$SERVICE_NAME" --no-pager
+        ;;
+    stop)
+        log_info "Stopping $SERVICE_NAME..."
+        sudo systemctl stop "$SERVICE_NAME"
+        ;;
+    restart)
+        log_info "Restarting $SERVICE_NAME..."
+        sudo systemctl restart "$SERVICE_NAME"
+        sleep 2
+        sudo systemctl status "$SERVICE_NAME" --no-pager
+        ;;
+    status)
+        sudo systemctl status "$SERVICE_NAME" --no-pager
+        ;;
+    logs)
+        log_info "Recent logs:"
+        tail -n 20 "$REMOTE_DIR/logs/bot.log" 2>/dev/null || echo "No logs found"
+        ;;
+    follow)
+        log_info "Following logs (Ctrl+C to exit):"
+        tail -f "$REMOTE_DIR/logs/bot.log" 2>/dev/null || echo "No logs found"
+        ;;
+    help|--help|-h)
+        show_help
+        ;;
+    *)
+        log_error "Unknown command: ${1:-}"
+        echo ""
+        show_help
+        exit 1
+        ;;
+esac

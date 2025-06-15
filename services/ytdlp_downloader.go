@@ -29,21 +29,37 @@ type YtDlpInfo struct {
 type YtDlpDownloader struct {
 	TempDir    string
 	BinaryPath string
+	WorkingDir string
+}
+
+// getFilePath resolves file paths relative to the working directory
+func (yd *YtDlpDownloader) getFilePath(filename string) string {
+	if filepath.IsAbs(filename) {
+		return filename
+	}
+	return filepath.Join(yd.WorkingDir, filename)
 }
 
 func NewYtDlpDownloader() *YtDlpDownloader {
+	// Get current working directory
+	workingDir, err := os.Getwd()
+	if err != nil {
+		log.Printf("Failed to get working directory: %v", err)
+		workingDir = "."
+	}
+	
 	// Use persistent temp directory instead of system temp
-	tempDir := "./temp"
+	tempDir := filepath.Join(workingDir, "temp")
 	os.MkdirAll(tempDir, 0755)
 	
 	// Try to find yt-dlp binary - test in order of preference
 	candidatePaths := []string{
-		"./bin/yt-dlp",                       // Local development
-		"/var/www/social-link-tg-bot/bin/yt-dlp", // Production bin
-		"yt-dlp",                             // System PATH
-		"./yt-dlp",                           // Current dir (often broken)
-		"/var/www/social-link-tg-bot/yt-dlp", // Production root
-		"youtube-dl",                         // Fallback
+		filepath.Join(workingDir, "bin", "yt-dlp"),        // Local development
+		"/var/www/social-link-tg-bot/bin/yt-dlp",          // Production bin
+		"yt-dlp",                                          // System PATH
+		filepath.Join(workingDir, "yt-dlp"),               // Current dir (often broken)
+		"/var/www/social-link-tg-bot/yt-dlp",              // Production root
+		"youtube-dl",                                      // Fallback
 	}
 	
 	binaryPath := "yt-dlp" // Default fallback
@@ -60,10 +76,12 @@ func NewYtDlpDownloader() *YtDlpDownloader {
 	}
 	
 	log.Printf("YtDlpDownloader initialized with binary path: %s", binaryPath)
+	log.Printf("Working directory: %s", workingDir)
 	
 	return &YtDlpDownloader{
 		TempDir:    tempDir,
 		BinaryPath: binaryPath,
+		WorkingDir: workingDir,
 	}
 }
 
@@ -244,6 +262,10 @@ func (yd *YtDlpDownloader) buildDownloadArgsWithProxy(url string, outputTemplate
 
 // buildDownloadArgs creates platform-specific arguments for yt-dlp
 func (yd *YtDlpDownloader) buildDownloadArgs(url string, outputTemplate string) []string {
+	// Create cache directory in working directory to avoid permission issues
+	cacheDir := yd.getFilePath("cache")
+	os.MkdirAll(cacheDir, 0755)
+	
 	baseArgs := []string{
 		"--no-playlist",
 		"--output", outputTemplate,
@@ -253,11 +275,13 @@ func (yd *YtDlpDownloader) buildDownloadArgs(url string, outputTemplate string) 
 		"--geo-bypass-country", "US",      // Use US geolocation
 		"--ignore-errors",                 // Continue on download errors
 		"--no-check-certificate",          // Ignore SSL certificate errors (for proxies)
+		"--cache-dir", cacheDir,           // Set cache directory to avoid permission issues
 	}
 	
 	// Add cookies if available
+	cookiesPath := yd.getFilePath("cookies.txt")
 	if yd.cookiesExist() {
-		baseArgs = append(baseArgs, "--cookies", "./cookies.txt")
+		baseArgs = append(baseArgs, "--cookies", cookiesPath)
 	}
 	
 	// Platform-specific optimizations
@@ -353,11 +377,12 @@ func (yd *YtDlpDownloader) buildDownloadArgs(url string, outputTemplate string) 
 		}
 		
 		// Check for YouTube-specific cookies file
-		if _, err := os.Stat("./youtube_cookies.txt"); err == nil {
-			youtubeArgs = append(youtubeArgs, "--cookies", "./youtube_cookies.txt")
-			log.Printf("Using YouTube cookies for authentication")
+		youtubeCookiesPath := yd.getFilePath("youtube_cookies.txt")
+		if _, err := os.Stat(youtubeCookiesPath); err == nil {
+			youtubeArgs = append(youtubeArgs, "--cookies", youtubeCookiesPath)
+			log.Printf("Using YouTube cookies for authentication: %s", youtubeCookiesPath)
 		} else {
-			log.Printf("⚠️ YouTube cookies not found. YouTube downloads may fail due to bot detection.")
+			log.Printf("⚠️ YouTube cookies not found at %s. YouTube downloads may fail due to bot detection.", youtubeCookiesPath)
 			log.Printf("To fix: Export YouTube cookies to youtube_cookies.txt file")
 		}
 		
@@ -372,7 +397,8 @@ func (yd *YtDlpDownloader) buildDownloadArgs(url string, outputTemplate string) 
 
 // cookiesExist checks if cookies file exists
 func (yd *YtDlpDownloader) cookiesExist() bool {
-	_, err := os.Stat("./cookies.txt")
+	cookiesPath := yd.getFilePath("cookies.txt")
+	_, err := os.Stat(cookiesPath)
 	return err == nil
 }
 

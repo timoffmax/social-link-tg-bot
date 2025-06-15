@@ -1,46 +1,78 @@
 # Deployment Scripts
 
-This folder contains deployment and management scripts for the Social Link Telegram Bot.
+Simple deployment for the Social Link Telegram Bot.
 
-## Setup
-
-1. Copy the configuration template:
-   ```bash
-   cp deploy.conf.sample deploy.conf
-   ```
-
-2. Edit `deploy.conf` with your server details
-
-## Usage
+## Quick Start
 
 ### Deploy to Production
 ```bash
 ./bin/deploy
 ```
 
-### Other Options
+### Restart Only (no build/upload)
 ```bash
-# Preview changes without deploying
-./bin/deploy --dry-run
-
-# Just restart the service
 ./bin/deploy --restart-only
+```
 
-# Initial server setup
-./bin/deploy --setup
+## Files
+
+- `deploy` - Main deployment script (builds, uploads, restarts)
+- `deploy.conf` - Configuration (server IP, SSH key, paths)
+- `manage-bot` - Server-side bot management script
+- `yt-dlp` - yt-dlp binary for media downloads
+
+## Server Management
+
+SSH into the server and use the management script:
+
+```bash
+ssh -i ~/.ssh/your_deploy_key botuser@YOUR_SERVER_IP
+
+# On the server:
+cd /path/to/social-link-bot
+./manage-bot status    # Check if bot is running
+./manage-bot logs      # Show recent logs
+./manage-bot follow    # Follow logs in real-time
+./manage-bot restart   # Restart the bot
 ```
 
 ## Configuration
 
-The `deploy.conf` file contains all deployment settings:
-- Server credentials and paths
-- Service configuration
-- Dependency management
-- Optional notifications
+The `deploy.conf` file contains the deployment settings:
+- `SERVER_IP` - Production server IP
+- `SERVER_USER` - SSH user (tgbot)
+- `SERVER_SSH_KEY` - Path to SSH private key
+- `REMOTE_DIR` - Bot directory on server
+- `SERVICE_NAME` - systemd service name
 
 ## Requirements
 
-- SSH access to the production server
-- Go installed locally (for local builds)
-- Python3 and pip on the server (for yt-dlp)
-- sudo access on server (for system services and ffmpeg)
+- SSH key authentication configured for tgbot user
+- Go installed locally (for building)
+- systemd service configured on server
+- tgbot user has sudo access for systemctl commands
+
+## One-time Setup
+
+If you need to set up a new server:
+
+1. **Generate SSH key for tgbot user:**
+   ```bash
+   ssh YOUR_USER@YOUR_SERVER_IP
+   sudo mkdir -p /home/botuser/.ssh
+   sudo -u tgbot ssh-keygen -t rsa -f /home/botuser/.ssh/id_rsa -N ""
+   # Generate an SSH keypair locally and add its public key to the deploy user
+   ```
+
+2. **Configure sudo for systemctl:**
+   ```bash
+   echo 'tgbot ALL=(ALL) NOPASSWD: /usr/bin/systemctl * social-link-bot*' | sudo tee /etc/sudoers.d/tgbot-social-link-bot
+   sudo chmod 440 /etc/sudoers.d/tgbot-social-link-bot
+   ```
+
+3. **Create system service:**
+   ```bash
+   sudo systemctl enable social-link-bot
+   ```
+
+That's it! Simple and clean deployment.

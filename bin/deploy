@@ -1,18 +1,7 @@
 #!/bin/bash
 
-# deploy - Deployment Script for Social Link Telegram Bot
-# =======================================================
-#
-# This script handles deployment to production server
-#
-# Usage: 
-#   ./bin/deploy [options]
-#
-# Options:
-#   --dry-run      Preview changes without deploying
-#   --skip-build   Skip local build (use existing binary)
-#   --restart-only Just restart the service
-#   --setup        Run initial server setup
+# Simple deployment script for Social Link Telegram Bot
+# ====================================================
 
 set -euo pipefail
 
@@ -20,276 +9,62 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 CONFIG_FILE="$SCRIPT_DIR/deploy.conf"
 
-# Colors for output
-RED='\033[0;31m'
+# Colors
 GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
+RED='\033[0;31m'
 NC='\033[0m'
 
-# Default options
-DRY_RUN=false
-SKIP_BUILD=false
-RESTART_ONLY=false
-SETUP_MODE=false
+log_info() { echo -e "${BLUE}[INFO]${NC} $1"; }
+log_success() { echo -e "${GREEN}[SUCCESS]${NC} $1"; }
+log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 
-# Parse command line arguments
-while [[ $# -gt 0 ]]; do
-    case $1 in
-        --dry-run)
-            DRY_RUN=true
-            shift
-            ;;
-        --skip-build)
-            SKIP_BUILD=true
-            shift
-            ;;
-        --restart-only)
-            RESTART_ONLY=true
-            shift
-            ;;
-        --setup)
-            SETUP_MODE=true
-            shift
-            ;;
-        *)
-            echo "Unknown option: $1"
-            exit 1
-            ;;
-    esac
-done
-
-# Logging functions
-log_info() {
-    echo -e "${BLUE}[INFO]${NC} $1"
-}
-
-log_success() {
-    echo -e "${GREEN}[SUCCESS]${NC} $1"
-}
-
-log_warning() {
-    echo -e "${YELLOW}[WARNING]${NC} $1"
-}
-
-log_error() {
-    echo -e "${RED}[ERROR]${NC} $1"
-}
-
-# Load configuration
+# Load config
 if [ ! -f "$CONFIG_FILE" ]; then
-    log_error "Configuration file not found: $CONFIG_FILE"
-    log_info "Please copy $CONFIG_FILE.sample to $CONFIG_FILE and update with your values"
+    log_error "Config file not found: $CONFIG_FILE"
     exit 1
 fi
-
 source "$CONFIG_FILE"
 
-# Validate configuration
-if [ -z "$SERVER_IP" ] || [ -z "$SERVER_USER" ] || [ -z "$REMOTE_DIR" ]; then
-    log_error "Invalid configuration. Please check your deploy.conf file"
-    exit 1
+# Parse options
+RESTART_ONLY=false
+if [[ "${1:-}" == "--restart-only" ]]; then
+    RESTART_ONLY=true
 fi
 
-# SSH command helper
-run_remote() {
-    local cmd="$1"
-    local ssh_opts=""
-    
-    if [ -n "${SERVER_SSH_KEY:-}" ]; then
-        ssh_opts="-i $SERVER_SSH_KEY"
-    fi
-    
-    if [ "$DRY_RUN" = true ]; then
-        log_info "[DRY RUN] Would execute: ssh $ssh_opts $SERVER_USER@$SERVER_IP \"$cmd\""
-    else
-        ssh $ssh_opts "$SERVER_USER@$SERVER_IP" "$cmd"
-    fi
-}
+echo "🚀 Deploying Social Link Bot"
+echo "============================"
 
-# SCP command helper
-copy_to_remote() {
-    local src="$1"
-    local dst="$2"
-    local ssh_opts=""
-    
-    if [ -n "${SERVER_SSH_KEY:-}" ]; then
-        ssh_opts="-i $SERVER_SSH_KEY"
-    fi
-    
-    if [ "$DRY_RUN" = true ]; then
-        log_info "[DRY RUN] Would copy: $src to $SERVER_USER@$SERVER_IP:$dst"
-    else
-        scp $ssh_opts "$src" "$SERVER_USER@$SERVER_IP:$dst"
-    fi
-}
-
-# Function to setup server
-setup_server() {
-    log_info "🚀 Setting up server environment..."
-    
-    # Create directories
-    log_info "Creating application directories..."
-    run_remote "mkdir -p $REMOTE_DIR/{logs,bin}"
-    
-    # Install dependencies
-    if [ "$INSTALL_YTDLP" = true ]; then
-        log_info "Installing yt-dlp..."
-        run_remote "cd $REMOTE_DIR && python3 -m pip install --user yt-dlp || sudo apt-get update && sudo apt-get install -y python3-pip && python3 -m pip install --user yt-dlp"
-        run_remote "cd $REMOTE_DIR/bin && python3 -m pip show yt-dlp | grep Location | cut -d' ' -f2 | xargs -I{} ln -sf {}/yt_dlp/__main__.py ./yt-dlp && chmod +x ./yt-dlp"
-    fi
-    
-    if [ "$INSTALL_FFMPEG" = true ]; then
-        log_info "Installing ffmpeg..."
-        log_warning "ffmpeg requires sudo access. Please install manually:"
-        echo "  ssh $SERVER_USER@$SERVER_IP"
-        echo "  sudo apt-get update && sudo apt-get install -y ffmpeg"
-    fi
-    
-    # Create systemd service
-    if [ "$SERVICE_TYPE" = "system" ]; then
-        log_info "Creating system service..."
-        cat > /tmp/service.tmp << EOF
-[Unit]
-Description=Telegram Bot - Social Link Bot
-After=network.target
-
-[Service]
-Type=simple
-User=$SERVICE_USER
-Group=$SERVICE_USER
-WorkingDirectory=$REMOTE_DIR
-ExecStart=$REMOTE_DIR/$REMOTE_BIN_NAME
-Restart=on-failure
-RestartSec=10
-Environment="PATH=$REMOTE_DIR/bin:/usr/local/bin:/usr/bin:/bin"
-
-[Install]
-WantedBy=multi-user.target
-EOF
-        copy_to_remote /tmp/service.tmp "/tmp/$SERVICE_NAME.service"
-        log_warning "Service file created. Please install manually:"
-        echo "  ssh $SERVER_USER@$SERVER_IP"
-        echo "  sudo mv /tmp/$SERVICE_NAME.service /etc/systemd/system/"
-        echo "  sudo systemctl daemon-reload"
-        echo "  sudo systemctl enable $SERVICE_NAME"
-        rm -f /tmp/service.tmp
-    fi
-    
-    log_success "Server setup completed!"
-}
-
-# Function to build application
-build_app() {
+if [ "$RESTART_ONLY" = false ]; then
+    # Build locally
     log_info "Building application..."
-    
     cd "$PROJECT_DIR"
-    
-    # Set up Go environment
-    export GO111MODULE=on
-    export GOOS=linux
-    export GOARCH=amd64
-    
-    # Build
-    if command -v go &> /dev/null; then
-        go mod download
-        go mod vendor
-        go build -o "$REMOTE_BIN_NAME" .
-    else
-        log_error "Go is not installed or not in PATH"
-        exit 1
-    fi
-    
+    export GOOS=linux GOARCH=amd64
+    go build -o social-link-bot .
     log_success "Build completed"
-}
 
-# Function to deploy application
-deploy_app() {
-    log_info "Deploying application..."
-    
-    # Pull latest code
-    log_info "Pulling latest code from git..."
-    run_remote "cd $REMOTE_DIR && git pull origin master"
-    
-    # Build on server
-    log_info "Building application on server..."
-    run_remote "cd $REMOTE_DIR && export GO111MODULE=on && $GO_PATH mod download && $GO_PATH mod vendor && $GO_PATH build -o $REMOTE_BIN_NAME ."
-    
-    # Deploy management script for manual use
-    log_info "Uploading management script..."
-    copy_to_remote "$SCRIPT_DIR/manage-bot" "$REMOTE_DIR/manage-bot"
-    run_remote "chmod +x $REMOTE_DIR/manage-bot"
-    
-    # Restart systemd service
-    log_info "Restarting systemd service..."
-    log_warning "Note: Service restart requires manual intervention due to sudo requirements"
-    
-    echo ""
-    echo "🔧 MANUAL STEP REQUIRED:"
-    echo "Please SSH into the server and restart the service:"
-    echo "  ssh $SERVER_USER@$SERVER_IP"
-    echo "  sudo systemctl restart $SERVICE_NAME"
-    echo "  sudo systemctl status $SERVICE_NAME"
-    echo ""
-    
-    log_success "Deployment completed!"
-}
+    # Copy binary to server
+    log_info "Copying binary to server..."
+    scp -i "$SERVER_SSH_KEY" social-link-bot "$SERVER_USER@$SERVER_IP:$REMOTE_DIR/"
+    log_success "Binary uploaded"
+fi
 
-# Function to restart service
-restart_service() {
-    log_info "Restarting service..."
-    
-    if [ "$SERVICE_TYPE" = "system" ]; then
-        log_info "Note: Restarting service requires sudo access"
-        run_remote "sudo systemctl restart $SERVICE_NAME"
-        sleep 2
-        run_remote "sudo systemctl status $SERVICE_NAME --no-pager || true"
-    else
-        run_remote "systemctl --user restart $SERVICE_NAME"
-        sleep 2
-        run_remote "systemctl --user status $SERVICE_NAME --no-pager || true"
-    fi
-    
-    log_success "Service restarted!"
-}
+# Restart service
+log_info "Restarting service..."
+ssh -i "$SERVER_SSH_KEY" "$SERVER_USER@$SERVER_IP" "sudo systemctl restart $SERVICE_NAME"
+sleep 2
 
-# Main execution
-main() {
-    echo "🚀 Social Link Telegram Bot Deployment"
-    echo "======================================"
-    
-    if [ "$DRY_RUN" = true ]; then
-        log_warning "Running in DRY RUN mode - no changes will be made"
-    fi
-    
-    # Test SSH connection
-    log_info "Testing SSH connection..."
-    if ! run_remote "echo 'SSH connection successful'"; then
-        log_error "Failed to connect to server"
-        exit 1
-    fi
-    
-    if [ "$SETUP_MODE" = true ]; then
-        setup_server
-    elif [ "$RESTART_ONLY" = true ]; then
-        restart_service
-    else
-        deploy_app
-    fi
-    
-    # Show helpful commands
-    echo ""
-    log_info "Helpful commands:"
-    echo "  View logs: ssh $SERVER_USER@$SERVER_IP 'tail -f $REMOTE_DIR/logs/bot.log'"
-    echo "  Check status: ssh $SERVER_USER@$SERVER_IP 'sudo systemctl status $SERVICE_NAME'"
-    echo "  Restart: ssh $SERVER_USER@$SERVER_IP 'sudo systemctl restart $SERVICE_NAME'"
-    
-    # Send notification if configured
-    if [ -n "${SLACK_WEBHOOK:-}" ] && [ "$DRY_RUN" = false ]; then
-        curl -X POST -H 'Content-type: application/json' \
-            --data "{\"text\":\"✅ Social Link Bot deployed successfully to $SERVER_IP\"}" \
-            "$SLACK_WEBHOOK" 2>/dev/null || true
-    fi
-}
+# Check status
+log_info "Checking service status..."
+ssh -i "$SERVER_SSH_KEY" "$SERVER_USER@$SERVER_IP" "sudo systemctl status $SERVICE_NAME --no-pager" || true
 
-main
+# Show recent logs
+log_info "Recent logs:"
+ssh -i "$SERVER_SSH_KEY" "$SERVER_USER@$SERVER_IP" "tail -n 10 $REMOTE_DIR/logs/bot.log 2>/dev/null || echo 'No logs yet'"
+
+log_success "Deployment completed!"
+
+echo ""
+echo "📋 Useful commands:"
+echo "  View logs: ssh -i $SERVER_SSH_KEY $SERVER_USER@$SERVER_IP 'tail -f $REMOTE_DIR/logs/bot.log'"
+echo "  Restart:   $0 --restart-only"
