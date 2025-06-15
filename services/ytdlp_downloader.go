@@ -33,33 +33,22 @@ func NewYtDlpDownloader() *YtDlpDownloader {
 	tempDir := filepath.Join(os.TempDir(), "social-link-bot")
 	os.MkdirAll(tempDir, 0755)
 	
-	// Try to find yt-dlp binary
-	binaryPath := "yt-dlp"
+	// Try to find yt-dlp binary - test in order of preference
+	candidatePaths := []string{
+		"./bin/yt-dlp",                       // Local development
+		"/var/www/social-link-tg-bot/bin/yt-dlp", // Production bin
+		"yt-dlp",                             // System PATH
+		"./yt-dlp",                           // Current dir (often broken)
+		"/var/www/social-link-tg-bot/yt-dlp", // Production root
+		"youtube-dl",                         // Fallback
+	}
 	
-	// First check if yt-dlp exists in the current directory
-	localYtDlp := "./yt-dlp"
-	if _, err := os.Stat(localYtDlp); err == nil {
-		binaryPath = localYtDlp
-	} else if _, err := exec.LookPath("yt-dlp"); err != nil {
-		// Check for yt-dlp in production locations
-		prodLocations := []string{
-			"/var/www/social-link-tg-bot/bin/yt-dlp",
-			"/var/www/social-link-tg-bot/yt-dlp",
-			"./bin/yt-dlp",
-		}
-		
-		found := false
-		for _, location := range prodLocations {
-			if _, err := os.Stat(location); err == nil {
-				binaryPath = location
-				found = true
-				break
-			}
-		}
-		
-		if !found {
-			// Fallback to youtube-dl if yt-dlp is not available
-			binaryPath = "youtube-dl"
+	binaryPath := "yt-dlp" // Default fallback
+	
+	for _, candidate := range candidatePaths {
+		if testYtDlpBinary(candidate) {
+			binaryPath = candidate
+			break
 		}
 	}
 	
@@ -228,6 +217,12 @@ func (yd *YtDlpDownloader) CleanupTempFiles() error {
 }
 
 func (yd *YtDlpDownloader) IsAvailable() bool {
-	_, err := exec.LookPath(yd.BinaryPath)
+	return testYtDlpBinary(yd.BinaryPath)
+}
+
+// testYtDlpBinary tests if a yt-dlp binary path works by running --version
+func testYtDlpBinary(path string) bool {
+	cmd := exec.Command(path, "--version")
+	err := cmd.Run()
 	return err == nil
 }
