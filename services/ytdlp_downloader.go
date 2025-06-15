@@ -368,9 +368,15 @@ func (yd *YtDlpDownloader) buildDownloadArgs(url string, outputTemplate string) 
 			"--fragment-retries", "2",  // Reduce retries for faster failure
 		}
 		
-		// Note: 9GAG doesn't support username/password authentication via yt-dlp
-		// Authentication requires cookies from browser instead
-		log.Printf("9GAG: Using enhanced headers only (no login support)")
+		// Check for 9GAG-specific cookies file
+		ninegagCookiesPath := yd.getFilePath("9gag_cookies.txt")
+		if _, err := os.Stat(ninegagCookiesPath); err == nil {
+			ninegagArgs = append(ninegagArgs, "--cookies", ninegagCookiesPath)
+			log.Printf("Using 9GAG cookies for authentication: %s", ninegagCookiesPath)
+		} else {
+			log.Printf("⚠️ 9GAG cookies not found at %s. 9GAG downloads may fail due to authentication.", ninegagCookiesPath)
+			log.Printf("To fix: Export 9GAG cookies to 9gag_cookies.txt file")
+		}
 		
 		baseArgs = append(baseArgs, ninegagArgs...)
 	} else if strings.Contains(url, "youtube.com") || strings.Contains(url, "youtu.be") {
