@@ -88,7 +88,7 @@ start_bot() {
     mkdir -p logs
     
     # Set PATH to include our bin directory with yt-dlp
-    local start_cmd="cd '$REMOTE_DIR' && export PATH='$REMOTE_DIR/bin:\$PATH' && nohup ./'$REMOTE_BIN_NAME' --name='$REMOTE_BIN_NAME' > logs/bot.log 2>&1 &"
+    local start_cmd="cd '$REMOTE_DIR' && export PATH='$REMOTE_DIR/bin:\$PATH' && (./'$REMOTE_BIN_NAME' --name='$REMOTE_BIN_NAME' > logs/bot.log 2>&1 &)"
     
     run_as_service_user "$start_cmd"
     sleep 2
