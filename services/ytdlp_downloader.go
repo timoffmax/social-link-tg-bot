@@ -253,6 +253,19 @@ func (yd *YtDlpDownloader) attemptDownload(url string, outputTemplate string, pr
 		}
 	}
 	
+	// Check if we have any actual video files
+	hasVideo := false
+	for _, filePath := range downloadedFiles {
+		if strings.HasSuffix(filePath, ".info.json") || strings.HasSuffix(filePath, ".description") {
+			continue
+		}
+		mediaType := yd.detectMediaType(filePath)
+		if mediaType == "video" {
+			hasVideo = true
+			break
+		}
+	}
+	
 	for _, filePath := range downloadedFiles {
 		// Skip metadata files from being sent as media
 		if strings.HasSuffix(filePath, ".info.json") || strings.HasSuffix(filePath, ".description") {
@@ -260,6 +273,22 @@ func (yd *YtDlpDownloader) attemptDownload(url string, outputTemplate string, pr
 		}
 		
 		mediaType := yd.detectMediaType(filePath)
+		
+		// If we have a video file, skip all thumbnails
+		if hasVideo && mediaType == "photo" {
+			filename := filepath.Base(filePath)
+			// Check if this is a thumbnail file (contains .orig, .large, .medium, .small, .thumb)
+			isThumbnail := strings.Contains(filename, ".orig.jpg") || 
+						   strings.Contains(filename, ".large.jpg") || 
+						   strings.Contains(filename, ".medium.jpg") || 
+						   strings.Contains(filename, ".small.jpg") || 
+						   strings.Contains(filename, ".thumb.jpg")
+			
+			if isThumbnail {
+				log.Printf("Skipping thumbnail %s because video is present", filePath)
+				continue
+			}
+		}
 		
 		// Use tweet text as caption if available, otherwise use default
 		caption := "Downloaded from " + yd.getPlatformName(url)
