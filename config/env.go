@@ -5,7 +5,7 @@ import (
 	"os"
 )
 
-const tgBotToken = "TG_BOT_TOKEN"
+const tgBotToken = "***REMOVED***"
 
 func init() {
 	loadConfig()

@@ -3,6 +3,7 @@ package app
 import (
 	"fmt"
 	"log"
+	"strings"
 	"github.com/timoffmax/social-link-bot/model/api/request/message"
 	"github.com/timoffmax/social-link-bot/model/api/request/payload"
 	"github.com/timoffmax/social-link-bot/model/api/response"
@@ -108,12 +109,24 @@ func processMediaDownload(url string, origChat *response.TgChat, downloader *ser
 	if err != nil {
 		log.Printf("Failed to download media from %s: %v", url, err)
 		
-		// Fallback to sending error message
-		errorMsg := payload.TgPlSendMessage{
-			ChatId: origChat.Id,
-			Text:   fmt.Sprintf("❌ Failed to download media from %s", url),
+		// Fallback to sending fixed link
+		fixedUrl := getFixedUrl(url)
+		if fixedUrl != "" {
+			log.Printf("Falling back to fixed link: %s", fixedUrl)
+			fallbackMsg := payload.TgPlSendMessage{
+				ChatId:    origChat.Id,
+				ParseMode: payload.ParseModeHTML,
+				Text:      fixedUrl,
+			}
+			message.NewSendMessage(fallbackMsg)
+		} else {
+			// If no fixed link available, send error
+			errorMsg := payload.TgPlSendMessage{
+				ChatId: origChat.Id,
+				Text:   fmt.Sprintf("❌ Failed to download media from %s", url),
+			}
+			message.NewSendMessage(errorMsg)
 		}
-		message.NewSendMessage(errorMsg)
 		return
 	}
 
@@ -157,4 +170,23 @@ func sendMediaFile(mediaInfo *services.MediaInfo, origChat *response.TgChat) err
 	}
 
 	return nil
+}
+
+func getFixedUrl(url string) string {
+	// Instagram
+	if strings.Contains(url, "instagram.com") {
+		return strings.Replace(url, "instagram.com", "instagramez.com", 1)
+	}
+	
+	// TikTok
+	if strings.Contains(url, "tiktok.com") {
+		return strings.Replace(url, "tiktok.com", "vxtiktok.com", 1)
+	}
+	
+	// Twitter/X
+	if strings.Contains(url, "x.com") {
+		return strings.Replace(url, "x.com", "fixupx.com", 1)
+	}
+	
+	return ""
 }
