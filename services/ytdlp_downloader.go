@@ -30,7 +30,8 @@ type YtDlpDownloader struct {
 }
 
 func NewYtDlpDownloader() *YtDlpDownloader {
-	tempDir := filepath.Join(os.TempDir(), "social-link-bot")
+	// Use persistent temp directory instead of system temp
+	tempDir := "./temp"
 	os.MkdirAll(tempDir, 0755)
 	
 	// Try to find yt-dlp binary - test in order of preference
