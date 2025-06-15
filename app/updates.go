@@ -57,7 +57,8 @@ func processUpdate(upd *response.TgUpdate) {
 		origMessage = upd.Message
 		origUser = origMessage.From
 		origChat = origMessage.Chat
-		log.Printf("Processing message from user %d in chat %d (type: %s)", origUser.Id, origChat.Id, origChat.Type)
+		log.Printf("Processing message from user %d in chat %d (type: %s, title: %s)", origUser.Id, origChat.Id, origChat.Type, origChat.Title)
+		log.Printf("Original message text: %s", origMessage.Text)
 	}
 
 	if 0 == origUser.Id {
@@ -131,6 +132,19 @@ func processMediaDownload(url string, origChat *response.TgChat, downloader *ser
 		}
 		return
 	}
+
+	// Send confirmation message first to test chat access
+	confirmMsg := payload.TgPlSendMessage{
+		ChatId: origChat.Id,
+		Text:   "📥 Downloaded video, sending...",
+	}
+	confirmSend := message.NewSendMessage(confirmMsg)
+	_, err := confirmSend.Request.Send(confirmSend.ResponsePayload)
+	if err != nil {
+		log.Printf("Failed to send confirmation message to chat %d: %v", origChat.Id, err)
+		return
+	}
+	log.Printf("✅ Successfully sent confirmation message to chat %d", origChat.Id)
 
 	// Send each downloaded media file
 	for _, mediaInfo := range mediaInfos {
