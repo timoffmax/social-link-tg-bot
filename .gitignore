@@ -40,3 +40,4 @@ temp/
 # Authentication cookies (never commit these!)
 cookies.txt
 
+/youtube_cookies.txt
