@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 )
 
@@ -134,21 +135,40 @@ func prepareMultipartRequest(r *AuthorizedRequest, requestURL string) (*http.Req
 	// Check if payload implements MediaPayload interface
 	fmt.Printf("🔍 DEBUG: Checking MediaPayload interface for type: %T\n", r.Payload)
 	
-	// Try direct method checking instead of interface assertion
-	type HasFileMethods interface {
-		GetFilePath() string
-		GetFileField() string
+	// Use reflection to check for required methods since interface assertion fails across package boundaries
+	payloadValue := reflect.ValueOf(r.Payload)
+	payloadType := payloadValue.Type()
+	
+	fmt.Printf("🔍 DEBUG: Original payload value kind: %s, type: %s\n", payloadValue.Kind(), payloadType)
+	
+	// For struct values with pointer receiver methods, we need to create a pointer
+	if payloadValue.Kind() == reflect.Struct {
+		// Create a new pointer to the struct value
+		newPtr := reflect.New(payloadType)
+		newPtr.Elem().Set(payloadValue)
+		payloadValue = newPtr
+		payloadType = payloadValue.Type()
+		fmt.Printf("🔍 DEBUG: Created pointer type: %s\n", payloadType)
 	}
 	
-	fmt.Printf("🔍 DEBUG: Attempting HasFileMethods interface check...\n")
-	if hasFileMethods, ok := r.Payload.(HasFileMethods); ok {
-		filePath := hasFileMethods.GetFilePath()
-		fieldName := hasFileMethods.GetFileField()
-		fmt.Printf("✅ DEBUG: File methods detected - FilePath: %s, FieldName: %s\n", filePath, fieldName)
-		isMediaPayload = true
+	// Check if both methods exist
+	getFilePathMethod := payloadValue.MethodByName("GetFilePath")
+	getFileFieldMethod := payloadValue.MethodByName("GetFileField")
+	
+	if getFilePathMethod.IsValid() && getFileFieldMethod.IsValid() {
+		// Call the methods using reflection
+		filePathResult := getFilePathMethod.Call(nil)
+		fileFieldResult := getFileFieldMethod.Call(nil)
 		
-		// Create an adapter to implement MediaPayload interface
-		mediaPayload = &mediaAdapter{filePath: filePath, fileField: fieldName}
+		if len(filePathResult) > 0 && len(fileFieldResult) > 0 {
+			filePath := filePathResult[0].String()
+			fieldName := fileFieldResult[0].String()
+			
+			fmt.Printf("✅ DEBUG: File methods detected via reflection - FilePath: %s, FieldName: %s\n", filePath, fieldName)
+			isMediaPayload = true
+			
+			// Create an adapter to implement MediaPayload interface
+			mediaPayload = &mediaAdapter{filePath: filePath, fileField: fieldName}
 		
 		// Add file to form
 		fmt.Printf("🔍 DEBUG: Opening file: %s\n", filePath)
@@ -180,8 +200,15 @@ func prepareMultipartRequest(r *AuthorizedRequest, requestURL string) (*http.Req
 			return nil, err
 		}
 		fmt.Printf("🔍 DEBUG: Bytes written to form: %d\n", bytesWritten)
+		}
 	} else {
-		fmt.Printf("❌ DEBUG: HasFileMethods interface NOT detected! Type %T does not have GetFilePath/GetFileField methods\n", r.Payload)
+		fmt.Printf("❌ DEBUG: Required methods NOT detected via reflection! Type %T missing GetFilePath/GetFileField methods\n", r.Payload)
+		fmt.Printf("🔍 DEBUG: Available methods: ")
+		for i := 0; i < payloadType.NumMethod(); i++ {
+			method := payloadType.Method(i)
+			fmt.Printf("%s ", method.Name)
+		}
+		fmt.Printf("\n")
 	}
 	// Add other fields as form data
 	payloadBytes, _ := json.Marshal(r.Payload)
