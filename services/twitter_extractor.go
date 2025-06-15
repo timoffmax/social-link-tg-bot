@@ -301,14 +301,33 @@ func (te *TwitterExtractor) parseEmbedResponse(response, tweetID string) ([]*Med
 }
 
 func (te *TwitterExtractor) extractTweetText(html string) string {
-	// Multiple patterns to extract tweet text
+	// Multiple patterns to extract tweet text - updated for modern Twitter
 	patterns := []string{
+		// Modern Twitter data-testid patterns
 		`<div[^>]*data-testid="tweetText"[^>]*>(.*?)</div>`,
+		`<span[^>]*data-testid="tweetText"[^>]*>(.*?)</span>`,
+		
+		// Classic patterns
 		`<div[^>]*class="[^"]*tweet-text[^"]*"[^>]*>(.*?)</div>`,
 		`<p[^>]*class="[^"]*TweetTextSize[^"]*"[^>]*>(.*?)</p>`,
-		`"full_text":"([^"]*)"`,                          // JSON text
-		`"text":"([^"]*)"`,                               // JSON text alternative
-		`<meta[^>]*property="og:description"[^>]*content="([^"]*)"`, // OG meta
+		
+		// JSON embedded text (most common in modern Twitter)
+		`"full_text"\s*:\s*"([^"]*)"`,
+		`"text"\s*:\s*"([^"]*)"`,
+		`"note_tweet"\s*:[^}]*"text"\s*:\s*"([^"]*)"`,
+		
+		// OpenGraph and meta tags
+		`<meta[^>]*property="og:description"[^>]*content="([^"]*)"`,
+		`<meta[^>]*name="description"[^>]*content="([^"]*)"`,
+		`<title[^>]*>([^<]*)</title>`,
+		
+		// Script tag JSON data
+		`window\.__INITIAL_STATE__[^}]*"text"\s*:\s*"([^"]*)"`,
+		`"legacy"[^}]*"full_text"\s*:\s*"([^"]*)"`,
+		
+		// Tweet URL patterns in title/description
+		`"([^"]*)" / X`,
+		`"([^"]*)" on X:`,
 	}
 	
 	for _, pattern := range patterns {
@@ -340,7 +359,7 @@ func (te *TwitterExtractor) extractTweetText(html string) string {
 func (te *TwitterExtractor) extractMediaURLs(html string) []string {
 	var urls []string
 	
-	// Patterns to match image and video URLs
+	// Patterns to match image and video URLs - updated for modern Twitter
 	patterns := []string{
 		// Standard Twitter media URLs
 		`https://pbs\.twimg\.com/media/[A-Za-z0-9_-]+\?format=(?:jpg|jpeg|png|gif|webp)`,
@@ -348,13 +367,26 @@ func (te *TwitterExtractor) extractMediaURLs(html string) []string {
 		`https://video\.twimg\.com/[^"'\s]+\.(?:mp4|m3u8)`,
 		`https://pbs\.twimg\.com/tweet_video/[^"'\s]+\.(?:mp4|gif)`,
 		
-		// JSON embedded media URLs  
+		// JSON embedded media URLs (most common in modern Twitter)
 		`"media_url_https":"(https://pbs\.twimg\.com/media/[^"]+)"`,
 		`"video_info"[^}]*"url":"([^"]*\.mp4[^"]*)"`,
 		
-		// Additional patterns for different formats
+		// JavaScript variable assignments
+		`media_url_https['"]\s*:\s*['"]([^'"]*pbs\.twimg\.com[^'"]*)['"]*`,
+		
+		// Data attributes and modern patterns
+		`data-image-url=["']([^"']*pbs\.twimg\.com[^"']*)["']`,
+		`"(?:src|data-src|srcset)"\s*:\s*"(https://pbs\.twimg\.com/[^"]+)"`,
+		
+		// Script tag content with media
+		`pbs\.twimg\.com/media/[A-Za-z0-9_-]+[^"'\s]*`,
+		
+		// CSS background images
+		`background-image\s*:\s*url\s*\(\s*['"](https://pbs\.twimg\.com/[^'"]+)['"]\s*\)`,
+		
+		// Additional flexible patterns
 		`https://pbs\.twimg\.com/media/[A-Za-z0-9_-]+`,
-		`"(?:src|data-src)":"(https://pbs\.twimg\.com/[^"]+)"`,
+		`"(https://pbs\.twimg\.com/media/[A-Za-z0-9_%-]+)"`,
 	}
 	
 	for _, pattern := range patterns {
@@ -518,6 +550,15 @@ func (te *TwitterExtractor) addCookiesToRequest(req *http.Request) {
 				// Clean up cookie value - remove quotes and invalid characters
 				value = strings.Trim(value, `"`)
 				value = strings.ReplaceAll(value, `\"`, `"`)
+				value = strings.ReplaceAll(value, `\n`, ``)
+				value = strings.ReplaceAll(value, `\r`, ``)
+				value = strings.ReplaceAll(value, `\t`, ``)
+				
+				// Skip cookies with invalid characters
+				if strings.ContainsAny(value, "\n\r\t\"") {
+					log.Printf("⚠️ Skipping invalid cookie %s", name)
+					continue
+				}
 				
 				cookie := &http.Cookie{
 					Name:  name,
