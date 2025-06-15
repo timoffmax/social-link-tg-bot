@@ -68,7 +68,7 @@ deploy:
 
 ## status: Check production status
 status:
-	ssh -i ~/.ssh/your_deploy_key botuser@YOUR_SERVER_IP './manage-bot status'
+	ssh -i ~/.ssh/your_deploy_key botuser@YOUR_SERVER_IP 'systemctl --user status social-link-bot --no-pager'
 
 ## help: Show this help
 help:

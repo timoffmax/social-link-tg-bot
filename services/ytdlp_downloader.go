@@ -160,7 +160,15 @@ func (yd *YtDlpDownloader) attemptDownload(url string, outputTemplate string, pr
 	
 	cmd := exec.Command(yd.BinaryPath, args...)
 	
-	log.Printf("Executing command: %s %v", yd.BinaryPath, args)
+	// Create safe command string for logging (hide passwords)
+	safeArgs := make([]string, len(args))
+	copy(safeArgs, args)
+	for i, arg := range safeArgs {
+		if i > 0 && (args[i-1] == "--password" || args[i-1] == "--username") {
+			safeArgs[i] = "***"
+		}
+	}
+	log.Printf("Executing command: %s %v", yd.BinaryPath, safeArgs)
 	
 	// Execute download
 	output, err := cmd.CombinedOutput()
@@ -360,13 +368,9 @@ func (yd *YtDlpDownloader) buildDownloadArgs(url string, outputTemplate string) 
 			"--fragment-retries", "2",  // Reduce retries for faster failure
 		}
 		
-		// Add 9GAG credentials if available (may not be supported by yt-dlp)
-		if username := config.GetNineGagUsername(); username != "" {
-			if password := config.GetNineGagPassword(); password != "" {
-				log.Printf("Attempting to use 9GAG credentials for user: %s", username)
-				ninegagArgs = append(ninegagArgs, "--username", username, "--password", password)
-			}
-		}
+		// Note: 9GAG doesn't support username/password authentication via yt-dlp
+		// Authentication requires cookies from browser instead
+		log.Printf("9GAG: Using enhanced headers only (no login support)")
 		
 		baseArgs = append(baseArgs, ninegagArgs...)
 	} else if strings.Contains(url, "youtube.com") || strings.Contains(url, "youtu.be") {
