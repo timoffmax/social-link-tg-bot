@@ -110,8 +110,15 @@ func processMediaDownload(url string, origChat *response.TgChat, downloader *ser
 	// Send "typing" status to indicate processing
 	// (You could implement sendChatAction here)
 
-	// Try to download media
-	mediaInfos, err := downloader.DownloadMedia(url)
+	// Try to download media using platform-specific methods
+	var mediaInfos []*services.MediaInfo
+	var err error
+	
+	if strings.Contains(url, "twitter.com") || strings.Contains(url, "x.com") {
+		mediaInfos, err = downloader.DownloadTwitterMedia(url)
+	} else {
+		mediaInfos, err = downloader.DownloadMedia(url)
+	}
 	if err != nil {
 		log.Printf("Failed to download media from %s: %v", url, err)
 		

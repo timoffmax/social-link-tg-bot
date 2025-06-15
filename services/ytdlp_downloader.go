@@ -247,7 +247,112 @@ func (yd *YtDlpDownloader) DownloadTikTokMedia(url string) ([]*MediaInfo, error)
 }
 
 func (yd *YtDlpDownloader) DownloadTwitterMedia(url string) ([]*MediaInfo, error) {
-	return yd.DownloadMedia(url)
+	// For Twitter, try multiple strategies since image handling is problematic
+	
+	// Strategy 1: Try normal download first 
+	mediaInfos, err := yd.DownloadMedia(url)
+	if err == nil && len(mediaInfos) > 0 {
+		return mediaInfos, nil
+	}
+	
+	// Strategy 2: Try thumbnails-only approach for image tweets
+	log.Printf("Normal download failed, trying thumbnails-only approach for Twitter")
+	return yd.downloadTwitterThumbnailsOnly(url)
+}
+
+// downloadTwitterThumbnailsOnly tries to download only thumbnails and metadata for Twitter posts
+func (yd *YtDlpDownloader) downloadTwitterThumbnailsOnly(url string) ([]*MediaInfo, error) {
+	// Ensure temp directory exists
+	if err := os.MkdirAll(yd.TempDir, 0755); err != nil {
+		return nil, fmt.Errorf("failed to create temp directory: %v", err)
+	}
+	
+	// Create unique filename with timestamp
+	timestamp := time.Now().Unix()
+	outputTemplate := filepath.Join(yd.TempDir, fmt.Sprintf("%d_%%(title)s.%%(ext)s", timestamp))
+	
+	log.Printf("Trying thumbnails-only download with template: %s", outputTemplate)
+	
+	// Build special args for thumbnails and metadata only
+	args := []string{
+		"--no-playlist",
+		"--output", outputTemplate,
+		"--skip-download",               // Skip video/audio download
+		"--write-all-thumbnails",        // Download all thumbnails
+		"--write-info-json",             // Write metadata
+		"--write-description",           // Write tweet text
+		"--ignore-errors",               // Continue on errors
+		"--no-check-certificate",
+		"--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+		url,
+	}
+	
+	cmd := exec.Command(yd.BinaryPath, args...)
+	
+	log.Printf("Executing thumbnails-only command: %s %v", yd.BinaryPath, args)
+	
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		log.Printf("Thumbnails-only download failed: %v\nOutput: %s", err, string(output))
+		return nil, fmt.Errorf("thumbnails download failed: %v", err)
+	}
+	
+	log.Printf("Thumbnails-only download completed")
+	log.Printf("Output: %s", string(output))
+	
+	// Find downloaded files
+	downloadedFiles, err := yd.findDownloadedFiles(timestamp)
+	if err != nil {
+		return nil, fmt.Errorf("failed to find downloaded files: %v", err)
+	}
+	
+	log.Printf("Found %d files from thumbnails-only download: %v", len(downloadedFiles), downloadedFiles)
+	
+	// Convert to MediaInfo with Twitter-specific handling
+	var mediaInfos []*MediaInfo
+	var tweetDescription string
+	
+	// Look for description file
+	for _, filePath := range downloadedFiles {
+		if strings.HasSuffix(filePath, ".description") {
+			if content, err := os.ReadFile(filePath); err == nil {
+				tweetDescription = strings.TrimSpace(string(content))
+			}
+			break
+		}
+	}
+	
+	// Process files (skip metadata files)
+	for _, filePath := range downloadedFiles {
+		if strings.HasSuffix(filePath, ".info.json") || strings.HasSuffix(filePath, ".description") {
+			continue
+		}
+		
+		mediaType := yd.detectMediaType(filePath)
+		
+		// Use tweet text as caption if available
+		caption := "Downloaded from Twitter"
+		if tweetDescription != "" {
+			caption = tweetDescription
+		}
+		
+		mediaInfo := &MediaInfo{
+			Type:     mediaType,
+			URL:      url,
+			Caption:  caption,
+			Filename: filePath,
+		}
+		
+		mediaInfos = append(mediaInfos, mediaInfo)
+	}
+	
+	// If no images found, try to extract at least the text content
+	if len(mediaInfos) == 0 && tweetDescription != "" {
+		log.Printf("No images found, but have tweet text: %s", tweetDescription)
+		// Return an empty slice, the calling function will handle text-only fallback
+	}
+	
+	return mediaInfos, nil
 }
 
 func (yd *YtDlpDownloader) findDownloadedFiles(timestamp int64) ([]string, error) {
@@ -370,11 +475,12 @@ func (yd *YtDlpDownloader) buildDownloadArgs(url string, outputTemplate string) 
 			"--add-metadata",                  // Add metadata to files
 		}
 		
-		// Override format selection for Twitter to include images
+		// Override format selection for Twitter to prioritize images and handle image-only tweets
 		// Remove the default format from baseArgs and add Twitter-specific format
 		for i, arg := range baseArgs {
 			if arg == "--format" && i+1 < len(baseArgs) {
-				baseArgs[i+1] = "best[filesize<50M]/best,thumbnail"
+				// Try thumbnails first, then video if available, but don't fail if no video
+				baseArgs[i+1] = "thumbnail/best[filesize<50M]/worst"
 				break
 			}
 		}
