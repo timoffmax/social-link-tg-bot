@@ -51,6 +51,20 @@ type MediaPayload interface {
 	GetFileField() string
 }
 
+// mediaAdapter implements MediaPayload interface for dynamic payloads
+type mediaAdapter struct {
+	filePath  string
+	fileField string
+}
+
+func (m *mediaAdapter) GetFilePath() string {
+	return m.filePath
+}
+
+func (m *mediaAdapter) GetFileField() string {
+	return m.fileField
+}
+
 func (r *AuthorizedRequest) Send(respPayload interface{}) (ResponseInfo, error) {
 	var result ResponseInfo
 	request, err := prepareRequest(r)
@@ -119,10 +133,21 @@ func prepareMultipartRequest(r *AuthorizedRequest, requestURL string) (*http.Req
 	
 	// Check if payload implements MediaPayload interface
 	fmt.Printf("🔍 DEBUG: Checking MediaPayload interface for type: %T\n", r.Payload)
-	if mediaPayload, isMediaPayload = r.Payload.(MediaPayload); isMediaPayload {
-		filePath := mediaPayload.GetFilePath()
-		fieldName := mediaPayload.GetFileField()
-		fmt.Printf("🔍 DEBUG: MediaPayload detected - FilePath: %s, FieldName: %s\n", filePath, fieldName)
+	
+	// Try direct method checking instead of interface assertion
+	type HasFileMethods interface {
+		GetFilePath() string
+		GetFileField() string
+	}
+	
+	if hasFileMethods, ok := r.Payload.(HasFileMethods); ok {
+		filePath := hasFileMethods.GetFilePath()
+		fieldName := hasFileMethods.GetFileField()
+		fmt.Printf("🔍 DEBUG: File methods detected - FilePath: %s, FieldName: %s\n", filePath, fieldName)
+		isMediaPayload = true
+		
+		// Create an adapter to implement MediaPayload interface
+		mediaPayload = &mediaAdapter{filePath: filePath, fileField: fieldName}
 		
 		// Add file to form
 		fmt.Printf("🔍 DEBUG: Opening file: %s\n", filePath)
