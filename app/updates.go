@@ -136,7 +136,7 @@ func processMediaDownload(url string, origChat *response.TgChat, downloader *ser
 	// Send confirmation message first to test chat access
 	confirmMsg := payload.TgPlSendMessage{
 		ChatId: origChat.Id,
-		Text:   "📥 Downloaded video, sending...",
+		Text:   "📥 Downloaded video, testing file upload capability...",
 	}
 	confirmSend := message.NewSendMessage(confirmMsg)
 	_, confirmErr := confirmSend.Request.Send(confirmSend.ResponsePayload)
@@ -145,6 +145,28 @@ func processMediaDownload(url string, origChat *response.TgChat, downloader *ser
 		return
 	}
 	log.Printf("✅ Successfully sent confirmation message to chat %d", origChat.Id)
+	
+	// Test basic file upload capability with a tiny text file
+	testFile := "temp/upload_test.txt"
+	os.WriteFile(testFile, []byte("Test file upload capability"), 0644)
+	defer os.Remove(testFile)
+	
+	testPayload := payload.TgPlSendDocument{
+		ChatId:   origChat.Id,
+		Document: "upload_test.txt",
+		Caption:  "🧪 Testing basic file upload",
+		FilePath: testFile,
+	}
+	testSend := message.NewSendDocument(testPayload)
+	_, testErr := testSend.Request.Send(testSend.ResponsePayload)
+	if testErr != nil {
+		log.Printf("❌ Basic file upload test failed: %v", testErr)
+		log.Printf("File upload capability not working, falling back to fixed link immediately")
+		sendFixedLinkFallback(url, origChat)
+		return
+	} else {
+		log.Printf("✅ Basic file upload test successful - proceeding with media upload")
+	}
 
 	// Send each downloaded media file
 	for _, mediaInfo := range mediaInfos {
