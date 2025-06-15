@@ -116,6 +116,10 @@ func processMediaDownload(url string, origChat *response.TgChat, downloader *ser
 	
 	if strings.Contains(url, "twitter.com") || strings.Contains(url, "x.com") {
 		mediaInfos, err = downloader.DownloadTwitterMedia(url)
+	} else if strings.Contains(url, "instagram.com") {
+		mediaInfos, err = downloader.DownloadInstagramMedia(url)
+	} else if strings.Contains(url, "tiktok.com") {
+		mediaInfos, err = downloader.DownloadTikTokMedia(url)
 	} else {
 		mediaInfos, err = downloader.DownloadMedia(url)
 	}
