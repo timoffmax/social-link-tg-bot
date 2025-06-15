@@ -3,6 +3,7 @@ package services
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -40,15 +41,29 @@ func NewYtDlpDownloader() *YtDlpDownloader {
 	if _, err := os.Stat(localYtDlp); err == nil {
 		binaryPath = localYtDlp
 	} else if _, err := exec.LookPath("yt-dlp"); err != nil {
-		// Check for yt-dlp in /var/www/social-link-tg-bot/
-		prodYtDlp := "/var/www/social-link-tg-bot/yt-dlp"
-		if _, err := os.Stat(prodYtDlp); err == nil {
-			binaryPath = prodYtDlp
-		} else {
+		// Check for yt-dlp in production locations
+		prodLocations := []string{
+			"/var/www/social-link-tg-bot/bin/yt-dlp",
+			"/var/www/social-link-tg-bot/yt-dlp",
+			"./bin/yt-dlp",
+		}
+		
+		found := false
+		for _, location := range prodLocations {
+			if _, err := os.Stat(location); err == nil {
+				binaryPath = location
+				found = true
+				break
+			}
+		}
+		
+		if !found {
 			// Fallback to youtube-dl if yt-dlp is not available
 			binaryPath = "youtube-dl"
 		}
 	}
+	
+	log.Printf("YtDlpDownloader initialized with binary path: %s", binaryPath)
 	
 	return &YtDlpDownloader{
 		TempDir:    tempDir,
