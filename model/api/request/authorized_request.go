@@ -140,10 +140,11 @@ func prepareMultipartRequest(r *AuthorizedRequest, requestURL string) (*http.Req
 		GetFileField() string
 	}
 	
+	fmt.Printf("🔍 DEBUG: Attempting HasFileMethods interface check...\n")
 	if hasFileMethods, ok := r.Payload.(HasFileMethods); ok {
 		filePath := hasFileMethods.GetFilePath()
 		fieldName := hasFileMethods.GetFileField()
-		fmt.Printf("🔍 DEBUG: File methods detected - FilePath: %s, FieldName: %s\n", filePath, fieldName)
+		fmt.Printf("✅ DEBUG: File methods detected - FilePath: %s, FieldName: %s\n", filePath, fieldName)
 		isMediaPayload = true
 		
 		// Create an adapter to implement MediaPayload interface
@@ -180,7 +181,7 @@ func prepareMultipartRequest(r *AuthorizedRequest, requestURL string) (*http.Req
 		}
 		fmt.Printf("🔍 DEBUG: Bytes written to form: %d\n", bytesWritten)
 	} else {
-		fmt.Printf("❌ DEBUG: MediaPayload interface NOT detected! Type %T does not implement MediaPayload\n", r.Payload)
+		fmt.Printf("❌ DEBUG: HasFileMethods interface NOT detected! Type %T does not have GetFilePath/GetFileField methods\n", r.Payload)
 	}
 	// Add other fields as form data
 	payloadBytes, _ := json.Marshal(r.Payload)
