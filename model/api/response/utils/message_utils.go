@@ -25,7 +25,7 @@ func GetAllSocialLinks(message *response.TgMessage) []string {
 }
 
 func GetInstagramLinks(message *response.TgMessage) []string {
-	regex := regexp.MustCompile(`https:\/\/www\.(instagram)\.com\/[^\s]+`)
+	regex := regexp.MustCompile(`https:\/\/(www\.)?(instagram)\.com\/[^\s]+`)
 	result := regex.FindAllString(message.Text, -1)
 
 	for i, url := range result {
@@ -37,7 +37,7 @@ func GetInstagramLinks(message *response.TgMessage) []string {
 }
 
 func GetTikTokLinks(message *response.TgMessage) []string {
-	regex := regexp.MustCompile(`https:\/\/vm\.(tiktok)\.com\/[^\s]+`)
+	regex := regexp.MustCompile(`https:\/\/(vm\.|www\.|m\.)?(tiktok)\.com\/[^\s]+`)
 	result := regex.FindAllString(message.Text, -1)
 
 	for i, url := range result {
@@ -85,12 +85,12 @@ func fixTwitterLink(link string) string {
 }
 
 func GetOriginalInstagramLinks(message *response.TgMessage) []string {
-	regex := regexp.MustCompile(`https:\/\/www\.instagram\.com\/[^\s]+`)
+	regex := regexp.MustCompile(`https:\/\/(www\.)?instagram\.com\/[^\s]+`)
 	return regex.FindAllString(message.Text, -1)
 }
 
 func GetOriginalTikTokLinks(message *response.TgMessage) []string {
-	regex := regexp.MustCompile(`https:\/\/vm\.tiktok\.com\/[^\s]+`)
+	regex := regexp.MustCompile(`https:\/\/(vm\.|www\.|m\.)?tiktok\.com\/[^\s]+`)
 	return regex.FindAllString(message.Text, -1)
 }
 
