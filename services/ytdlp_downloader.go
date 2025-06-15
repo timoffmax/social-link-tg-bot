@@ -120,8 +120,8 @@ func (yd *YtDlpDownloader) DownloadMedia(url string) ([]*MediaInfo, error) {
 	// Get list of proxies to try
 	proxies := config.GetYtDlpProxies()
 	
-	// For TikTok, YouTube, and 9GAG, skip proxies and try direct connection first
-	if strings.Contains(url, "tiktok.com") || strings.Contains(url, "youtube.com") || strings.Contains(url, "youtu.be") || strings.Contains(url, "9gag.com") {
+	// For TikTok and YouTube, skip proxies and try direct connection first
+	if strings.Contains(url, "tiktok.com") || strings.Contains(url, "youtube.com") || strings.Contains(url, "youtu.be") {
 		proxies = []string{} // Start with no proxy for these platforms
 	}
 	
@@ -163,7 +163,7 @@ func (yd *YtDlpDownloader) attemptDownload(url string, outputTemplate string, pr
 	// Create safe command string for logging (hide passwords)
 	safeArgs := make([]string, len(args))
 	copy(safeArgs, args)
-	for i, arg := range safeArgs {
+	for i := range safeArgs {
 		if i > 0 && (args[i-1] == "--password" || args[i-1] == "--username") {
 			safeArgs[i] = "***"
 		}
@@ -388,35 +388,6 @@ func (yd *YtDlpDownloader) buildDownloadArgs(url string, outputTemplate string) 
 		}
 		
 		baseArgs = append(baseArgs, twitterArgs...)
-	} else if strings.Contains(url, "9gag.com") {
-		// 9GAG-specific args with enhanced headers to avoid 403
-		ninegagArgs := []string{
-			"--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-			"--referer", "https://9gag.com/",
-			"--add-header", "Accept:text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-			"--add-header", "Accept-Language:en-US,en;q=0.9",
-			"--add-header", "Accept-Encoding:gzip, deflate, br",
-			"--add-header", "sec-fetch-dest:document",
-			"--add-header", "sec-fetch-mode:navigate",
-			"--add-header", "sec-fetch-site:none",
-			"--add-header", "sec-fetch-user:?1",
-			"--add-header", "sec-ch-ua:\"Not_A Brand\";v=\"8\", \"Chromium\";v=\"120\", \"Google Chrome\";v=\"120\"",
-			"--add-header", "sec-ch-ua-mobile:?0",
-			"--add-header", "sec-ch-ua-platform:\"Windows\"",
-			"--fragment-retries", "2",  // Reduce retries for faster failure
-		}
-		
-		// Check for 9GAG-specific cookies file
-		ninegagCookiesPath := yd.getFilePath("9gag_cookies.txt")
-		if _, err := os.Stat(ninegagCookiesPath); err == nil {
-			ninegagArgs = append(ninegagArgs, "--cookies", ninegagCookiesPath)
-			log.Printf("Using 9GAG cookies for authentication: %s", ninegagCookiesPath)
-		} else {
-			log.Printf("⚠️ 9GAG cookies not found at %s. 9GAG downloads may fail due to authentication.", ninegagCookiesPath)
-			log.Printf("To fix: Export 9GAG cookies to 9gag_cookies.txt file")
-		}
-		
-		baseArgs = append(baseArgs, ninegagArgs...)
 	} else if strings.Contains(url, "youtube.com") || strings.Contains(url, "youtu.be") {
 		// YouTube Shorts-specific args
 		youtubeArgs := []string{
@@ -470,8 +441,6 @@ func (yd *YtDlpDownloader) getPlatformName(url string) string {
 		return "TikTok"
 	} else if strings.Contains(url, "twitter.com") || strings.Contains(url, "x.com") {
 		return "Twitter"
-	} else if strings.Contains(url, "9gag.com") {
-		return "9GAG"
 	} else if strings.Contains(url, "youtube.com") || strings.Contains(url, "youtu.be") {
 		return "YouTube"
 	}
