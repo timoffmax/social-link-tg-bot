@@ -197,7 +197,6 @@ func (yd *YtDlpDownloader) buildDownloadArgs(url string, outputTemplate string) 
 		"--geo-bypass-country", "US",      // Use US geolocation
 		"--ignore-errors",                 // Continue on download errors
 		"--no-check-certificate",          // Ignore SSL certificate errors (for proxies)
-		"--ignore-ssl-errors",             // Additional SSL error ignoring
 	}
 	
 	// Add cookies if available
