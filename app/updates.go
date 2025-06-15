@@ -147,6 +147,7 @@ func sendMediaFile(mediaInfo *services.MediaInfo, origChat *response.TgChat) err
 	case "photo":
 		photoPayload := payload.TgPlSendPhoto{
 			ChatId:   origChat.Id,
+			Photo:    "attach://photo", // Required for file uploads
 			Caption:  mediaInfo.Caption,
 			FilePath: mediaInfo.Filename,
 		}
@@ -155,6 +156,7 @@ func sendMediaFile(mediaInfo *services.MediaInfo, origChat *response.TgChat) err
 	case "video":
 		videoPayload := payload.TgPlSendVideo{
 			ChatId:   origChat.Id,
+			Video:    "attach://video", // Required for file uploads
 			Caption:  mediaInfo.Caption,
 			FilePath: mediaInfo.Filename,
 		}
@@ -163,6 +165,7 @@ func sendMediaFile(mediaInfo *services.MediaInfo, origChat *response.TgChat) err
 	default:
 		documentPayload := payload.TgPlSendDocument{
 			ChatId:   origChat.Id,
+			Document: "attach://document", // Required for file uploads
 			Caption:  mediaInfo.Caption,
 			FilePath: mediaInfo.Filename,
 		}

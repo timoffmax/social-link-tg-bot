@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	
+	"github.com/timoffmax/social-link-tg-bot/config"
 )
 
 type YtDlpInfo struct {
@@ -201,6 +203,15 @@ func (yd *YtDlpDownloader) buildDownloadArgs(url string, outputTemplate string) 
 			"--add-header", "Accept-Language:en-US,en;q=0.9",
 			"--add-header", "Accept:text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
 		}
+		
+		// Add Instagram credentials if available
+		if username := config.GetInstagramUsername(); username != "" {
+			if password := config.GetInstagramPassword(); password != "" {
+				log.Printf("Using Instagram credentials for user: %s", username)
+				instagramArgs = append(instagramArgs, "--username", username, "--password", password)
+			}
+		}
+		
 		baseArgs = append(baseArgs, instagramArgs...)
 	} else if strings.Contains(url, "tiktok.com") {
 		// TikTok-specific args with enhanced anti-blocking
@@ -211,17 +222,35 @@ func (yd *YtDlpDownloader) buildDownloadArgs(url string, outputTemplate string) 
 			"--add-header", "sec-fetch-dest:document",
 			"--add-header", "sec-fetch-mode:navigate",
 		}
+		
+		// Add TikTok credentials if available
+		if username := config.GetTikTokUsername(); username != "" {
+			if password := config.GetTikTokPassword(); password != "" {
+				log.Printf("Using TikTok credentials for user: %s", username)
+				tiktokArgs = append(tiktokArgs, "--username", username, "--password", password)
+			}
+		}
+		
 		baseArgs = append(baseArgs, tiktokArgs...)
 	} else if strings.Contains(url, "twitter.com") || strings.Contains(url, "x.com") {
 		// Twitter/X-specific args
 		twitterArgs := []string{
 			"--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
 		}
+		
+		// Add Twitter credentials if available
+		if username := config.GetTwitterUsername(); username != "" {
+			if password := config.GetTwitterPassword(); password != "" {
+				log.Printf("Using Twitter credentials for user: %s", username)
+				twitterArgs = append(twitterArgs, "--username", username, "--password", password)
+			}
+		}
+		
 		baseArgs = append(baseArgs, twitterArgs...)
 	}
 	
 	// Add proxy if configured
-	if proxy := os.Getenv("YTDLP_PROXY"); proxy != "" {
+	if proxy := config.GetYtDlpProxy(); proxy != "" {
 		baseArgs = append(baseArgs, "--proxy", proxy)
 	}
 	
