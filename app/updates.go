@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"strings"
 	"github.com/timoffmax/social-link-bot/model/api/request/message"
 	"github.com/timoffmax/social-link-bot/model/api/request/payload"
@@ -159,7 +160,7 @@ func sendMediaFile(mediaInfo *services.MediaInfo, origChat *response.TgChat) err
 	case "photo":
 		photoPayload := payload.TgPlSendPhoto{
 			ChatId:   origChat.Id,
-			Photo:    "attach://photo", // Required for file uploads
+			Photo:    "photo.jpg", // Simple filename for multipart upload
 			Caption:  mediaInfo.Caption,
 			FilePath: mediaInfo.Filename,
 		}
@@ -171,7 +172,7 @@ func sendMediaFile(mediaInfo *services.MediaInfo, origChat *response.TgChat) err
 	case "video":
 		videoPayload := payload.TgPlSendVideo{
 			ChatId:   origChat.Id,
-			Video:    "attach://video", // Required for file uploads
+			Video:    "video.mp4", // Simple filename for multipart upload
 			Caption:  mediaInfo.Caption,
 			FilePath: mediaInfo.Filename,
 		}
@@ -184,7 +185,7 @@ func sendMediaFile(mediaInfo *services.MediaInfo, origChat *response.TgChat) err
 	default:
 		documentPayload := payload.TgPlSendDocument{
 			ChatId:   origChat.Id,
-			Document: "attach://document", // Required for file uploads
+			Document: "document.bin", // Simple filename for multipart upload
 			Caption:  mediaInfo.Caption,
 			FilePath: mediaInfo.Filename,
 		}
