@@ -60,6 +60,8 @@ func (te *TwitterExtractor) ExtractTweet(twitterURL string) ([]*MediaInfo, error
 		te.extractViaWebInterface,
 		te.extractViaEmbedAPI,
 		te.extractViaDirectScraping,
+		te.extractViaNitterProxy,
+		te.extractViaSimpleTextFallback,
 	}
 	
 	for i, method := range methods {
@@ -244,6 +246,72 @@ func (te *TwitterExtractor) extractViaDirectScraping(tweetID string) ([]*MediaIn
 	}
 	
 	return te.parseHTMLForMedia(string(body), tweetID)
+}
+
+func (te *TwitterExtractor) extractViaNitterProxy(tweetID string) ([]*MediaInfo, error) {
+	log.Printf("🔄 Trying Nitter-style extraction for tweet %s", tweetID)
+	
+	// Try some alternative URL patterns that might be more accessible
+	urls := []string{
+		fmt.Sprintf("https://nitter.net/politvidchannel/status/%s", tweetID),
+		fmt.Sprintf("https://nitter.it/politvidchannel/status/%s", tweetID),
+		fmt.Sprintf("https://mobile.twitter.com/politvidchannel/status/%s", tweetID),
+	}
+	
+	for _, url := range urls {
+		log.Printf("🔗 Trying alternative URL: %s", url)
+		
+		req, err := http.NewRequest("GET", url, nil)
+		if err != nil {
+			continue
+		}
+		
+		req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; TwitterBot/1.0)")
+		
+		resp, err := te.client.Do(req)
+		if err != nil {
+			log.Printf("❌ Failed to fetch %s: %v", url, err)
+			continue
+		}
+		defer resp.Body.Close()
+		
+		if resp.StatusCode != 200 {
+			log.Printf("❌ HTTP %d for %s", resp.StatusCode, url)
+			continue
+		}
+		
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			continue
+		}
+		
+		bodyStr := string(body)
+		if len(bodyStr) > 100 {
+			log.Printf("✅ Got response from %s, parsing...", url)
+			result := te.parseHTMLForMedia(bodyStr, tweetID)
+			if len(result) > 0 {
+				return result, nil
+			}
+		}
+	}
+	
+	return nil, fmt.Errorf("no accessible alternative URLs found")
+}
+
+func (te *TwitterExtractor) extractViaSimpleTextFallback(tweetID string) ([]*MediaInfo, error) {
+	log.Printf("📝 Trying simple text fallback for tweet %s", tweetID)
+	
+	// As a last resort, just return a message with the fixed link
+	fixedURL := fmt.Sprintf("https://fixupx.com/politvidchannel/status/%s", tweetID)
+	
+	textMediaInfo := &MediaInfo{
+		Type:    "text",
+		URL:     fmt.Sprintf("https://x.com/i/web/status/%s", tweetID),
+		Caption: fmt.Sprintf("🐦 Twitter content (images may be available): %s", fixedURL),
+		Filename: "",
+	}
+	
+	return []*MediaInfo{textMediaInfo}, nil
 }
 
 func (te *TwitterExtractor) parseHTMLForMedia(html, tweetID string) ([]*MediaInfo, error) {
