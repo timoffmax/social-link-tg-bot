@@ -5,7 +5,7 @@ import (
 	"os"
 )
 
-const tgBotToken = "***REMOVED***"
+const tgBotTokenKey = "TG_BOT_TOKEN"
 
 func init() {
 	loadConfig()
@@ -16,5 +16,5 @@ func loadConfig() {
 }
 
 func GetTgBotToken() string {
-	return os.Getenv(tgBotToken)
+	return os.Getenv(tgBotTokenKey)
 }
