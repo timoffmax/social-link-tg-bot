@@ -123,9 +123,14 @@ func prepareMultipartRequest(r *AuthorizedRequest, requestURL string) (*http.Req
 		filePath := mediaPayload.GetFilePath()
 		fieldName := mediaPayload.GetFileField()
 		fmt.Printf("🔍 DEBUG: MediaPayload detected - FilePath: %s, FieldName: %s\n", filePath, fieldName)
+	} else {
+		fmt.Printf("❌ DEBUG: MediaPayload interface NOT detected! Type %T does not implement MediaPayload\n", r.Payload)
+		// Skip file upload - interface not implemented
+		goto skipFileUpload
+	}
 		
-		// Add file to form
-		fmt.Printf("🔍 DEBUG: Opening file: %s\n", filePath)
+	// Add file to form
+	fmt.Printf("🔍 DEBUG: Opening file: %s\n", filePath)
 		
 		// Check file exists and get size
 		fileInfo, err := os.Stat(filePath)
@@ -156,6 +161,7 @@ func prepareMultipartRequest(r *AuthorizedRequest, requestURL string) (*http.Req
 		fmt.Printf("🔍 DEBUG: Bytes written to form: %d\n", bytesWritten)
 	}
 
+skipFileUpload:
 	// Add other fields as form data
 	payloadBytes, _ := json.Marshal(r.Payload)
 	var payloadMap map[string]interface{}
