@@ -102,9 +102,9 @@ func (yd *YtDlpDownloader) DownloadMedia(url string) ([]*MediaInfo, error) {
 	// Get list of proxies to try
 	proxies := config.GetYtDlpProxies()
 	
-	// For TikTok and YouTube, skip proxies and try direct connection first
-	if strings.Contains(url, "tiktok.com") || strings.Contains(url, "youtube.com") || strings.Contains(url, "youtu.be") {
-		proxies = []string{} // Start with no proxy for TikTok and YouTube
+	// For TikTok, YouTube, and 9GAG, skip proxies and try direct connection first
+	if strings.Contains(url, "tiktok.com") || strings.Contains(url, "youtube.com") || strings.Contains(url, "youtu.be") || strings.Contains(url, "9gag.com") {
+		proxies = []string{} // Start with no proxy for these platforms
 	}
 	
 	// Add empty string to try without proxy as last resort
@@ -319,10 +319,21 @@ func (yd *YtDlpDownloader) buildDownloadArgs(url string, outputTemplate string) 
 		
 		baseArgs = append(baseArgs, twitterArgs...)
 	} else if strings.Contains(url, "9gag.com") {
-		// 9GAG-specific args
+		// 9GAG-specific args with enhanced headers to avoid 403
 		ninegagArgs := []string{
-			"--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+			"--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
 			"--referer", "https://9gag.com/",
+			"--add-header", "Accept:text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+			"--add-header", "Accept-Language:en-US,en;q=0.9",
+			"--add-header", "Accept-Encoding:gzip, deflate, br",
+			"--add-header", "sec-fetch-dest:document",
+			"--add-header", "sec-fetch-mode:navigate",
+			"--add-header", "sec-fetch-site:none",
+			"--add-header", "sec-fetch-user:?1",
+			"--add-header", "sec-ch-ua:\"Not_A Brand\";v=\"8\", \"Chromium\";v=\"120\", \"Google Chrome\";v=\"120\"",
+			"--add-header", "sec-ch-ua-mobile:?0",
+			"--add-header", "sec-ch-ua-platform:\"Windows\"",
+			"--fragment-retries", "2",  // Reduce retries for faster failure
 		}
 		baseArgs = append(baseArgs, ninegagArgs...)
 	} else if strings.Contains(url, "youtube.com") || strings.Contains(url, "youtu.be") {
