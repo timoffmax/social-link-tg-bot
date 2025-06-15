@@ -146,12 +146,24 @@ func (te *TwitterExtractor) extractViaWebInterface(tweetID string) ([]*MediaInfo
 		return nil, fmt.Errorf("failed to read response: %v", err)
 	}
 	
-	// Debug: Log the first 500 characters of response  
+	// Debug: Log response info
 	bodyStr := string(body)
-	if len(bodyStr) > 500 {
-		log.Printf("🔍 Response preview: %s...", bodyStr[:500])
+	log.Printf("🔍 Response length: %d bytes", len(bodyStr))
+	if len(bodyStr) > 1000 {
+		log.Printf("🔍 Response preview: %s...", bodyStr[:1000])
 	} else {
 		log.Printf("🔍 Full response: %s", bodyStr)
+	}
+	
+	// Log specific search results for debugging
+	if strings.Contains(bodyStr, "pbs.twimg.com") {
+		log.Printf("🖼️ Found pbs.twimg.com references in HTML")
+	}
+	if strings.Contains(bodyStr, "media_url") {
+		log.Printf("📸 Found media_url references in HTML")
+	}
+	if strings.Contains(bodyStr, "tweetText") {
+		log.Printf("📝 Found tweetText references in HTML")
 	}
 	
 	// Parse HTML and extract media URLs
@@ -239,9 +251,11 @@ func (te *TwitterExtractor) parseHTMLForMedia(html, tweetID string) ([]*MediaInf
 	
 	// Extract tweet text
 	tweetText := te.extractTweetText(html)
+	log.Printf("📝 Extracted tweet text: %.200s", tweetText)
 	
 	// Extract media URLs using regex patterns
 	mediaURLs := te.extractMediaURLs(html)
+	log.Printf("📸 Extracted %d media URLs: %v", len(mediaURLs), mediaURLs)
 	
 	log.Printf("📊 Found %d media URLs and tweet text: %.100s", len(mediaURLs), tweetText)
 	
