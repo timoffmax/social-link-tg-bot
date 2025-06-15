@@ -215,26 +215,17 @@ deploy_app() {
     log_info "Building application on server..."
     run_remote "cd $REMOTE_DIR && export GO111MODULE=on && $GO_PATH mod download && $GO_PATH mod vendor && $GO_PATH build -o $REMOTE_BIN_NAME ."
     
-    # Restart service using manage script if available
-    if run_remote "[ -f $REMOTE_DIR/manage_bot.sh ]"; then
-        log_info "Stopping existing bot processes..."
-        run_remote "cd $REMOTE_DIR && ./manage_bot.sh stop"
-        sleep 2
-        log_info "Starting bot with updated code..."
-        run_remote "cd $REMOTE_DIR && ./manage_bot.sh start"
-    else
-        # Manual restart
-        if [ "$SERVICE_TYPE" = "system" ]; then
-            log_info "Note: Restarting service requires sudo access"
-            run_remote "sudo systemctl restart $SERVICE_NAME"
-            sleep 2
-            run_remote "sudo systemctl status $SERVICE_NAME --no-pager || true"
-        else
-            run_remote "systemctl --user restart $SERVICE_NAME"
-            sleep 2
-            run_remote "systemctl --user status $SERVICE_NAME --no-pager || true"
-        fi
-    fi
+    # Deploy management script
+    log_info "Uploading management script..."
+    copy_to_remote "$SCRIPT_DIR/manage-bot" "$REMOTE_DIR/manage-bot"
+    run_remote "chmod +x $REMOTE_DIR/manage-bot"
+    
+    # Restart service using management script
+    log_info "Stopping existing bot processes..."
+    run_remote "cd $REMOTE_DIR && ./manage-bot stop"
+    sleep 2
+    log_info "Starting bot with updated code..."
+    run_remote "cd $REMOTE_DIR && ./manage-bot start"
     
     log_success "Deployment completed!"
 }
