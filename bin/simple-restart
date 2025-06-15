@@ -1,0 +1,30 @@
+#!/bin/bash
+
+# simple-restart - Simple restart script without sudo requirements
+# ==============================================================
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CONFIG_FILE="$SCRIPT_DIR/deploy.conf"
+
+# Load configuration
+if [ -f "$CONFIG_FILE" ]; then
+    source "$CONFIG_FILE"
+else
+    echo "Error: Configuration file not found: $CONFIG_FILE"
+    exit 1
+fi
+
+echo "🔄 Simple restart for Social Link Bot on $SERVER_IP..."
+echo "This will restart the bot as the current user (no sudo required)"
+
+# SSH and restart
+ssh "$SERVER_USER@$SERVER_IP" "cd $REMOTE_DIR && pkill -f social-link-bot; sleep 2; export PATH='$REMOTE_DIR/bin:\$PATH' && nohup ./social-link-bot --name=social-link-bot > logs/bot.log 2>&1 &"
+
+sleep 3
+
+# Check if it started
+echo "Checking if bot started..."
+ssh "$SERVER_USER@$SERVER_IP" "cd $REMOTE_DIR && ps aux | grep social-link-bot | grep -v grep"
+
+echo "✅ Simple restart completed!"
+echo "Check logs: ssh $SERVER_USER@$SERVER_IP 'tail -f $REMOTE_DIR/logs/bot.log'"

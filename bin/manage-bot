@@ -63,7 +63,13 @@ run_as_service_user() {
     if [ "$(whoami)" = "$SERVICE_USER" ]; then
         bash -c "$cmd"
     else
-        sudo -u "$SERVICE_USER" bash -c "$cmd"
+        # Use sudo with -n flag to avoid hanging on password prompt
+        if sudo -n -u "$SERVICE_USER" bash -c "echo test" >/dev/null 2>&1; then
+            sudo -u "$SERVICE_USER" bash -c "$cmd"
+        else
+            log_warning "Cannot sudo to $SERVICE_USER, trying as current user"
+            bash -c "$cmd"
+        fi
     fi
 }
 
@@ -80,7 +86,6 @@ start_bot() {
     
     # Ensure logs directory exists
     mkdir -p logs
-    chown -f "$SERVICE_USER:$SERVICE_USER" logs/ 2>/dev/null || true
     
     # Set PATH to include our bin directory with yt-dlp
     local start_cmd="cd '$REMOTE_DIR' && export PATH='$REMOTE_DIR/bin:\$PATH' && nohup ./'$REMOTE_BIN_NAME' --name='$REMOTE_BIN_NAME' > logs/bot.log 2>&1 &"
