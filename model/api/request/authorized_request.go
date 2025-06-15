@@ -118,9 +118,11 @@ func prepareMultipartRequest(r *AuthorizedRequest, requestURL string) (*http.Req
 	var isMediaPayload bool
 	
 	// Check if payload implements MediaPayload interface
+	fmt.Printf("🔍 DEBUG: Checking MediaPayload interface for type: %T\n", r.Payload)
 	if mediaPayload, isMediaPayload = r.Payload.(MediaPayload); isMediaPayload {
 		filePath := mediaPayload.GetFilePath()
 		fieldName := mediaPayload.GetFileField()
+		fmt.Printf("🔍 DEBUG: MediaPayload detected - FilePath: %s, FieldName: %s\n", filePath, fieldName)
 		
 		// Add file to form
 		fmt.Printf("🔍 DEBUG: Opening file: %s\n", filePath)
