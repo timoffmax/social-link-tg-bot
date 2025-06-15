@@ -123,21 +123,35 @@ func prepareMultipartRequest(r *AuthorizedRequest, requestURL string) (*http.Req
 		fieldName := mediaPayload.GetFileField()
 		
 		// Add file to form
+		fmt.Printf("🔍 DEBUG: Opening file: %s\n", filePath)
+		
+		// Check file exists and get size
+		fileInfo, err := os.Stat(filePath)
+		if err != nil {
+			fmt.Printf("❌ File stat error: %v\n", err)
+			return nil, err
+		}
+		fmt.Printf("🔍 DEBUG: File size: %d bytes\n", fileInfo.Size())
+		
 		file, err := os.Open(filePath)
 		if err != nil {
+			fmt.Printf("❌ File open error: %v\n", err)
 			return nil, err
 		}
 		defer file.Close()
 
 		fileWriter, err := writer.CreateFormFile(fieldName, filepath.Base(filePath))
 		if err != nil {
+			fmt.Printf("❌ CreateFormFile error: %v\n", err)
 			return nil, err
 		}
 
-		_, err = io.Copy(fileWriter, file)
+		bytesWritten, err := io.Copy(fileWriter, file)
 		if err != nil {
+			fmt.Printf("❌ File copy error: %v\n", err)
 			return nil, err
 		}
+		fmt.Printf("🔍 DEBUG: Bytes written to form: %d\n", bytesWritten)
 	}
 
 	// Add other fields as form data
