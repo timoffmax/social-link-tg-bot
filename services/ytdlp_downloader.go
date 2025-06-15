@@ -46,9 +46,13 @@ func NewYtDlpDownloader() *YtDlpDownloader {
 	binaryPath := "yt-dlp" // Default fallback
 	
 	for _, candidate := range candidatePaths {
+		log.Printf("Testing yt-dlp candidate: %s", candidate)
 		if testYtDlpBinary(candidate) {
+			log.Printf("✅ Found working yt-dlp: %s", candidate)
 			binaryPath = candidate
 			break
+		} else {
+			log.Printf("❌ Failed: %s", candidate)
 		}
 	}
 	

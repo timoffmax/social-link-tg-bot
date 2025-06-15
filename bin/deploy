@@ -217,8 +217,11 @@ deploy_app() {
     
     # Restart service using manage script if available
     if run_remote "[ -f $REMOTE_DIR/manage_bot.sh ]"; then
-        log_info "Restarting service using manage script..."
-        run_remote "cd $REMOTE_DIR && ./manage_bot.sh restart"
+        log_info "Stopping existing bot processes..."
+        run_remote "cd $REMOTE_DIR && ./manage_bot.sh stop"
+        sleep 2
+        log_info "Starting bot with updated code..."
+        run_remote "cd $REMOTE_DIR && ./manage_bot.sh start"
     else
         # Manual restart
         if [ "$SERVICE_TYPE" = "system" ]; then
