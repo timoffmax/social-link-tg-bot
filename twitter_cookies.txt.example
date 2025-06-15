@@ -1,0 +1,15 @@
+# Netscape HTTP Cookie File
+# This is a generated file! Do not edit.
+# Export your Twitter/X cookies from your browser and save them here as twitter_cookies.txt
+# 
+# How to export cookies:
+# 1. Chrome/Edge: Use extension "Get cookies.txt LOCALLY"
+# 2. Firefox: Use extension "cookies.txt"
+# 3. Visit x.com (or twitter.com) while logged in
+# 4. Export cookies and save as twitter_cookies.txt
+#
+# Format should be like this:
+# .twitter.com	TRUE	/	FALSE	0	auth_token	your_auth_token_here
+# .twitter.com	TRUE	/	FALSE	0	ct0	your_csrf_token_here
+# .x.com	TRUE	/	FALSE	0	auth_token	your_auth_token_here
+# .x.com	TRUE	/	FALSE	0	ct0	your_csrf_token_here

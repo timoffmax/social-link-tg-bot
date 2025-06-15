@@ -513,11 +513,19 @@ func (yd *YtDlpDownloader) buildDownloadArgs(url string, outputTemplate string) 
 			}
 		}
 		
-		// Add Twitter credentials if available
-		if username := config.GetTwitterUsername(); username != "" {
-			if password := config.GetTwitterPassword(); password != "" {
-				log.Printf("Using Twitter credentials for user: %s", username)
-				twitterArgs = append(twitterArgs, "--username", username, "--password", password)
+		// Check for Twitter-specific cookies file first
+		twitterCookiesPath := yd.getFilePath("twitter_cookies.txt")
+		if _, err := os.Stat(twitterCookiesPath); err == nil {
+			twitterArgs = append(twitterArgs, "--cookies", twitterCookiesPath)
+			log.Printf("Using Twitter cookies for authentication: %s", twitterCookiesPath)
+		} else {
+			log.Printf("⚠️ Twitter cookies not found at %s. Using credentials if available.", twitterCookiesPath)
+			// Add Twitter credentials if available
+			if username := config.GetTwitterUsername(); username != "" {
+				if password := config.GetTwitterPassword(); password != "" {
+					log.Printf("Using Twitter credentials for user: %s", username)
+					twitterArgs = append(twitterArgs, "--username", username, "--password", password)
+				}
 			}
 		}
 		
