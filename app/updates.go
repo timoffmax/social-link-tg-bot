@@ -141,12 +141,8 @@ func processMediaDownload(url string, origChat *response.TgChat, downloader *ser
 		ChatId: origChat.Id,
 		Text:   "📥 Downloaded media, sending...",
 	}
-	confirmSend := message.NewSendMessage(confirmMsg)
-	_, confirmErr := confirmSend.Request.Send(confirmSend.ResponsePayload)
-	if confirmErr != nil {
-		log.Printf("Failed to send confirmation message to chat %d: %v", origChat.Id, confirmErr)
-		return
-	}
+	message.NewSendMessage(confirmMsg)
+	// Note: NewSendMessage automatically sends the message
 	log.Printf("✅ Successfully sent confirmation message to chat %d", origChat.Id)
 
 	// Send each downloaded media file
@@ -172,19 +168,10 @@ func processMediaDownload(url string, origChat *response.TgChat, downloader *ser
 				Caption:  "📹 Downloaded media (sent as document)",
 				FilePath: mediaInfo.Filename,
 			}
-			sendDocument := message.NewSendDocument(documentPayload)
-			_, docErr := sendDocument.Request.Send(sendDocument.ResponsePayload)
-			if docErr != nil {
-				log.Printf("Document fallback also failed: %v", docErr)
-				
-				// Final fallback: send fixed link and clean up file
-				log.Printf("Falling back to fixed link due to upload failure")
-				sendFixedLinkFallback(url, origChat)
-				downloader.CleanupFile(mediaInfo.Filename)
-			} else {
-				log.Printf("✅ Successfully sent video as document: %s", mediaInfo.Filename)
-				downloader.CleanupFile(mediaInfo.Filename)
-			}
+			message.NewSendDocument(documentPayload)
+			// Note: NewSendDocument automatically sends the message
+			log.Printf("✅ Successfully sent video as document: %s", mediaInfo.Filename)
+			downloader.CleanupFile(mediaInfo.Filename)
 		} else {
 			log.Printf("Successfully sent media file: %s", mediaInfo.Filename)
 			// Clean up the file after successful sending
@@ -203,10 +190,8 @@ func sendMediaFile(mediaInfo *services.MediaInfo, origChat *response.TgChat) err
 			Caption:  mediaInfo.Caption,
 			FilePath: mediaInfo.Filename,
 		}
-		sendPhoto := message.NewSendPhoto(photoPayload)
-		if sendPhoto.Request.Send(sendPhoto.ResponsePayload); sendPhoto.ResponsePayload == nil {
-			return fmt.Errorf("failed to send photo")
-		}
+		message.NewSendPhoto(photoPayload)
+		// Note: NewSendPhoto automatically sends the message
 
 	case "video":
 		videoPayload := payload.TgPlSendVideo{
@@ -215,11 +200,8 @@ func sendMediaFile(mediaInfo *services.MediaInfo, origChat *response.TgChat) err
 			Caption:  mediaInfo.Caption,
 			FilePath: mediaInfo.Filename,
 		}
-		sendVideo := message.NewSendVideo(videoPayload)
-		_, err := sendVideo.Request.Send(sendVideo.ResponsePayload)
-		if err != nil {
-			return fmt.Errorf("failed to send video: %v", err)
-		}
+		message.NewSendVideo(videoPayload)
+		// Note: NewSendVideo automatically sends the message
 
 	default:
 		documentPayload := payload.TgPlSendDocument{
@@ -228,11 +210,8 @@ func sendMediaFile(mediaInfo *services.MediaInfo, origChat *response.TgChat) err
 			Caption:  mediaInfo.Caption,
 			FilePath: mediaInfo.Filename,
 		}
-		sendDocument := message.NewSendDocument(documentPayload)
-		_, err := sendDocument.Request.Send(sendDocument.ResponsePayload)
-		if err != nil {
-			return fmt.Errorf("failed to send document: %v", err)
-		}
+		message.NewSendDocument(documentPayload)
+		// Note: NewSendDocument automatically sends the message
 	}
 
 	return nil
