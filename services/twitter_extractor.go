@@ -63,6 +63,7 @@ func (te *TwitterExtractor) ExtractTweet(twitterURL string) ([]*MediaInfo, error
 		te.extractViaSyndicationAPI,
 		te.extractViaDirectScraping,
 		te.extractViaNitterProxy,
+		te.extractViaFixupxProxy,
 		te.extractViaSimpleTextFallback,
 	}
 	
@@ -405,6 +406,62 @@ func (te *TwitterExtractor) extractViaNitterProxy(tweetID string, username strin
 	}
 	
 	return nil, fmt.Errorf("no accessible alternative URLs found")
+}
+
+func (te *TwitterExtractor) extractViaFixupxProxy(tweetID string, username string) ([]*MediaInfo, error) {
+	log.Printf("🔧 Trying fixupx.com extraction for tweet %s by @%s", tweetID, username)
+	
+	// Build fixupx URL
+	fixupxURL := fmt.Sprintf("https://fixupx.com/%s/status/%s", username, tweetID)
+	
+	// Create request
+	req, err := http.NewRequest("GET", fixupxURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create fixupx request: %v", err)
+	}
+	
+	// Add headers to mimic a real browser
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
+	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8")
+	req.Header.Set("Accept-Language", "en-US,en;q=0.5")
+	req.Header.Set("Accept-Encoding", "gzip, deflate, br")
+	req.Header.Set("DNT", "1")
+	req.Header.Set("Connection", "keep-alive")
+	req.Header.Set("Upgrade-Insecure-Requests", "1")
+	
+	// Make request
+	resp, err := te.client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch fixupx page: %v", err)
+	}
+	defer resp.Body.Close()
+	
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("fixupx HTTP %d: %s", resp.StatusCode, resp.Status)
+	}
+	
+	// Handle compressed response
+	var reader io.Reader = resp.Body
+	if resp.Header.Get("Content-Encoding") == "gzip" {
+		gzipReader, err := gzip.NewReader(resp.Body)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create gzip reader: %v", err)
+		}
+		defer gzipReader.Close()
+		reader = gzipReader
+	}
+	
+	// Read response
+	body, err := io.ReadAll(reader)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read fixupx response: %v", err)
+	}
+	
+	bodyStr := string(body)
+	log.Printf("🔍 Fixupx response length: %d bytes", len(bodyStr))
+	
+	// Parse fixupx HTML for media and text
+	return te.parseFixupxHTML(bodyStr, tweetID, username)
 }
 
 func (te *TwitterExtractor) extractViaSimpleTextFallback(tweetID string, username string) ([]*MediaInfo, error) {
@@ -851,4 +908,160 @@ func (te *TwitterExtractor) addCookiesToRequest(req *http.Request) {
 	}
 	
 	log.Printf("🍪 Added Twitter cookies to request")
+}
+
+func (te *TwitterExtractor) parseFixupxHTML(html string, tweetID string, username string) ([]*MediaInfo, error) {
+	var mediaInfos []*MediaInfo
+	
+	log.Printf("📝 Parsing fixupx HTML for tweet %s by @%s", tweetID, username)
+	
+	// Extract tweet text from fixupx page
+	tweetText := te.extractFixupxTweetText(html)
+	log.Printf("📝 Extracted tweet text from fixupx: %.200s", tweetText)
+	
+	// Extract media URLs from fixupx page
+	mediaURLs := te.extractFixupxMediaURLs(html)
+	log.Printf("📸 Extracted %d media URLs from fixupx: %v", len(mediaURLs), mediaURLs)
+	
+	// Download each media item
+	for i, mediaURL := range mediaURLs {
+		mediaInfo, err := te.downloadMedia(mediaURL, tweetID, i)
+		if err != nil {
+			log.Printf("⚠️ Failed to download media %d from fixupx: %v", i, err)
+			continue
+		}
+		
+		// Use extracted tweet text as caption
+		if tweetText != "" {
+			mediaInfo.Caption = tweetText
+		}
+		
+		mediaInfos = append(mediaInfos, mediaInfo)
+	}
+	
+	// If no media found but we have text, return text-only
+	if len(mediaInfos) == 0 && tweetText != "" {
+		log.Printf("📝 No media found on fixupx, returning text content")
+		textMedia := &MediaInfo{
+			Type:    "text",
+			URL:     fmt.Sprintf("https://x.com/%s/status/%s", username, tweetID),
+			Caption: tweetText,
+			Filename: "",
+		}
+		mediaInfos = append(mediaInfos, textMedia)
+	}
+	
+	return mediaInfos, nil
+}
+
+func (te *TwitterExtractor) extractFixupxTweetText(html string) string {
+	// Fixupx-specific patterns for tweet text
+	patterns := []string{
+		// Look for the main tweet content in fixupx
+		`<div[^>]*class="[^"]*tweet-text[^"]*"[^>]*>(.*?)</div>`,
+		`<p[^>]*class="[^"]*tweet-content[^"]*"[^>]*>(.*?)</p>`,
+		`<div[^>]*class="[^"]*content[^"]*"[^>]*>(.*?)</div>`,
+		
+		// Generic content patterns
+		`<article[^>]*>.*?<p[^>]*>(.*?)</p>`,
+		`<main[^>]*>.*?<p[^>]*>(.*?)</p>`,
+		
+		// Meta tag fallbacks
+		`<meta[^>]*property="og:description"[^>]*content="([^"]*)"`,
+		`<meta[^>]*name="description"[^>]*content="([^"]*)"`,
+		`<title[^>]*>([^<]*?)(?: / Twitter| - Twitter|$)</title>`,
+	}
+	
+	for _, pattern := range patterns {
+		re := regexp.MustCompile(`(?s)` + pattern)
+		matches := re.FindStringSubmatch(html)
+		if len(matches) > 1 {
+			// Clean up HTML tags and decode entities
+			text := strings.ReplaceAll(matches[1], "<br>", "\n")
+			text = strings.ReplaceAll(text, "<br/>", "\n")
+			text = strings.ReplaceAll(text, "<br />", "\n")
+			text = regexp.MustCompile(`<[^>]*>`).ReplaceAllString(text, "")
+			
+			// Decode HTML entities
+			text = strings.ReplaceAll(text, "&amp;", "&")
+			text = strings.ReplaceAll(text, "&lt;", "<")
+			text = strings.ReplaceAll(text, "&gt;", ">")
+			text = strings.ReplaceAll(text, "&quot;", "\"")
+			text = strings.ReplaceAll(text, "&#39;", "'")
+			
+			text = strings.TrimSpace(text)
+			if text != "" && text != "null" && !strings.Contains(text, "fixupx") {
+				return text
+			}
+		}
+	}
+	
+	return ""
+}
+
+func (te *TwitterExtractor) extractFixupxMediaURLs(html string) []string {
+	var urls []string
+	
+	// Fixupx-specific patterns for media URLs
+	patterns := []string{
+		// Direct image/video URLs
+		`<img[^>]*src="([^"]*(?:pbs\.twimg\.com|twimg\.com)[^"]*)"`,
+		`<video[^>]*src="([^"]*(?:video\.twimg\.com|twimg\.com)[^"]*)"`,
+		`<source[^>]*src="([^"]*(?:video\.twimg\.com|twimg\.com)[^"]*)"`,
+		
+		// Look for download links or media containers
+		`href="([^"]*(?:pbs\.twimg\.com|video\.twimg\.com)[^"]*)"`,
+		`data-src="([^"]*(?:pbs\.twimg\.com|video\.twimg\.com)[^"]*)"`,
+		
+		// Generic Twitter media URL patterns
+		`(https://pbs\.twimg\.com/media/[A-Za-z0-9_-]+\?format=(?:jpg|jpeg|png|gif|webp)[^"\s]*)`,
+		`(https://pbs\.twimg\.com/media/[A-Za-z0-9_-]+\.(?:jpg|jpeg|png|gif|webp))`,
+		`(https://video\.twimg\.com/[^"\s]+\.(?:mp4|m3u8))`,
+		
+		// Any pbs.twimg.com or video.twimg.com references
+		`(https://[^"\s]*(?:pbs|video)\.twimg\.com[^"\s]*)`,
+	}
+	
+	for _, pattern := range patterns {
+		re := regexp.MustCompile(pattern)
+		if strings.Contains(pattern, "(") {
+			// Pattern has capture group
+			matches := re.FindAllStringSubmatch(html, -1)
+			for _, match := range matches {
+				if len(match) > 1 {
+					urls = append(urls, match[1])
+				}
+			}
+		} else {
+			// Pattern matches full URL
+			matches := re.FindAllString(html, -1)
+			urls = append(urls, matches...)
+		}
+	}
+	
+	// Clean up URLs and add format params for images without extensions
+	var cleanURLs []string
+	for _, url := range urls {
+		// Add format parameter if missing for pbs.twimg.com URLs
+		if strings.Contains(url, "pbs.twimg.com/media/") && !strings.Contains(url, "format=") && !strings.Contains(url, ".jpg") && !strings.Contains(url, ".png") {
+			if strings.Contains(url, "?") {
+				url += "&format=jpg&name=large"
+			} else {
+				url += "?format=jpg&name=large"
+			}
+		}
+		cleanURLs = append(cleanURLs, url)
+	}
+	
+	// Remove duplicates
+	seen := make(map[string]bool)
+	var uniqueURLs []string
+	for _, url := range cleanURLs {
+		if !seen[url] {
+			seen[url] = true
+			uniqueURLs = append(uniqueURLs, url)
+		}
+	}
+	
+	return uniqueURLs
 }
