@@ -97,13 +97,8 @@ func (yd *YtDlpDownloader) DownloadMedia(url string) ([]*MediaInfo, error) {
 	
 	log.Printf("Using output template: %s", outputTemplate)
 	
-	// Download command
-	args := []string{
-		"--no-playlist",
-		"--output", outputTemplate,
-		"--format", "best[filesize<50M]/best", // Prefer smaller files, fallback to best
-		url,
-	}
+	// Platform-specific arguments
+	args := yd.buildDownloadArgs(url, outputTemplate)
 	
 	cmd := exec.Command(yd.BinaryPath, args...)
 	
@@ -174,6 +169,45 @@ func (yd *YtDlpDownloader) findDownloadedFiles(timestamp int64) ([]string, error
 	})
 	
 	return files, err
+}
+
+// buildDownloadArgs creates platform-specific arguments for yt-dlp
+func (yd *YtDlpDownloader) buildDownloadArgs(url string, outputTemplate string) []string {
+	baseArgs := []string{
+		"--no-playlist",
+		"--output", outputTemplate,
+		"--format", "best[filesize<50M]/best",
+		"--extractor-retries", "3",
+		"--sleep-interval", "1",
+		"--max-sleep-interval", "3",
+	}
+	
+	// Platform-specific optimizations
+	if strings.Contains(url, "instagram.com") {
+		// Instagram-specific args
+		instagramArgs := []string{
+			"--user-agent", "Mozilla/5.0 (iPhone; CPU iPhone OS 14_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.0.3 Mobile/15E148 Safari/604.1",
+			"--referer", "https://www.instagram.com/",
+			"--no-check-certificate",
+		}
+		baseArgs = append(baseArgs, instagramArgs...)
+	} else if strings.Contains(url, "tiktok.com") {
+		// TikTok-specific args
+		tiktokArgs := []string{
+			"--user-agent", "Mozilla/5.0 (Linux; Android 10; SM-G973F) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/86.0.4240.198 Mobile Safari/537.36",
+			"--referer", "https://www.tiktok.com/",
+		}
+		baseArgs = append(baseArgs, tiktokArgs...)
+	} else if strings.Contains(url, "twitter.com") || strings.Contains(url, "x.com") {
+		// Twitter/X-specific args
+		twitterArgs := []string{
+			"--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+		}
+		baseArgs = append(baseArgs, twitterArgs...)
+	}
+	
+	baseArgs = append(baseArgs, url)
+	return baseArgs
 }
 
 func (yd *YtDlpDownloader) detectMediaType(filePath string) string {
