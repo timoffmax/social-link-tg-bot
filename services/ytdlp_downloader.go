@@ -190,9 +190,7 @@ func (yd *YtDlpDownloader) buildDownloadArgs(url string, outputTemplate string) 
 		"--no-playlist",
 		"--output", outputTemplate,
 		"--format", "best[filesize<50M]/best",
-		"--extractor-retries", "3",
-		"--sleep-interval", "1",
-		"--max-sleep-interval", "3",
+		"--extractor-retries", "2",        // Reduced retries for faster response
 		"--geo-bypass",                    // Bypass geographic restrictions
 		"--geo-bypass-country", "US",      // Use US geolocation
 		"--ignore-errors",                 // Continue on download errors
@@ -226,13 +224,16 @@ func (yd *YtDlpDownloader) buildDownloadArgs(url string, outputTemplate string) 
 		
 		baseArgs = append(baseArgs, instagramArgs...)
 	} else if strings.Contains(url, "tiktok.com") {
-		// TikTok-specific args with enhanced anti-blocking
+		// TikTok-specific args with enhanced anti-blocking and no proxy for better compatibility
 		tiktokArgs := []string{
-			"--user-agent", "Mozilla/5.0 (Linux; Android 11; SM-G998B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/94.0.4606.81 Mobile Safari/537.36",
+			"--user-agent", "Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.0 Mobile/15E148 Safari/604.1",
 			"--referer", "https://www.tiktok.com/",
 			"--add-header", "Accept-Language:en-US,en;q=0.9",
-			"--add-header", "sec-fetch-dest:document",
+			"--add-header", "Accept:text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+			"--add-header", "sec-fetch-dest:document", 
 			"--add-header", "sec-fetch-mode:navigate",
+			"--add-header", "sec-fetch-site:none",
+			"--add-header", "sec-fetch-user:?1",
 		}
 		
 		// Add TikTok credentials if available
@@ -261,8 +262,8 @@ func (yd *YtDlpDownloader) buildDownloadArgs(url string, outputTemplate string) 
 		baseArgs = append(baseArgs, twitterArgs...)
 	}
 	
-	// Add proxy if configured
-	if proxy := config.GetYtDlpProxy(); proxy != "" {
+	// Add proxy if configured (skip for TikTok due to connection issues)
+	if proxy := config.GetYtDlpProxy(); proxy != "" && !strings.Contains(url, "tiktok.com") {
 		baseArgs = append(baseArgs, "--proxy", proxy)
 	}
 	
