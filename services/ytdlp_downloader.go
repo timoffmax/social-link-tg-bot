@@ -34,9 +34,20 @@ func NewYtDlpDownloader() *YtDlpDownloader {
 	
 	// Try to find yt-dlp binary
 	binaryPath := "yt-dlp"
-	if _, err := exec.LookPath("yt-dlp"); err != nil {
-		// Fallback to youtube-dl if yt-dlp is not available
-		binaryPath = "youtube-dl"
+	
+	// First check if yt-dlp exists in the current directory
+	localYtDlp := "./yt-dlp"
+	if _, err := os.Stat(localYtDlp); err == nil {
+		binaryPath = localYtDlp
+	} else if _, err := exec.LookPath("yt-dlp"); err != nil {
+		// Check for yt-dlp in /var/www/social-link-tg-bot/
+		prodYtDlp := "/var/www/social-link-tg-bot/yt-dlp"
+		if _, err := os.Stat(prodYtDlp); err == nil {
+			binaryPath = prodYtDlp
+		} else {
+			// Fallback to youtube-dl if yt-dlp is not available
+			binaryPath = "youtube-dl"
+		}
 	}
 	
 	return &YtDlpDownloader{
