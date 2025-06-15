@@ -291,9 +291,9 @@ func (yd *YtDlpDownloader) DownloadTikTokMedia(url string) ([]*MediaInfo, error)
 }
 
 func (yd *YtDlpDownloader) DownloadTwitterMedia(url string) ([]*MediaInfo, error) {
-	// For Twitter, try multiple strategies since image handling is problematic
+	// For Twitter, try multiple strategies since yt-dlp image handling is problematic
 	
-	// Strategy 1: Try normal download first 
+	// Strategy 1: Try normal yt-dlp download first 
 	mediaInfos, err := yd.DownloadMedia(url)
 	if err == nil && len(mediaInfos) > 0 {
 		return mediaInfos, nil
@@ -301,7 +301,15 @@ func (yd *YtDlpDownloader) DownloadTwitterMedia(url string) ([]*MediaInfo, error
 	
 	// Strategy 2: Try thumbnails-only approach for image tweets
 	log.Printf("Normal download failed, trying thumbnails-only approach for Twitter")
-	return yd.downloadThumbnailsOnly(url, "Twitter")
+	mediaInfos, err = yd.downloadThumbnailsOnly(url, "Twitter")
+	if err == nil && len(mediaInfos) > 0 {
+		return mediaInfos, nil
+	}
+	
+	// Strategy 3: Use custom Twitter extractor as fallback
+	log.Printf("yt-dlp failed completely, trying custom Twitter extractor")
+	twitterExtractor := NewTwitterExtractor(yd.WorkingDir, yd.TempDir)
+	return twitterExtractor.ExtractTweet(url)
 }
 
 // downloadThumbnailsOnly tries to download only thumbnails and metadata for posts
