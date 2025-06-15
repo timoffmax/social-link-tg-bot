@@ -57,6 +57,7 @@ func processUpdate(upd *response.TgUpdate) {
 		origMessage = upd.Message
 		origUser = origMessage.From
 		origChat = origMessage.Chat
+		log.Printf("Processing message from user %d in chat %d (type: %s)", origUser.Id, origChat.Id, origChat.Type)
 	}
 
 	if 0 == origUser.Id {
@@ -155,6 +156,7 @@ func processMediaDownload(url string, origChat *response.TgChat, downloader *ser
 }
 
 func sendMediaFile(mediaInfo *services.MediaInfo, origChat *response.TgChat) error {
+	log.Printf("Sending media to chat ID: %d", origChat.Id)
 	switch mediaInfo.Type {
 	case "photo":
 		photoPayload := payload.TgPlSendPhoto{
