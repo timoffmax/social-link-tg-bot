@@ -391,10 +391,19 @@ func (yd *YtDlpDownloader) downloadThumbnailsOnly(url string, platform string) (
 		mediaInfos = append(mediaInfos, mediaInfo)
 	}
 	
-	// If no images found, log the description content
+	// If no images found but we have text content, return it as a text media item
 	if len(mediaInfos) == 0 && tweetDescription != "" {
-		log.Printf("No images found, but have %s text: %s", platform, tweetDescription)
-		// Return an empty slice, the calling function will handle text-only fallback
+		log.Printf("No media found, returning %s text content: %s", platform, tweetDescription)
+		
+		// Create a text-only media item
+		textMediaInfo := &MediaInfo{
+			Type:     "text",
+			URL:      url,
+			Caption:  tweetDescription,
+			Filename: "", // No file for text-only content
+		}
+		
+		mediaInfos = append(mediaInfos, textMediaInfo)
 	}
 	
 	return mediaInfos, nil
@@ -528,12 +537,12 @@ func (yd *YtDlpDownloader) buildDownloadArgs(url string, outputTemplate string) 
 			"--add-metadata",                  // Add metadata to files
 		}
 		
-		// Override format selection for Twitter to prioritize images and handle image-only tweets
+		// Override format selection for Twitter - use a more permissive format that works with images
 		// Remove the default format from baseArgs and add Twitter-specific format
 		for i, arg := range baseArgs {
 			if arg == "--format" && i+1 < len(baseArgs) {
-				// Try thumbnails first, then video if available, but don't fail if no video
-				baseArgs[i+1] = "thumbnail/best[filesize<50M]/worst"
+				// Use a more flexible format that handles both video and image content
+				baseArgs[i+1] = "best[filesize<50M]/worst/best"
 				break
 			}
 		}

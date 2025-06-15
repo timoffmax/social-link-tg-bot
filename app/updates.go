@@ -175,10 +175,12 @@ func processMediaDownload(url string, origChat *response.TgChat, downloader *ser
 	for i, mediaInfo := range mediaInfos {
 		log.Printf("Sending media file %d/%d: %s (type: %s)", i+1, len(mediaInfos), mediaInfo.Filename, mediaInfo.Type)
 		
-		// Check if file exists before sending
-		if _, err := os.Stat(mediaInfo.Filename); os.IsNotExist(err) {
-			log.Printf("Error: File does not exist: %s", mediaInfo.Filename)
-			continue
+		// Check if file exists before sending (skip for text-only content)
+		if mediaInfo.Type != "text" {
+			if _, err := os.Stat(mediaInfo.Filename); os.IsNotExist(err) {
+				log.Printf("Error: File does not exist: %s", mediaInfo.Filename)
+				continue
+			}
 		}
 		
 		err := sendMediaFile(mediaInfo, origChat)
@@ -209,6 +211,15 @@ func processMediaDownload(url string, origChat *response.TgChat, downloader *ser
 func sendMediaFile(mediaInfo *services.MediaInfo, origChat *response.TgChat) error {
 	log.Printf("Sending media to chat ID: %d", origChat.Id)
 	switch mediaInfo.Type {
+	case "text":
+		// Send text-only content as a message
+		textPayload := payload.TgPlSendMessage{
+			ChatId: origChat.Id,
+			Text:   mediaInfo.Caption,
+		}
+		message.NewSendMessage(textPayload)
+		// Note: NewSendMessage automatically sends the message
+		
 	case "photo":
 		photoPayload := payload.TgPlSendPhoto{
 			ChatId:   origChat.Id,
