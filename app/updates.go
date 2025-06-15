@@ -139,9 +139,9 @@ func processMediaDownload(url string, origChat *response.TgChat, downloader *ser
 		Text:   "📥 Downloaded video, sending...",
 	}
 	confirmSend := message.NewSendMessage(confirmMsg)
-	_, err := confirmSend.Request.Send(confirmSend.ResponsePayload)
-	if err != nil {
-		log.Printf("Failed to send confirmation message to chat %d: %v", origChat.Id, err)
+	_, confirmErr := confirmSend.Request.Send(confirmSend.ResponsePayload)
+	if confirmErr != nil {
+		log.Printf("Failed to send confirmation message to chat %d: %v", origChat.Id, confirmErr)
 		return
 	}
 	log.Printf("✅ Successfully sent confirmation message to chat %d", origChat.Id)
