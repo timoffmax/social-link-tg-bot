@@ -57,7 +57,7 @@ func processUpdate(upd *response.TgUpdate) {
 		origMessage = upd.Message
 		origUser = origMessage.From
 		origChat = origMessage.Chat
-		log.Printf("Processing message from user %d in chat %d (type: %s, title: %s)", origUser.Id, origChat.Id, origChat.Type, origChat.Title)
+		log.Printf("Processing update %d, message %d from user %d in chat %d (type: %s, title: %s)", upd.UpdateId, origMessage.MessageId, origUser.Id, origChat.Id, origChat.Type, origChat.Title)
 		log.Printf("Original message text: %s", origMessage.Text)
 	}
 
@@ -67,6 +67,8 @@ func processUpdate(upd *response.TgUpdate) {
 
 	// Get original social media links
 	socialLinks := utils.GetAllSocialLinks(&origMessage)
+	
+	log.Printf("Found %d social media links: %v", len(socialLinks), socialLinks)
 
 	if len(socialLinks) == 0 {
 		return
@@ -83,7 +85,8 @@ func processUpdate(upd *response.TgUpdate) {
 	}
 
 	// Process each social media link
-	for _, socialUrl := range socialLinks {
+	for i, socialUrl := range socialLinks {
+		log.Printf("Processing link %d/%d: %s", i+1, len(socialLinks), socialUrl)
 		processMediaDownload(socialUrl, &origChat, downloader)
 	}
 }
