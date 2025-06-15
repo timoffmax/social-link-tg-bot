@@ -38,11 +38,11 @@ echo "============================"
 if [ "$RESTART_ONLY" = false ]; then
     # Push latest code to server
     log_info "Pushing latest code to server..."
-    ssh -i "$SERVER_SSH_KEY" YOUR_USER@$SERVER_IP "cd $REMOTE_DIR && git pull origin master"
+    ssh -i "$SERVER_SSH_KEY" "$SERVER_USER@$SERVER_IP" "cd $REMOTE_DIR && git pull origin master"
     
     # Build on server (to avoid GLIBC issues)
     log_info "Building application on server..."
-    ssh -i "$SERVER_SSH_KEY" YOUR_USER@$SERVER_IP "cd $REMOTE_DIR && /usr/local/go/bin/go build -o social-link-bot ."
+    ssh -i "$SERVER_SSH_KEY" "$SERVER_USER@$SERVER_IP" "cd $REMOTE_DIR && /usr/local/go/bin/go build -o social-link-bot ."
     log_success "Build completed on server"
 fi
 
