@@ -218,7 +218,19 @@ func prepareMultipartRequest(r *AuthorizedRequest, requestURL string) (*http.Req
 	for key, value := range payloadMap {
 		if !isMediaPayload || key != mediaPayload.GetFileField() {
 			if value != nil && fmt.Sprintf("%v", value) != "" {
-				fieldValue := fmt.Sprintf("%v", value)
+				var fieldValue string
+				
+				// Special handling for chat_id to avoid scientific notation
+				if key == "chat_id" {
+					if floatVal, ok := value.(float64); ok {
+						fieldValue = fmt.Sprintf("%.0f", floatVal)
+					} else {
+						fieldValue = fmt.Sprintf("%v", value)
+					}
+				} else {
+					fieldValue = fmt.Sprintf("%v", value)
+				}
+				
 				fmt.Printf("🔍 DEBUG: Adding form field: %s = %s\n", key, fieldValue)
 				writer.WriteField(key, fieldValue)
 			}
