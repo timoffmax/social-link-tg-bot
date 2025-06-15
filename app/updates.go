@@ -232,7 +232,7 @@ func sendFixedLinkFallback(originalUrl string, origChat *response.TgChat) {
 		// If no fixed link available, send error
 		errorMsg := payload.TgPlSendMessage{
 			ChatId: origChat.Id,
-			Text:   fmt.Sprintf("❌ Failed to download and send media from %s", originalUrl),
+			Text:   getErrorMessage(originalUrl),
 		}
 		message.NewSendMessage(errorMsg)
 	}
@@ -258,4 +258,19 @@ func getFixedUrl(url string) string {
 	// Return empty string to trigger fallback message
 	
 	return ""
+}
+
+func getErrorMessage(url string) string {
+	if strings.Contains(url, "youtube.com") || strings.Contains(url, "youtu.be") {
+		return "❌ YouTube download failed due to bot detection.\n\n" +
+			"To fix this, add YouTube cookies:\n" +
+			"1. Export cookies from browser\n" +
+			"2. Save as youtube_cookies.txt\n" +
+			"3. Place in bot directory"
+	} else if strings.Contains(url, "9gag.com") {
+		return "❌ Failed to download from 9GAG.\n\n" +
+			"9GAG download support is limited."
+	}
+	
+	return fmt.Sprintf("❌ Failed to download media from %s", url)
 }

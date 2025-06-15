@@ -331,6 +331,16 @@ func (yd *YtDlpDownloader) buildDownloadArgs(url string, outputTemplate string) 
 			"--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
 			"--referer", "https://www.youtube.com/",
 		}
+		
+		// Check for YouTube-specific cookies file
+		if _, err := os.Stat("./youtube_cookies.txt"); err == nil {
+			youtubeArgs = append(youtubeArgs, "--cookies", "./youtube_cookies.txt")
+			log.Printf("Using YouTube cookies for authentication")
+		} else {
+			log.Printf("⚠️ YouTube cookies not found. YouTube downloads may fail due to bot detection.")
+			log.Printf("To fix: Export YouTube cookies to youtube_cookies.txt file")
+		}
+		
 		baseArgs = append(baseArgs, youtubeArgs...)
 	}
 	
