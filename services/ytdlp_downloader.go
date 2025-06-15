@@ -120,13 +120,37 @@ func (yd *YtDlpDownloader) DownloadMedia(url string) ([]*MediaInfo, error) {
 	// Get list of proxies to try
 	proxies := config.GetYtDlpProxies()
 	
-	// For TikTok and YouTube, skip proxies and try direct connection first
-	if strings.Contains(url, "tiktok.com") || strings.Contains(url, "youtube.com") || strings.Contains(url, "youtu.be") {
-		proxies = []string{} // Start with no proxy for these platforms
+	// Check if we have authentication cookies for this platform
+	hasAuthCookies := false
+	if strings.Contains(url, "twitter.com") || strings.Contains(url, "x.com") {
+		twitterCookiesPath := yd.getFilePath("twitter_cookies.txt")
+		if _, err := os.Stat(twitterCookiesPath); err == nil {
+			hasAuthCookies = true
+		}
+	} else if strings.Contains(url, "tiktok.com") {
+		tiktokCookiesPath := yd.getFilePath("tiktok_cookies.txt")
+		if _, err := os.Stat(tiktokCookiesPath); err == nil {
+			hasAuthCookies = true
+		}
+	} else if strings.Contains(url, "youtube.com") || strings.Contains(url, "youtu.be") {
+		youtubeCookiesPath := yd.getFilePath("youtube_cookies.txt")
+		if _, err := os.Stat(youtubeCookiesPath); err == nil {
+			hasAuthCookies = true
+		}
 	}
 	
-	// Add empty string to try without proxy as last resort
-	proxies = append(proxies, "")
+	// If we have authentication cookies, prioritize direct connection
+	if hasAuthCookies {
+		log.Printf("Authentication cookies available - trying direct connection first")
+		proxies = []string{""} // Start with direct connection only
+	} else {
+		// For TikTok and YouTube without cookies, skip proxies and try direct connection first
+		if strings.Contains(url, "tiktok.com") || strings.Contains(url, "youtube.com") || strings.Contains(url, "youtu.be") {
+			proxies = []string{} // Start with no proxy for these platforms
+		}
+		// Add empty string to try without proxy as fallback
+		proxies = append(proxies, "")
+	}
 	
 	var lastErr error
 	for i, proxy := range proxies {
