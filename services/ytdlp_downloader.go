@@ -115,12 +115,23 @@ func (yd *YtDlpDownloader) DownloadMedia(url string) ([]*MediaInfo, error) {
 	}
 	
 	log.Printf("Download completed successfully")
+	log.Printf("Output: %s", string(output))
+	
+	// List all files in temp directory for debugging
+	if files, err := os.ReadDir(yd.TempDir); err == nil {
+		log.Printf("Files in temp directory after download:")
+		for _, file := range files {
+			log.Printf("  - %s", file.Name())
+		}
+	}
 	
 	// Find downloaded files
 	downloadedFiles, err := yd.findDownloadedFiles(timestamp)
 	if err != nil {
 		return nil, fmt.Errorf("failed to find downloaded files: %v", err)
 	}
+	
+	log.Printf("Found %d downloaded files: %v", len(downloadedFiles), downloadedFiles)
 	
 	// Convert to MediaInfo
 	var mediaInfos []*MediaInfo

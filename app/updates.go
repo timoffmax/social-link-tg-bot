@@ -3,6 +3,7 @@ package app
 import (
 	"fmt"
 	"log"
+	"os"
 	"strings"
 	"github.com/timoffmax/social-link-bot/model/api/request/message"
 	"github.com/timoffmax/social-link-bot/model/api/request/payload"
@@ -132,13 +133,24 @@ func processMediaDownload(url string, origChat *response.TgChat, downloader *ser
 
 	// Send each downloaded media file
 	for _, mediaInfo := range mediaInfos {
+		log.Printf("Attempting to send media file: %s (type: %s)", mediaInfo.Filename, mediaInfo.Type)
+		
+		// Check if file exists before sending
+		if _, err := os.Stat(mediaInfo.Filename); os.IsNotExist(err) {
+			log.Printf("Error: File does not exist: %s", mediaInfo.Filename)
+			continue
+		}
+		
 		err := sendMediaFile(mediaInfo, origChat)
 		if err != nil {
 			log.Printf("Failed to send media file %s: %v", mediaInfo.Filename, err)
+			// Don't clean up failed files immediately for debugging
+			log.Printf("Keeping file for debugging: %s", mediaInfo.Filename)
+		} else {
+			log.Printf("Successfully sent media file: %s", mediaInfo.Filename)
+			// Clean up the file after successful sending
+			downloader.CleanupFile(mediaInfo.Filename)
 		}
-
-		// Clean up the file after sending
-		downloader.CleanupFile(mediaInfo.Filename)
 	}
 }
 
