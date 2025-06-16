@@ -549,6 +549,12 @@ func (te *TwitterExtractor) parseEmbedResponse(response, tweetID string) ([]*Med
 	
 	log.Printf("📝 Extracted tweet text from embed: %s", tweetText)
 	
+	// Check if text is truncated (common in embed API)
+	isTruncated := te.isTextTruncated(tweetText)
+	if isTruncated {
+		log.Printf("⚠️ Tweet text appears to be truncated, will try other methods for full text")
+	}
+	
 	// Extract actual media URLs from embed HTML
 	var mediaInfos []*MediaInfo
 	
@@ -581,16 +587,21 @@ func (te *TwitterExtractor) parseEmbedResponse(response, tweetID string) ([]*Med
 	picPattern := regexp.MustCompile(`pic\.twitter\.com/([a-zA-Z0-9]+)`)
 	picMatches := picPattern.FindAllStringSubmatch(html, -1)
 	
-	if len(picMatches) > 0 {
-		log.Printf("🖼️ Found %d pic.twitter.com references but no direct media URLs", len(picMatches))
-		for _, match := range picMatches {
-			if len(match) > 1 {
-				picID := match[1]
-				log.Printf("📸 Found pic.twitter.com/%s", picID)
+	if len(picMatches) > 0 || isTruncated {
+		if len(picMatches) > 0 {
+			log.Printf("🖼️ Found %d pic.twitter.com references but no direct media URLs", len(picMatches))
+			for _, match := range picMatches {
+				if len(match) > 1 {
+					picID := match[1]
+					log.Printf("📸 Found pic.twitter.com/%s", picID)
+				}
 			}
 		}
+		if isTruncated {
+			log.Printf("📝 Text is truncated, trying other methods for full text")
+		}
 		// Return error to trigger fallback to other extraction methods
-		return nil, fmt.Errorf("embed contains pic.twitter.com references but no extractable media URLs")
+		return nil, fmt.Errorf("embed has media references or truncated text, trying other methods")
 	}
 	
 	// If no media found and no text, return error
@@ -608,6 +619,90 @@ func (te *TwitterExtractor) parseEmbedResponse(response, tweetID string) ([]*Med
 	mediaInfos = append(mediaInfos, textMedia)
 	
 	return mediaInfos, nil
+}
+
+// isTextTruncated checks if tweet text appears to be truncated
+func (te *TwitterExtractor) isTextTruncated(text string) bool {
+	if text == "" {
+		return false
+	}
+	
+	// Common truncation indicators
+	truncationIndicators := []string{
+		"…",
+		"...",
+		"pic.twitter.com",
+		"...Read more",
+		"...Show this thread",
+	}
+	
+	for _, indicator := range truncationIndicators {
+		if strings.Contains(text, indicator) {
+			return true
+		}
+	}
+	
+	// If text is very long but doesn't end with punctuation, might be truncated
+	if len(text) > 200 && !strings.HasSuffix(strings.TrimSpace(text), ".") && 
+		!strings.HasSuffix(strings.TrimSpace(text), "!") &&
+		!strings.HasSuffix(strings.TrimSpace(text), "?") {
+		return true
+	}
+	
+	return false
+}
+
+// cleanAndFormatTweetText cleans HTML and preserves proper formatting
+func (te *TwitterExtractor) cleanAndFormatTweetText(rawText string) string {
+	text := rawText
+	
+	// Preserve line breaks from various HTML elements
+	text = strings.ReplaceAll(text, "<br>", "\n")
+	text = strings.ReplaceAll(text, "<br/>", "\n")
+	text = strings.ReplaceAll(text, "<br />", "\n")
+	text = strings.ReplaceAll(text, "</div><div", "</div>\n<div")
+	text = strings.ReplaceAll(text, "</p>", "</p>\n")
+	text = strings.ReplaceAll(text, "</span></div>", "</span>\n</div>")
+	
+	// Handle Twitter-specific elements
+	text = regexp.MustCompile(`<div[^>]*class="[^"]*css-175oi2r[^"]*"[^>]*>`).ReplaceAllString(text, "\n")
+	
+	// Clean up links and mentions - put them on new lines
+	text = regexp.MustCompile(`</span><div[^>]*><span[^>]*><a[^>]*href="/([^"]*)"[^>]*>@([^<]*)</a></span></div><span[^>]*>`).ReplaceAllString(text, "\n@$2\n")
+	
+	// Remove all remaining HTML tags
+	text = regexp.MustCompile(`<[^>]*>`).ReplaceAllString(text, "")
+	
+	// Decode JSON escape sequences
+	text = strings.ReplaceAll(text, `\"`, `"`)
+	text = strings.ReplaceAll(text, `\\n`, "\n")
+	text = strings.ReplaceAll(text, `\\t`, "\t")
+	text = strings.ReplaceAll(text, `\\r`, "\r")
+	
+	// Decode HTML entities
+	text = strings.ReplaceAll(text, "&amp;", "&")
+	text = strings.ReplaceAll(text, "&lt;", "<")
+	text = strings.ReplaceAll(text, "&gt;", ">")
+	text = strings.ReplaceAll(text, "&quot;", `"`)
+	text = strings.ReplaceAll(text, "&#39;", "'")
+	
+	// Clean up multiple consecutive newlines but preserve intentional spacing
+	text = regexp.MustCompile(`\n{3,}`).ReplaceAllString(text, "\n\n")
+	
+	// Clean up spaces but preserve line structure
+	lines := strings.Split(text, "\n")
+	var cleanedLines []string
+	for _, line := range lines {
+		cleanedLine := strings.TrimSpace(line)
+		if cleanedLine != "" {
+			cleanedLines = append(cleanedLines, cleanedLine)
+		}
+	}
+	
+	text = strings.Join(cleanedLines, "\n")
+	text = strings.TrimSpace(text)
+	
+	return text
 }
 
 func (te *TwitterExtractor) extractTweetText(html string) string {
@@ -656,19 +751,8 @@ func (te *TwitterExtractor) extractTweetText(html string) string {
 		re := regexp.MustCompile(`(?s)` + pattern) // (?s) makes . match newlines
 		matches := re.FindStringSubmatch(html)
 		if len(matches) > 1 {
-			// Clean up HTML tags and decode entities
-			text := strings.ReplaceAll(matches[1], "<br>", "\n")
-			text = strings.ReplaceAll(text, "<br/>", "\n")
-			text = strings.ReplaceAll(text, "<br />", "\n")
-			text = regexp.MustCompile(`<[^>]*>`).ReplaceAllString(text, "")
-			
-			// Decode JSON escape sequences
-			text = strings.ReplaceAll(text, `\"`, `"`)
-			text = strings.ReplaceAll(text, `\\n`, "\n")
-			text = strings.ReplaceAll(text, `\\t`, "\t")
-			text = strings.ReplaceAll(text, `\\r`, "\r")
-			
-			text = strings.TrimSpace(text)
+			// Clean and format the text properly
+			text := te.cleanAndFormatTweetText(matches[1])
 			if text != "" && text != "null" {
 				return text
 			}
