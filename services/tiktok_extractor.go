@@ -734,7 +734,8 @@ func (te *TikTokExtractor) extractMediaURLs(html string) []string {
 					// Clean up URL: remove HTML entities, JSON escaping, and quotes
 					url := strings.ReplaceAll(match[1], "&amp;", "&")
 					url = strings.ReplaceAll(url, "&quot;", "\"")
-					url = strings.ReplaceAll(url, "\\u002F", "/")
+					url = strings.ReplaceAll(url, "\\u002F", "/")  // Escaped backslash version
+					url = strings.ReplaceAll(url, "\u002F", "/")   // Direct Unicode escape version
 					url = strings.ReplaceAll(url, "\\/", "/")
 					url = strings.ReplaceAll(url, `\u0026`, "&")
 					
@@ -753,7 +754,8 @@ func (te *TikTokExtractor) extractMediaURLs(html string) []string {
 				// Clean up URL: remove HTML entities, JSON escaping, and quotes
 				url := strings.ReplaceAll(match, "&amp;", "&")
 				url = strings.ReplaceAll(url, "&quot;", "\"")
-				url = strings.ReplaceAll(url, "\\u002F", "/")
+				url = strings.ReplaceAll(url, "\\u002F", "/")  // Escaped backslash version
+				url = strings.ReplaceAll(url, "\u002F", "/")   // Direct Unicode escape version
 				url = strings.ReplaceAll(url, "\\/", "/")
 				url = strings.ReplaceAll(url, `\u0026`, "&")
 				
@@ -995,7 +997,8 @@ func (te *TikTokExtractor) extractVxTikTokMediaURLs(html string) []string {
 					// Clean up URL: remove HTML entities, JSON escaping, and quotes
 					url := strings.ReplaceAll(match[1], "&amp;", "&")
 					url = strings.ReplaceAll(url, "&quot;", "\"")
-					url = strings.ReplaceAll(url, "\\u002F", "/")
+					url = strings.ReplaceAll(url, "\\u002F", "/")  // Escaped backslash version
+					url = strings.ReplaceAll(url, "\u002F", "/")   // Direct Unicode escape version
 					url = strings.ReplaceAll(url, "\\/", "/")
 					url = strings.ReplaceAll(url, `\u0026`, "&")
 					
@@ -1014,7 +1017,8 @@ func (te *TikTokExtractor) extractVxTikTokMediaURLs(html string) []string {
 				// Clean up URL: remove HTML entities, JSON escaping, and quotes
 				url := strings.ReplaceAll(match, "&amp;", "&")
 				url = strings.ReplaceAll(url, "&quot;", "\"")
-				url = strings.ReplaceAll(url, "\\u002F", "/")
+				url = strings.ReplaceAll(url, "\\u002F", "/")  // Escaped backslash version
+				url = strings.ReplaceAll(url, "\u002F", "/")   // Direct Unicode escape version
 				url = strings.ReplaceAll(url, "\\/", "/")
 				url = strings.ReplaceAll(url, `\u0026`, "&")
 				
