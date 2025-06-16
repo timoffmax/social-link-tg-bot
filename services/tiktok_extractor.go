@@ -524,30 +524,41 @@ func (te *TikTokExtractor) extractMediaURLsFromJSON(jsonStr string) []string {
 }
 
 func (te *TikTokExtractor) extractPostText(html string) string {
-	// TikTok-specific patterns for post text - enhanced for photo posts
+	// TikTok-specific patterns for post text - enhanced for photo posts 2025
 	patterns := []string{
-		// JSON embedded text (most common in TikTok)
+		// Primary JSON patterns (2025 TikTok structure)
 		`"desc":"([^"]*)"`,
 		`"description":"([^"]*)"`,
 		`"title":"([^"]*)"`,
 		`"content":"([^"]*)"`,
 		`"text":"([^"]*)"`,
+		`"caption":"([^"]*)"`,
 		
-		// Photo post specific patterns
+		// Photo post specific patterns with nested structures
 		`"imagePostInfo"[^}]*"desc":"([^"]*)"`,
 		`"photoPost"[^}]*"desc":"([^"]*)"`,
 		`"photoMode"[^}]*"desc":"([^"]*)"`,
+		`"imagePost"[^}]*"desc":"([^"]*)"`,
 		
-		// HTML meta tags
+		// Author and video info patterns
+		`"author"[^}]*"desc":"([^"]*)"`,
+		`"video"[^}]*"desc":"([^"]*)"`,
+		`"itemInfo"[^}]*"desc":"([^"]*)"`,
+		
+		// Meta tags with better precedence
 		`<meta[^>]*property="og:description"[^>]*content="([^"]*)"`,
 		`<meta[^>]*name="description"[^>]*content="([^"]*)"`,
 		`<meta[^>]*property="og:title"[^>]*content="([^"]*)"`,
-		`<title[^>]*>([^<]*?)(?: - TikTok| on TikTok|$)</title>`,
+		`<meta[^>]*name="twitter:description"[^>]*content="([^"]*)"`,
 		
-		// HTML elements
+		// Title extraction with better cleaning
+		`<title[^>]*>([^<]*?)(?: - TikTok| on TikTok| \| TikTok|$)</title>`,
+		
+		// HTML elements with more specific selectors
 		`<div[^>]*class="[^"]*caption[^"]*"[^>]*>(.*?)</div>`,
 		`<p[^>]*class="[^"]*description[^"]*"[^>]*>(.*?)</p>`,
 		`<span[^>]*class="[^"]*caption[^"]*"[^>]*>(.*?)</span>`,
+		`<h1[^>]*class="[^"]*title[^"]*"[^>]*>(.*?)</h1>`,
 	}
 	
 	for _, pattern := range patterns {
@@ -607,25 +618,32 @@ func (te *TikTokExtractor) extractMediaURLs(html string) []string {
 	
 	// TikTok-specific patterns for media URLs - enhanced for photo slideshows
 	patterns := []string{
-		// Enhanced photo slideshow patterns
+		// TikTok 2025 slideshow patterns - more comprehensive
+		`"imagePostInfo"[^}]*"list":\[([^\]]*)\]`,  // Capture entire image list
+		`"imagePost"[^}]*"images":\[([^\]]*)\]`,     // Alternative image list format
+		`"images":\[([^\]]*)\]`,                     // Direct images array
+		
+		// Individual image URL patterns
+		`"imageURL"[^}]*"urlList":\[([^\]]*)\]`,
 		`"imagePost"[^}]*"url":"([^"]*)"`,
-		`"images":\[.*?"url":"([^"]*)"`,
-		`"imageURL"[^}]*"url":"([^"]*)"`,
+		`"images":\[[^\]]*"url":"([^"]*)"`,
+		`"imageURL":"([^"]*)"`,
 		`"imagePostInfo"[^}]*"url":"([^"]*)"`,
 		`"photoPost"[^}]*"url":"([^"]*)"`,
 		
-		// Photo mode specific patterns
+		// Photo mode specific patterns  
 		`"photoMode"[^}]*"url":"([^"]*)"`,
 		`"photoCarousel"[^}]*"url":"([^"]*)"`,
 		`"slideshow"[^}]*"url":"([^"]*)"`,
 		
-		// Direct image URLs with better patterns
-		`https://[^"]*\.(?:tiktokcdn\.com|tiktokcdn-us\.com)/[^"]*\.(?:jpg|jpeg|png|gif|webp)`,
-		`https://[^"]*\.(?:muscdn\.com|lf[0-9]+\.com)/[^"]*\.(?:jpg|jpeg|png|gif|webp)`,
+		// Direct CDN URLs with modern TikTok domains
+		`https://[^"]*\.(?:tiktokcdn\.com|tiktokcdn-us\.com|tiktokv\.com)/[^"]*\.(?:jpg|jpeg|png|gif|webp)`,
+		`https://[^"]*\.(?:muscdn\.com|lf[0-9]+\.com|byteoversea\.com)/[^"]*\.(?:jpg|jpeg|png|gif|webp)`,
 		
-		// Video URLs
+		// Video URLs for mixed content
 		`"playAddr":"([^"]*)"`,
 		`"downloadAddr":"([^"]*)"`,
+		`"videoUrl":"([^"]*)"`,
 		`https://[^"]*\.tiktokcdn\.com/[^"]*\.mp4`,
 		
 		// Generic JSON patterns with escaped URLs
@@ -633,9 +651,15 @@ func (te *TikTokExtractor) extractMediaURLs(html string) []string {
 		`"src":"(https://[^"]*\.(?:jpg|jpeg|png|gif|webp|mp4)[^"]*)"`,
 		`"href":"(https://[^"]*\.(?:jpg|jpeg|png|gif|webp|mp4)[^"]*)"`,
 		
-		// Meta property patterns
+		// Meta property patterns for fallback
 		`property="og:image"[^>]*content="([^"]*)"`,
 		`name="twitter:image"[^>]*content="([^"]*)"`,
+		`<meta[^>]*content="([^"]*)"[^>]*property="og:image"`,
+		
+		// TikTok 2025 specific JSON patterns
+		`"cover":"([^"]*)"`,
+		`"dynamicCover":"([^"]*)"`,
+		`"originCover":"([^"]*)"`,
 	}
 	
 	for _, pattern := range patterns {

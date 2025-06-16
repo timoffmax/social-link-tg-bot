@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -342,7 +343,20 @@ func (yd *YtDlpDownloader) DownloadTikTokMedia(url string) ([]*MediaInfo, error)
 	// Strategy 3: Use custom TikTok extractor as fallback for photo slideshows
 	log.Printf("yt-dlp failed completely, trying custom TikTok extractor")
 	tiktokExtractor := NewTikTokExtractor(yd.WorkingDir, yd.TempDir)
-	return tiktokExtractor.ExtractTikTokPost(url)
+	
+	// For TikTok, we need to resolve short URLs first before extraction
+	resolvedURL := url
+	if strings.Contains(url, "vm.tiktok.com") {
+		log.Printf("🔗 Pre-resolving TikTok short URL for custom extractor: %s", url)
+		if resolved, err := yd.resolveRedirectURL(url); err == nil {
+			resolvedURL = resolved
+			log.Printf("🔗 Pre-resolved to: %s", resolvedURL)
+		} else {
+			log.Printf("⚠️ Failed to pre-resolve URL, using original: %v", err)
+		}
+	}
+	
+	return tiktokExtractor.ExtractTikTokPost(resolvedURL)
 }
 
 func (yd *YtDlpDownloader) DownloadTwitterMedia(url string) ([]*MediaInfo, error) {
@@ -801,4 +815,36 @@ func testYtDlpBinary(path string) bool {
 	cmd := exec.Command(path, "--version")
 	err := cmd.Run()
 	return err == nil
+}
+
+// resolveRedirectURL resolves a redirect URL to its final destination
+func (yd *YtDlpDownloader) resolveRedirectURL(shortURL string) (string, error) {
+	// Create a custom HTTP client that doesn't follow redirects
+	client := &http.Client{
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+		Timeout: 10 * time.Second,
+	}
+	
+	req, err := http.NewRequest("GET", shortURL, nil)
+	if err != nil {
+		return "", err
+	}
+	
+	req.Header.Set("User-Agent", "Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X) AppleWebKit/605.1.15")
+	
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	
+	// Get the redirect location
+	if location := resp.Header.Get("Location"); location != "" {
+		log.Printf("🔗 Resolved %s to %s", shortURL, location)
+		return location, nil
+	}
+	
+	return "", fmt.Errorf("no redirect found for %s", shortURL)
 }
