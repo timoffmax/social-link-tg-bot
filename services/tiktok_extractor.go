@@ -605,6 +605,11 @@ func (te *TikTokExtractor) extractPostText(html string) string {
 		`"video"[^}]*"desc":"([^"]*)"`,
 		`"itemInfo"[^}]*"desc":"([^"]*)"`,
 		
+		// New patterns for 2025 TikTok structure (based on CSS classes)
+		`<div[^>]*class="[^"]*DivVideoInfoContainer[^"]*"[^>]*>.*?<span[^>]*>([^<]*?)</span>`,
+		`<div[^>]*class="[^"]*video-info[^"]*"[^>]*>.*?<span[^>]*>([^<]*?)</span>`,
+		`<div[^>]*class="[^"]*eqrezik[^"]*"[^>]*>.*?>([^<]*?)</div>`,
+		
 		// Meta tags with better precedence
 		`<meta[^>]*property="og:description"[^>]*content="([^"]*)"`,
 		`<meta[^>]*name="description"[^>]*content="([^"]*)"`,
@@ -639,13 +644,54 @@ func (te *TikTokExtractor) extractPostText(html string) string {
 			
 			text = strings.TrimSpace(text)
 			// Skip hashtag-only content, empty content, and generic TikTok text
-			if text != "" && text != "null" && !strings.Contains(text, "tiktok") && !strings.HasPrefix(text, "#") {
+			if text != "" && text != "null" && !isGenericTikTokText(text) && !strings.HasPrefix(text, "#") {
 				return text
 			}
 		}
 	}
 	
 	return ""
+}
+
+// isGenericTikTokText checks if the text is generic TikTok boilerplate that should be filtered out
+func isGenericTikTokText(text string) bool {
+	// Convert to lowercase for case-insensitive comparison
+	lower := strings.ToLower(text)
+	
+	// Filter out common generic TikTok texts
+	genericTexts := []string{
+		"category",
+		"tiktok",
+		"watch this video",
+		"see more on tiktok",
+		"for you",
+		"following",
+		"live",
+		"foryou",
+		"fyp",
+		"viral",
+		"trending",
+		"tiktok video",
+		"watch on tiktok",
+		"original sound",
+		"sound by",
+		"use this sound",
+	}
+	
+	// If text exactly matches any generic text, filter it out
+	for _, generic := range genericTexts {
+		if lower == generic {
+			return true
+		}
+	}
+	
+	// If text is very short and contains only generic patterns, filter it out
+	if len(text) < 3 {
+		return true
+	}
+	
+	// Don't filter out longer, meaningful text even if it contains "tiktok"
+	return false
 }
 
 func (te *TikTokExtractor) extractMediaURLs(html string) []string {
