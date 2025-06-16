@@ -638,7 +638,8 @@ func (te *TikTokExtractor) extractPostText(html string) string {
 			text = regexp.MustCompile(`<[^>]*>`).ReplaceAllString(text, "")
 			
 			text = strings.TrimSpace(text)
-			if text != "" && text != "null" && !strings.Contains(text, "tiktok") {
+			// Skip hashtag-only content, empty content, and generic TikTok text
+			if text != "" && text != "null" && !strings.Contains(text, "tiktok") && !strings.HasPrefix(text, "#") {
 				return text
 			}
 		}

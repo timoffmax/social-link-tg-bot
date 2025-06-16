@@ -52,6 +52,11 @@ type MediaPayload interface {
 	GetFileField() string
 }
 
+type MediaGroupPayload interface {
+	GetFilePaths() []string
+	GetFileField() string
+}
+
 // mediaAdapter implements MediaPayload interface for dynamic payloads
 type mediaAdapter struct {
 	filePath  string
@@ -113,6 +118,7 @@ func prepareMultipartRequest(r *AuthorizedRequest, requestURL string) (*http.Req
 
 	var mediaPayload MediaPayload
 	var isMediaPayload bool
+	var isMediaGroupPayload bool
 	
 	// Use reflection to check for required methods since interface assertion fails across package boundaries
 	payloadValue := reflect.ValueOf(r.Payload)
@@ -127,40 +133,79 @@ func prepareMultipartRequest(r *AuthorizedRequest, requestURL string) (*http.Req
 		payloadType = payloadValue.Type()
 	}
 	
-	// Check if both methods exist
-	getFilePathMethod := payloadValue.MethodByName("GetFilePath")
+	// Check for media group payload first (multiple files)
+	getFilePathsMethod := payloadValue.MethodByName("GetFilePaths")
 	getFileFieldMethod := payloadValue.MethodByName("GetFileField")
 	
-	if getFilePathMethod.IsValid() && getFileFieldMethod.IsValid() {
-		// Call the methods using reflection
-		filePathResult := getFilePathMethod.Call(nil)
+	if getFilePathsMethod.IsValid() && getFileFieldMethod.IsValid() {
+		// This is a media group payload
+		filePathsResult := getFilePathsMethod.Call(nil)
 		fileFieldResult := getFileFieldMethod.Call(nil)
 		
-		if len(filePathResult) > 0 && len(fileFieldResult) > 0 {
-			filePath := filePathResult[0].String()
+		if len(filePathsResult) > 0 && len(fileFieldResult) > 0 {
+			filePaths := filePathsResult[0]
 			fieldName := fileFieldResult[0].String()
 			
-			isMediaPayload = true
+			isMediaGroupPayload = true
 			
-			// Create an adapter to implement MediaPayload interface
-			mediaPayload = &mediaAdapter{filePath: filePath, fileField: fieldName}
+			// Add multiple files to form with attach:// naming
+			for i := 0; i < filePaths.Len(); i++ {
+				filePath := filePaths.Index(i).String()
+				
+				file, err := os.Open(filePath)
+				if err != nil {
+					return nil, err
+				}
+				defer file.Close()
+
+				// Use photo0, photo1, etc. as the field names matching attach://photo0 in JSON
+				fileFieldName := fmt.Sprintf("photo%d", i)
+				fileWriter, err := writer.CreateFormFile(fileFieldName, filepath.Base(filePath))
+				if err != nil {
+					return nil, err
+				}
+
+				_, err = io.Copy(fileWriter, file)
+				if err != nil {
+					return nil, err
+				}
+			}
+		}
+	} else {
+		// Check for single file payload
+		getFilePathMethod := payloadValue.MethodByName("GetFilePath")
 		
-		// Add file to form
-		file, err := os.Open(filePath)
-		if err != nil {
-			return nil, err
-		}
-		defer file.Close()
+		if getFilePathMethod.IsValid() && getFileFieldMethod.IsValid() {
+			// Call the methods using reflection
+			filePathResult := getFilePathMethod.Call(nil)
+			fileFieldResult := getFileFieldMethod.Call(nil)
+			
+			if len(filePathResult) > 0 && len(fileFieldResult) > 0 {
+				filePath := filePathResult[0].String()
+				fieldName := fileFieldResult[0].String()
+				
+				isMediaPayload = true
+				
+				// Create an adapter to implement MediaPayload interface
+				mediaPayload = &mediaAdapter{filePath: filePath, fileField: fieldName}
+			
+			// Add file to form
+			file, err := os.Open(filePath)
+			if err != nil {
+				return nil, err
+			}
+			defer file.Close()
 
-		fileWriter, err := writer.CreateFormFile(fieldName, filepath.Base(filePath))
-		if err != nil {
-			return nil, err
-		}
+			fileWriter, err := writer.CreateFormFile(fieldName, filepath.Base(filePath))
+			if err != nil {
+				return nil, err
+			}
 
-		_, err = io.Copy(fileWriter, file)
-		if err != nil {
-			return nil, err
-		}
+			_, err = io.Copy(fileWriter, file)
+			if err != nil {
+				return nil, err
+			}
+			}
 		}
 	}
 	// Add other fields as form data
@@ -169,23 +214,34 @@ func prepareMultipartRequest(r *AuthorizedRequest, requestURL string) (*http.Req
 	json.Unmarshal(payloadBytes, &payloadMap)
 
 	for key, value := range payloadMap {
-		if !isMediaPayload || key != mediaPayload.GetFileField() {
-			if value != nil && fmt.Sprintf("%v", value) != "" {
-				var fieldValue string
-				
-				// Special handling for chat_id to avoid scientific notation
-				if key == "chat_id" {
-					if floatVal, ok := value.(float64); ok {
-						fieldValue = fmt.Sprintf("%.0f", floatVal)
-					} else {
-						fieldValue = fmt.Sprintf("%v", value)
-					}
+		// Skip file fields that are handled separately
+		skipField := false
+		if isMediaPayload && key == mediaPayload.GetFileField() {
+			skipField = true
+		}
+		if isMediaGroupPayload && (key == "FilePaths" || key == "file_paths") {
+			skipField = true
+		}
+		
+		if !skipField && value != nil && fmt.Sprintf("%v", value) != "" {
+			var fieldValue string
+			
+			// Special handling for chat_id to avoid scientific notation
+			if key == "chat_id" {
+				if floatVal, ok := value.(float64); ok {
+					fieldValue = fmt.Sprintf("%.0f", floatVal)
 				} else {
 					fieldValue = fmt.Sprintf("%v", value)
 				}
-				
-				writer.WriteField(key, fieldValue)
+			} else if key == "media" && isMediaGroupPayload {
+				// For media groups, we need to serialize the media array as JSON
+				mediaBytes, _ := json.Marshal(value)
+				fieldValue = string(mediaBytes)
+			} else {
+				fieldValue = fmt.Sprintf("%v", value)
 			}
+			
+			writer.WriteField(key, fieldValue)
 		}
 	}
 

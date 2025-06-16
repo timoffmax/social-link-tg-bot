@@ -170,10 +170,66 @@ func processMediaDownload(url string, origChat *response.TgChat, downloader *ser
 	// Note: NewSendMessage automatically sends the message
 	log.Printf("✅ Successfully sent confirmation message to chat %d", origChat.Id)
 
-	// Send each downloaded media file
+	// Group photos and send them together, send other media individually
 	log.Printf("Downloaded %d media files from %s", len(mediaInfos), url)
-	for i, mediaInfo := range mediaInfos {
-		log.Printf("Sending media file %d/%d: %s (type: %s)", i+1, len(mediaInfos), mediaInfo.Filename, mediaInfo.Type)
+	
+	// Separate photos from other media types
+	var photos []*services.MediaInfo
+	var otherMedia []*services.MediaInfo
+	
+	for _, mediaInfo := range mediaInfos {
+		if mediaInfo.Type == "photo" {
+			// Check if file exists before adding to photos group
+			if _, err := os.Stat(mediaInfo.Filename); os.IsNotExist(err) {
+				log.Printf("Error: Photo file does not exist: %s", mediaInfo.Filename)
+				continue
+			}
+			photos = append(photos, mediaInfo)
+		} else {
+			otherMedia = append(otherMedia, mediaInfo)
+		}
+	}
+	
+	// Send photos as a media group if there are multiple photos
+	if len(photos) > 1 {
+		log.Printf("Sending %d photos as media group", len(photos))
+		err := sendPhotosAsMediaGroup(photos, origChat)
+		if err != nil {
+			log.Printf("Failed to send photos as media group: %v", err)
+			// Fallback: send photos individually
+			log.Printf("Fallback: sending photos individually")
+			for i, photoInfo := range photos {
+				log.Printf("Sending photo %d/%d: %s", i+1, len(photos), photoInfo.Filename)
+				err := sendMediaFile(photoInfo, origChat)
+				if err != nil {
+					log.Printf("Failed to send photo file %s: %v", photoInfo.Filename, err)
+				} else {
+					log.Printf("Successfully sent photo file: %s", photoInfo.Filename)
+				}
+				downloader.CleanupFile(photoInfo.Filename)
+			}
+		} else {
+			log.Printf("Successfully sent %d photos as media group", len(photos))
+			// Clean up all photo files after successful sending
+			for _, photoInfo := range photos {
+				downloader.CleanupFile(photoInfo.Filename)
+			}
+		}
+	} else if len(photos) == 1 {
+		// Send single photo normally
+		log.Printf("Sending single photo: %s", photos[0].Filename)
+		err := sendMediaFile(photos[0], origChat)
+		if err != nil {
+			log.Printf("Failed to send photo file %s: %v", photos[0].Filename, err)
+		} else {
+			log.Printf("Successfully sent photo file: %s", photos[0].Filename)
+		}
+		downloader.CleanupFile(photos[0].Filename)
+	}
+	
+	// Send other media types individually
+	for i, mediaInfo := range otherMedia {
+		log.Printf("Sending media file %d/%d: %s (type: %s)", i+1, len(otherMedia), mediaInfo.Filename, mediaInfo.Type)
 		
 		// Check if file exists before sending (skip for text-only content)
 		if mediaInfo.Type != "text" {
@@ -251,6 +307,44 @@ func sendMediaFile(mediaInfo *services.MediaInfo, origChat *response.TgChat) err
 		// Note: NewSendDocument automatically sends the message
 	}
 
+	return nil
+}
+
+func sendPhotosAsMediaGroup(photos []*services.MediaInfo, origChat *response.TgChat) error {
+	if len(photos) == 0 {
+		return fmt.Errorf("no photos to send")
+	}
+	
+	// Create media array for the media group
+	var mediaArray []payload.InputMediaPhoto
+	var filePaths []string
+	
+	for i, photoInfo := range photos {
+		// Use attach:// prefix for file uploads in media groups
+		mediaItem := payload.InputMediaPhoto{
+			Type:  "photo",
+			Media: fmt.Sprintf("attach://photo%d", i),
+		}
+		
+		// Only add caption to the first photo to avoid clutter
+		if i == 0 && photoInfo.Caption != "" && !strings.HasPrefix(photoInfo.Caption, "#") {
+			mediaItem.Caption = photoInfo.Caption
+		}
+		
+		mediaArray = append(mediaArray, mediaItem)
+		filePaths = append(filePaths, photoInfo.Filename)
+	}
+	
+	// Create the media group payload
+	mediaGroupPayload := payload.TgPlSendMediaGroup{
+		ChatId:    origChat.Id,
+		Media:     mediaArray,
+		FilePaths: filePaths,
+	}
+	
+	// Send the media group
+	message.NewSendMediaGroup(mediaGroupPayload)
+	
 	return nil
 }
 
