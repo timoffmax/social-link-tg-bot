@@ -510,15 +510,33 @@ func (te *TikTokExtractor) extractMediaURLsFromJSON(jsonStr string) []string {
 		}
 	}
 	
-	// Remove duplicates
+	// Remove duplicates and clean URLs
 	seen := make(map[string]bool)
 	var uniqueURLs []string
 	for _, url := range urls {
-		if !seen[url] && url != "" {
-			seen[url] = true
-			uniqueURLs = append(uniqueURLs, url)
+		if url == "" {
+			continue
+		}
+		
+		// Clean up URL: remove HTML entities and decode
+		cleanURL := strings.ReplaceAll(url, "&amp;", "&")
+		cleanURL = strings.ReplaceAll(cleanURL, "&quot;", "\"")
+		
+		// For TikTok slideshow images, remove query parameters to detect true duplicates
+		baseURL := cleanURL
+		if strings.Contains(cleanURL, "tiktokcdn.com") && strings.Contains(cleanURL, "?") {
+			if qIndex := strings.Index(cleanURL, "?"); qIndex != -1 {
+				baseURL = cleanURL[:qIndex]
+			}
+		}
+		
+		if !seen[baseURL] {
+			seen[baseURL] = true
+			uniqueURLs = append(uniqueURLs, cleanURL)
 		}
 	}
+	
+	log.Printf("🔍 Found %d unique URLs after deduplication", len(uniqueURLs))
 	
 	return uniqueURLs
 }
@@ -596,29 +614,38 @@ func (te *TikTokExtractor) extractMediaURLs(html string) []string {
 		htmlSnippet = html[:1000]
 	}
 	
-	// Check if HTML looks like binary data (gzipped)
+	// Check if HTML looks like binary data (gzipped) or is readable
 	if len(htmlSnippet) > 10 && (htmlSnippet[0] == 0x1f && htmlSnippet[1] == 0x8b) {
 		log.Printf("⚠️ HTML appears to be gzipped but not decompressed properly")
-	} else if strings.Contains(htmlSnippet, "<html") || strings.Contains(htmlSnippet, "<!doctype") {
-		log.Printf("✅ HTML looks readable")
+	} else if strings.Contains(htmlSnippet, "<html") || strings.Contains(htmlSnippet, "<!doctype") || strings.Contains(htmlSnippet, "swiper-slide") {
+		log.Printf("✅ HTML looks readable (contains HTML tags)")
 	} else {
 		log.Printf("⚠️ HTML might be corrupted or in unexpected format")
 	}
 	
-	// Only log readable HTML snippets
-	if len(htmlSnippet) > 0 && htmlSnippet[0] >= 32 && htmlSnippet[0] <= 126 {
-		logSnippet := htmlSnippet
-		if len(htmlSnippet) > 500 {
-			logSnippet = htmlSnippet[:500]
-		}
-		log.Printf("🔍 HTML snippet (first 500 chars): %s", logSnippet)
-	} else {
-		log.Printf("🔍 HTML appears to be binary data (length: %d bytes)", len(html))
+	// Always try to extract from HTML, even if it looks binary (might be compressed text)
+	logSnippet := htmlSnippet
+	if len(htmlSnippet) > 500 {
+		logSnippet = htmlSnippet[:500]
 	}
+	log.Printf("🔍 HTML snippet (first 500 chars): %s", logSnippet)
 	
 	// TikTok-specific patterns for media URLs - enhanced for photo slideshows
 	patterns := []string{
-		// TikTok 2025 slideshow patterns - more comprehensive
+		// PRIMARY: Swiper slideshow patterns (2025 TikTok structure)
+		`<div class="swiper-slide[^>]*><img src="([^"]*)"[^>]*class="[^"]*ImgPhotoSlide[^"]*"[^>]*></div>`,
+		`<img src="(https://[^"]*\.tiktokcdn\.com/[^"]*\.jpeg[^"]*)"[^>]*class="[^"]*ImgPhotoSlide[^"]*"`,
+		`<img[^>]*src="(https://[^"]*\.tiktokcdn\.com/[^"]*\.jpeg[^"]*)"[^>]*ImgPhotoSlide`,
+		`swiper-slide[^>]*><img src="([^"]*)"`,
+		
+		// Swiper wrapper content extraction
+		`<div class="swiper-wrapper[^>]*>(.*?)</div>`,
+		
+		// Direct TikTok CDN image URLs from swiper slides
+		`https://p[0-9]+-sign-[a-z]+\.tiktokcdn\.com/[^"]*\.jpeg[^"]*`,
+		`https://[^"]*\.tiktokcdn\.com/tos-[^"]*photomode[^"]*\.jpeg[^"]*`,
+		
+		// JSON embedded slideshow patterns
 		`"imagePostInfo"[^}]*"list":\[([^\]]*)\]`,  // Capture entire image list
 		`"imagePost"[^}]*"images":\[([^\]]*)\]`,     // Alternative image list format
 		`"images":\[([^\]]*)\]`,                     // Direct images array
