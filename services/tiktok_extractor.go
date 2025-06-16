@@ -733,6 +733,27 @@ func (te *TikTokExtractor) extractMediaURLs(html string) []string {
 	}
 	log.Printf("🔍 HTML snippet (first 500 chars): %s", logSnippet)
 	
+	// Debug: Search for container patterns in HTML
+	if strings.Contains(html, "DivPhotoVideoContainer") {
+		log.Printf("✅ Found DivPhotoVideoContainer in HTML")
+	} else {
+		log.Printf("❌ DivPhotoVideoContainer NOT found in HTML")
+	}
+	
+	if strings.Contains(html, "DivMainContent") {
+		log.Printf("✅ Found DivMainContent in HTML")
+	} else {
+		log.Printf("❌ DivMainContent NOT found in HTML")
+	}
+	
+	// Debug: Look for any img tags
+	imgCount := strings.Count(html, "<img")
+	log.Printf("🔍 Found %d <img> tags in HTML", imgCount)
+	
+	// Debug: Look for tiktokcdn URLs
+	tiktokCdnCount := strings.Count(html, "tiktokcdn")
+	log.Printf("🔍 Found %d tiktokcdn references in HTML", tiktokCdnCount)
+	
 	// TikTok-specific patterns for media URLs - enhanced for photo slideshows
 	patterns := []string{
 		// PRIORITY: DivPhotoVideoContainer patterns (2025 TikTok structure)
@@ -753,6 +774,15 @@ func (te *TikTokExtractor) extractMediaURLs(html string) []string {
 		`"(https://[^"]*\.tiktokcdn-[^"]*\.com[^"]*\.(?:jpeg|jpg|webp)[^"]*)"`,
 		`"(https://[^"]*\.muscdn\.com[^"]*\.(?:jpeg|jpg|webp)[^"]*)"`,
 		`"(https://p[0-9]+-sign[^"]*\.tiktokcdn\.com[^"]*\.(?:jpeg|jpg|webp)[^"]*)"`,
+		
+		// Broader patterns to catch any TikTok CDN images
+		`(https://[^"'\s]*tiktokcdn[^"'\s]*\.(?:jpeg|jpg|webp|png))`,
+		`(https://[^"'\s]*muscdn[^"'\s]*\.(?:jpeg|jpg|webp|png))`,
+		`(https://p[0-9]+-[^"'\s]*\.(?:jpeg|jpg|webp|png))`,
+		
+		// Look for any img src with TikTok domains
+		`<img[^>]*src="(https://[^"]*tiktokcdn[^"]*\.(?:jpeg|jpg|webp|png)[^"]*)"`,
+		`<img[^>]*src="(https://[^"]*muscdn[^"]*\.(?:jpeg|jpg|webp|png)[^"]*)"`,
 		
 		// PRIMARY: Swiper slideshow patterns (2025 TikTok structure) - focus on photomode only
 		`<div class="swiper-slide[^>]*><img src="([^"]*photomode-image[^"]*)"[^>]*class="[^"]*ImgPhotoSlide[^"]*"[^>]*></div>`,
@@ -804,11 +834,14 @@ func (te *TikTokExtractor) extractMediaURLs(html string) []string {
 		`"originCover":"([^"]*)"`,
 	}
 	
-	for _, pattern := range patterns {
+	for i, pattern := range patterns {
 		re := regexp.MustCompile(pattern)
 		if strings.Contains(pattern, "(") {
 			// Pattern has capture group
 			matches := re.FindAllStringSubmatch(html, -1)
+			if len(matches) > 0 {
+				log.Printf("🎯 Pattern %d matched %d times: %s", i+1, len(matches), truncateString(pattern, 50))
+			}
 			for _, match := range matches {
 				if len(match) > 1 {
 					// Special handling for array patterns like "images":[...]
@@ -832,6 +865,9 @@ func (te *TikTokExtractor) extractMediaURLs(html string) []string {
 		} else {
 			// Pattern matches full URL
 			matches := re.FindAllString(html, -1)
+			if len(matches) > 0 {
+				log.Printf("🎯 Pattern %d matched %d times: %s", i+1, len(matches), truncateString(pattern, 50))
+			}
 			for _, match := range matches {
 				// Clean up URL: remove HTML entities, JSON escaping, and quotes
 				url := te.cleanURL(match)
@@ -935,6 +971,14 @@ func (te *TikTokExtractor) extractTextFromContainer(containerHTML string) string
 	}
 	
 	return ""
+}
+
+// truncateString truncates a string to maxLen characters for logging
+func truncateString(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "..."
 }
 
 func (te *TikTokExtractor) downloadMedia(mediaURL, postID string, index int) (*MediaInfo, error) {
@@ -1142,11 +1186,14 @@ func (te *TikTokExtractor) extractVxTikTokMediaURLs(html string) []string {
 		`https://[^"]*\.vxtiktok\.com/[^"]*\.(?:jpg|jpeg|png|gif|webp|mp4)`,
 	}
 	
-	for _, pattern := range patterns {
+	for i, pattern := range patterns {
 		re := regexp.MustCompile(pattern)
 		if strings.Contains(pattern, "(") {
 			// Pattern has capture group
 			matches := re.FindAllStringSubmatch(html, -1)
+			if len(matches) > 0 {
+				log.Printf("🎯 Pattern %d matched %d times: %s", i+1, len(matches), truncateString(pattern, 50))
+			}
 			for _, match := range matches {
 				if len(match) > 1 {
 					// Special handling for array patterns like "images":[...]
@@ -1170,6 +1217,9 @@ func (te *TikTokExtractor) extractVxTikTokMediaURLs(html string) []string {
 		} else {
 			// Pattern matches full URL
 			matches := re.FindAllString(html, -1)
+			if len(matches) > 0 {
+				log.Printf("🎯 Pattern %d matched %d times: %s", i+1, len(matches), truncateString(pattern, 50))
+			}
 			for _, match := range matches {
 				// Clean up URL: remove HTML entities, JSON escaping, and quotes
 				url := te.cleanURL(match)
