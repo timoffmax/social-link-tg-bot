@@ -532,9 +532,23 @@ func (te *TikTokExtractor) extractMediaURLsFromJSON(jsonStr string) []string {
 			continue
 		}
 		
-		// Clean up URL: remove HTML entities and decode
+		// Clean up URL: remove HTML entities, JSON escaping, and quotes
 		cleanURL := strings.ReplaceAll(url, "&amp;", "&")
 		cleanURL = strings.ReplaceAll(cleanURL, "&quot;", "\"")
+		cleanURL = strings.ReplaceAll(cleanURL, "\\u002F", "/")
+		cleanURL = strings.ReplaceAll(cleanURL, "\\/", "/")
+		
+		// Remove surrounding quotes if present
+		if strings.HasPrefix(cleanURL, "\"") && strings.HasSuffix(cleanURL, "\"") {
+			cleanURL = cleanURL[1 : len(cleanURL)-1]
+		}
+		
+		// Skip non-slideshow images (avatars, video-share-cards, etc)
+		if strings.Contains(cleanURL, "tiktokx-cropcenter") || 
+		   strings.Contains(cleanURL, "video-share-card") ||
+		   strings.Contains(cleanURL, "avt-") {
+			continue
+		}
 		
 		// For TikTok slideshow images, remove query parameters to detect true duplicates
 		baseURL := cleanURL
@@ -646,31 +660,20 @@ func (te *TikTokExtractor) extractMediaURLs(html string) []string {
 	
 	// TikTok-specific patterns for media URLs - enhanced for photo slideshows
 	patterns := []string{
-		// PRIMARY: Swiper slideshow patterns (2025 TikTok structure)
-		`<div class="swiper-slide[^>]*><img src="([^"]*)"[^>]*class="[^"]*ImgPhotoSlide[^"]*"[^>]*></div>`,
-		`<img src="(https://[^"]*\.tiktokcdn\.com/[^"]*\.jpeg[^"]*)"[^>]*class="[^"]*ImgPhotoSlide[^"]*"`,
-		`<img[^>]*src="(https://[^"]*\.tiktokcdn\.com/[^"]*\.jpeg[^"]*)"[^>]*ImgPhotoSlide`,
-		`swiper-slide[^>]*><img src="([^"]*)"`,
+		// PRIMARY: Swiper slideshow patterns (2025 TikTok structure) - focus on photomode only
+		`<div class="swiper-slide[^>]*><img src="([^"]*photomode-image[^"]*)"[^>]*class="[^"]*ImgPhotoSlide[^"]*"[^>]*></div>`,
+		`<img src="(https://[^"]*\.tiktokcdn\.com/[^"]*photomode-image[^"]*\.jpeg[^"]*)"[^>]*class="[^"]*ImgPhotoSlide[^"]*"`,
+		`<img[^>]*src="(https://[^"]*\.tiktokcdn\.com/[^"]*photomode-image[^"]*\.jpeg[^"]*)"[^>]*ImgPhotoSlide`,
+		`swiper-slide[^>]*><img src="([^"]*photomode-image[^"]*)"`,
 		
-		// Swiper wrapper content extraction
-		`<div class="swiper-wrapper[^>]*>(.*?)</div>`,
+		// Direct TikTok CDN slideshow image URLs (photomode only, no avatars or share cards)
+		`https://p[0-9]+-sign-[a-z]+\.tiktokcdn\.com/tos-[^"]*photomode-sg/[^"]*~tplv-photomode-image\.jpeg[^"]*`,
+		`https://[^"]*\.tiktokcdn\.com/tos-[^"]*photomode[^"]*photomode-image[^"]*\.jpeg[^"]*`,
 		
-		// Direct TikTok CDN image URLs from swiper slides
-		`https://p[0-9]+-sign-[a-z]+\.tiktokcdn\.com/[^"]*\.jpeg[^"]*`,
-		`https://[^"]*\.tiktokcdn\.com/tos-[^"]*photomode[^"]*\.jpeg[^"]*`,
-		
-		// JSON embedded slideshow patterns
-		`"imagePostInfo"[^}]*"list":\[([^\]]*)\]`,  // Capture entire image list
-		`"imagePost"[^}]*"images":\[([^\]]*)\]`,     // Alternative image list format
-		`"images":\[([^\]]*)\]`,                     // Direct images array
-		
-		// Individual image URL patterns
-		`"imageURL"[^}]*"urlList":\[([^\]]*)\]`,
-		`"imagePost"[^}]*"url":"([^"]*)"`,
-		`"images":\[[^\]]*"url":"([^"]*)"`,
-		`"imageURL":"([^"]*)"`,
-		`"imagePostInfo"[^}]*"url":"([^"]*)"`,
-		`"photoPost"[^}]*"url":"([^"]*)"`,
+		// Individual photomode image URL patterns from JSON (cleaned up)
+		`"url":"(https://[^"]*photomode-image[^"]*\.jpeg[^"]*)"`,
+		`"imageURL":"(https://[^"]*photomode-image[^"]*\.jpeg[^"]*)"`,
+		`"src":"(https://[^"]*photomode-image[^"]*\.jpeg[^"]*)"`,
 		
 		// Photo mode specific patterns  
 		`"photoMode"[^}]*"url":"([^"]*)"`,
