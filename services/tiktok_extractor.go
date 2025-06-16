@@ -606,6 +606,10 @@ func (te *TikTokExtractor) extractPostText(html string) string {
 		`"itemInfo"[^}]*"desc":"([^"]*)"`,
 		
 		// New patterns for 2025 TikTok structure (based on CSS classes)
+		`<div[^>]*class="[^"]*DivMainContent[^"]*"[^>]*>.*?<span[^>]*>([^<]*?)</span>`,
+		`<div[^>]*class="[^"]*DivMainContent[^"]*"[^>]*>.*?<div[^>]*>([^<]*?)</div>`,
+		`<div[^>]*class="[^"]*DivMainContent[^"]*"[^>]*>(.*?)</div>`,
+		`DivMainContent[^>]*>.*?<span[^>]*>([^<]*?)</span>`,
 		`<div[^>]*class="[^"]*DivVideoInfoContainer[^"]*"[^>]*>.*?<span[^>]*>([^<]*?)</span>`,
 		`<div[^>]*class="[^"]*video-info[^"]*"[^>]*>.*?<span[^>]*>([^<]*?)</span>`,
 		`<div[^>]*class="[^"]*eqrezik[^"]*"[^>]*>.*?>([^<]*?)</div>`,
@@ -643,6 +647,16 @@ func (te *TikTokExtractor) extractPostText(html string) string {
 			text = regexp.MustCompile(`<[^>]*>`).ReplaceAllString(text, "")
 			
 			text = strings.TrimSpace(text)
+			
+			// Special handling for DivMainContent container extraction
+			if strings.Contains(pattern, "DivMainContent") && strings.Contains(pattern, ">(.*?)</div>") {
+				// Extract text from DivMainContent container
+				extractedText := te.extractTextFromContainer(text)
+				if extractedText != "" {
+					return extractedText
+				}
+			}
+			
 			// Skip hashtag-only content, empty content, and generic TikTok text
 			if text != "" && text != "null" && !isGenericTikTokText(text) && !strings.HasPrefix(text, "#") {
 				return text
@@ -721,6 +735,25 @@ func (te *TikTokExtractor) extractMediaURLs(html string) []string {
 	
 	// TikTok-specific patterns for media URLs - enhanced for photo slideshows
 	patterns := []string{
+		// PRIORITY: DivPhotoVideoContainer patterns (2025 TikTok structure)
+		`<div[^>]*class="[^"]*DivPhotoVideoContainer[^"]*"[^>]*>.*?<img[^>]*src="([^"]*)"`,
+		`DivPhotoVideoContainer[^>]*>.*?<img[^>]*src="([^"]*)"`,
+		`<div[^>]*DivPhotoVideoContainer[^>]*>.*?src="([^"]*)"`,
+		
+		// Extract all images from DivPhotoVideoContainer sections
+		`<div[^>]*class="[^"]*DivPhotoVideoContainer[^"]*"[^>]*>(.*?)</div>`,
+		
+		// 2025 TikTok slideshow patterns - updated structure
+		`"imagePost"[^}]*"images":\s*\[([^\]]*)\]`,
+		`"images":\s*\[([^\]]*)\]`,
+		`"imageURLs":\s*\[([^\]]*)\]`,
+		
+		// Direct image URLs in arrays
+		`"(https://[^"]*\.tiktokcdn[^"]*\.com[^"]*\.(?:jpeg|jpg|webp)[^"]*)"`,
+		`"(https://[^"]*\.tiktokcdn-[^"]*\.com[^"]*\.(?:jpeg|jpg|webp)[^"]*)"`,
+		`"(https://[^"]*\.muscdn\.com[^"]*\.(?:jpeg|jpg|webp)[^"]*)"`,
+		`"(https://p[0-9]+-sign[^"]*\.tiktokcdn\.com[^"]*\.(?:jpeg|jpg|webp)[^"]*)"`,
+		
 		// PRIMARY: Swiper slideshow patterns (2025 TikTok structure) - focus on photomode only
 		`<div class="swiper-slide[^>]*><img src="([^"]*photomode-image[^"]*)"[^>]*class="[^"]*ImgPhotoSlide[^"]*"[^>]*></div>`,
 		`<img src="(https://[^"]*\.tiktokcdn\.com/[^"]*photomode-image[^"]*\.jpeg[^"]*)"[^>]*class="[^"]*ImgPhotoSlide[^"]*"`,
@@ -778,20 +811,22 @@ func (te *TikTokExtractor) extractMediaURLs(html string) []string {
 			matches := re.FindAllStringSubmatch(html, -1)
 			for _, match := range matches {
 				if len(match) > 1 {
-					// Clean up URL: remove HTML entities, JSON escaping, and quotes
-					url := strings.ReplaceAll(match[1], "&amp;", "&")
-					url = strings.ReplaceAll(url, "&quot;", "\"")
-					url = strings.ReplaceAll(url, "\\u002F", "/")  // Escaped backslash version
-					url = strings.ReplaceAll(url, "\u002F", "/")   // Direct Unicode escape version
-					url = strings.ReplaceAll(url, "\\/", "/")
-					url = strings.ReplaceAll(url, `\u0026`, "&")
-					
-					// Remove surrounding quotes if present
-					if strings.HasPrefix(url, "\"") && strings.HasSuffix(url, "\"") {
-						url = url[1 : len(url)-1]
+					// Special handling for array patterns like "images":[...]
+					if strings.Contains(pattern, "images\":") || strings.Contains(pattern, "imageURLs\":") {
+						// Extract URLs from JSON array
+						arrayURLs := te.extractURLsFromJSONArray(match[1])
+						urls = append(urls, arrayURLs...)
+					} else if strings.Contains(pattern, "DivPhotoVideoContainer") && strings.Contains(pattern, ">(.*?)</div>") {
+						// Extract all img src URLs from DivPhotoVideoContainer content
+						containerURLs := te.extractImagesFromContainer(match[1])
+						urls = append(urls, containerURLs...)
+					} else {
+						// Clean up URL: remove HTML entities, JSON escaping, and quotes
+						url := te.cleanURL(match[1])
+						if url != "" {
+							urls = append(urls, url)
+						}
 					}
-					
-					urls = append(urls, url)
 				}
 			}
 		} else {
@@ -799,19 +834,10 @@ func (te *TikTokExtractor) extractMediaURLs(html string) []string {
 			matches := re.FindAllString(html, -1)
 			for _, match := range matches {
 				// Clean up URL: remove HTML entities, JSON escaping, and quotes
-				url := strings.ReplaceAll(match, "&amp;", "&")
-				url = strings.ReplaceAll(url, "&quot;", "\"")
-				url = strings.ReplaceAll(url, "\\u002F", "/")  // Escaped backslash version
-				url = strings.ReplaceAll(url, "\u002F", "/")   // Direct Unicode escape version
-				url = strings.ReplaceAll(url, "\\/", "/")
-				url = strings.ReplaceAll(url, `\u0026`, "&")
-				
-				// Remove surrounding quotes if present
-				if strings.HasPrefix(url, "\"") && strings.HasSuffix(url, "\"") {
-					url = url[1 : len(url)-1]
+				url := te.cleanURL(match)
+				if url != "" {
+					urls = append(urls, url)
 				}
-				
-				urls = append(urls, url)
 			}
 		}
 	}
@@ -826,7 +852,89 @@ func (te *TikTokExtractor) extractMediaURLs(html string) []string {
 		}
 	}
 	
+	log.Printf("🔍 Found %d total URLs before deduplication: %v", len(urls), urls)
+	log.Printf("🔍 Found %d unique URLs after deduplication: %v", len(uniqueURLs), uniqueURLs)
+	
 	return uniqueURLs
+}
+
+// cleanURL removes HTML entities, JSON escaping, and quotes from URLs
+func (te *TikTokExtractor) cleanURL(url string) string {
+	// Clean up URL: remove HTML entities, JSON escaping, and quotes
+	url = strings.ReplaceAll(url, "&amp;", "&")
+	url = strings.ReplaceAll(url, "&quot;", "\"")
+	url = strings.ReplaceAll(url, "\\u002F", "/")  // Escaped backslash version
+	url = strings.ReplaceAll(url, "\u002F", "/")   // Direct Unicode escape version
+	url = strings.ReplaceAll(url, "\\/", "/")
+	url = strings.ReplaceAll(url, `\u0026`, "&")
+	
+	// Remove surrounding quotes if present
+	if strings.HasPrefix(url, "\"") && strings.HasSuffix(url, "\"") {
+		url = url[1 : len(url)-1]
+	}
+	
+	return url
+}
+
+// extractURLsFromJSONArray extracts URLs from a JSON array string like ["url1", "url2", ...]
+func (te *TikTokExtractor) extractURLsFromJSONArray(arrayStr string) []string {
+	var urls []string
+	
+	// Simple regex to extract URLs from array
+	urlPattern := `"(https://[^"]*\.(?:jpeg|jpg|webp|png|gif|mp4)[^"]*)"`
+	re := regexp.MustCompile(urlPattern)
+	matches := re.FindAllStringSubmatch(arrayStr, -1)
+	
+	for _, match := range matches {
+		if len(match) > 1 {
+			url := te.cleanURL(match[1])
+			if url != "" {
+				urls = append(urls, url)
+			}
+		}
+	}
+	
+	return urls
+}
+
+// extractImagesFromContainer extracts image URLs from HTML container content
+func (te *TikTokExtractor) extractImagesFromContainer(containerHTML string) []string {
+	var urls []string
+	
+	// Extract all img src URLs from the container HTML
+	imgPattern := `<img[^>]*src="([^"]*)"[^>]*>`
+	re := regexp.MustCompile(imgPattern)
+	matches := re.FindAllStringSubmatch(containerHTML, -1)
+	
+	for _, match := range matches {
+		if len(match) > 1 {
+			url := te.cleanURL(match[1])
+			if url != "" && (strings.Contains(url, ".jpg") || strings.Contains(url, ".jpeg") || strings.Contains(url, ".webp") || strings.Contains(url, ".png")) {
+				urls = append(urls, url)
+			}
+		}
+	}
+	
+	log.Printf("🔍 Extracted %d images from DivPhotoVideoContainer: %v", len(urls), urls)
+	return urls
+}
+
+// extractTextFromContainer extracts meaningful text from HTML container content
+func (te *TikTokExtractor) extractTextFromContainer(containerHTML string) string {
+	// Remove HTML tags first
+	text := regexp.MustCompile(`<[^>]*>`).ReplaceAllString(containerHTML, " ")
+	
+	// Clean up whitespace
+	text = regexp.MustCompile(`\s+`).ReplaceAllString(text, " ")
+	text = strings.TrimSpace(text)
+	
+	// Filter out generic content
+	if text != "" && !isGenericTikTokText(text) && !strings.HasPrefix(text, "#") && len(text) > 3 {
+		log.Printf("📝 Extracted text from DivMainContent: %s", text)
+		return text
+	}
+	
+	return ""
 }
 
 func (te *TikTokExtractor) downloadMedia(mediaURL, postID string, index int) (*MediaInfo, error) {
@@ -1041,20 +1149,22 @@ func (te *TikTokExtractor) extractVxTikTokMediaURLs(html string) []string {
 			matches := re.FindAllStringSubmatch(html, -1)
 			for _, match := range matches {
 				if len(match) > 1 {
-					// Clean up URL: remove HTML entities, JSON escaping, and quotes
-					url := strings.ReplaceAll(match[1], "&amp;", "&")
-					url = strings.ReplaceAll(url, "&quot;", "\"")
-					url = strings.ReplaceAll(url, "\\u002F", "/")  // Escaped backslash version
-					url = strings.ReplaceAll(url, "\u002F", "/")   // Direct Unicode escape version
-					url = strings.ReplaceAll(url, "\\/", "/")
-					url = strings.ReplaceAll(url, `\u0026`, "&")
-					
-					// Remove surrounding quotes if present
-					if strings.HasPrefix(url, "\"") && strings.HasSuffix(url, "\"") {
-						url = url[1 : len(url)-1]
+					// Special handling for array patterns like "images":[...]
+					if strings.Contains(pattern, "images\":") || strings.Contains(pattern, "imageURLs\":") {
+						// Extract URLs from JSON array
+						arrayURLs := te.extractURLsFromJSONArray(match[1])
+						urls = append(urls, arrayURLs...)
+					} else if strings.Contains(pattern, "DivPhotoVideoContainer") && strings.Contains(pattern, ">(.*?)</div>") {
+						// Extract all img src URLs from DivPhotoVideoContainer content
+						containerURLs := te.extractImagesFromContainer(match[1])
+						urls = append(urls, containerURLs...)
+					} else {
+						// Clean up URL: remove HTML entities, JSON escaping, and quotes
+						url := te.cleanURL(match[1])
+						if url != "" {
+							urls = append(urls, url)
+						}
 					}
-					
-					urls = append(urls, url)
 				}
 			}
 		} else {
@@ -1062,19 +1172,10 @@ func (te *TikTokExtractor) extractVxTikTokMediaURLs(html string) []string {
 			matches := re.FindAllString(html, -1)
 			for _, match := range matches {
 				// Clean up URL: remove HTML entities, JSON escaping, and quotes
-				url := strings.ReplaceAll(match, "&amp;", "&")
-				url = strings.ReplaceAll(url, "&quot;", "\"")
-				url = strings.ReplaceAll(url, "\\u002F", "/")  // Escaped backslash version
-				url = strings.ReplaceAll(url, "\u002F", "/")   // Direct Unicode escape version
-				url = strings.ReplaceAll(url, "\\/", "/")
-				url = strings.ReplaceAll(url, `\u0026`, "&")
-				
-				// Remove surrounding quotes if present
-				if strings.HasPrefix(url, "\"") && strings.HasSuffix(url, "\"") {
-					url = url[1 : len(url)-1]
+				url := te.cleanURL(match)
+				if url != "" {
+					urls = append(urls, url)
 				}
-				
-				urls = append(urls, url)
 			}
 		}
 	}
