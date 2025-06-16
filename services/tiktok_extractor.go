@@ -731,9 +731,18 @@ func (te *TikTokExtractor) extractMediaURLs(html string) []string {
 			matches := re.FindAllStringSubmatch(html, -1)
 			for _, match := range matches {
 				if len(match) > 1 {
-					// Decode URL escaping
-					url := strings.ReplaceAll(match[1], `\/`, `/`)
-					url = strings.ReplaceAll(url, `\u0026`, `&`)
+					// Clean up URL: remove HTML entities, JSON escaping, and quotes
+					url := strings.ReplaceAll(match[1], "&amp;", "&")
+					url = strings.ReplaceAll(url, "&quot;", "\"")
+					url = strings.ReplaceAll(url, "\\u002F", "/")
+					url = strings.ReplaceAll(url, "\\/", "/")
+					url = strings.ReplaceAll(url, `\u0026`, "&")
+					
+					// Remove surrounding quotes if present
+					if strings.HasPrefix(url, "\"") && strings.HasSuffix(url, "\"") {
+						url = url[1 : len(url)-1]
+					}
+					
 					urls = append(urls, url)
 				}
 			}
@@ -741,9 +750,18 @@ func (te *TikTokExtractor) extractMediaURLs(html string) []string {
 			// Pattern matches full URL
 			matches := re.FindAllString(html, -1)
 			for _, match := range matches {
-				// Decode URL escaping  
-				url := strings.ReplaceAll(match, `\/`, `/`)
-				url = strings.ReplaceAll(url, `\u0026`, `&`)
+				// Clean up URL: remove HTML entities, JSON escaping, and quotes
+				url := strings.ReplaceAll(match, "&amp;", "&")
+				url = strings.ReplaceAll(url, "&quot;", "\"")
+				url = strings.ReplaceAll(url, "\\u002F", "/")
+				url = strings.ReplaceAll(url, "\\/", "/")
+				url = strings.ReplaceAll(url, `\u0026`, "&")
+				
+				// Remove surrounding quotes if present
+				if strings.HasPrefix(url, "\"") && strings.HasSuffix(url, "\"") {
+					url = url[1 : len(url)-1]
+				}
+				
 				urls = append(urls, url)
 			}
 		}
@@ -974,9 +992,18 @@ func (te *TikTokExtractor) extractVxTikTokMediaURLs(html string) []string {
 			matches := re.FindAllStringSubmatch(html, -1)
 			for _, match := range matches {
 				if len(match) > 1 {
-					// Decode URL escaping
-					url := strings.ReplaceAll(match[1], `\/`, `/`)
-					url = strings.ReplaceAll(url, `\u0026`, `&`)
+					// Clean up URL: remove HTML entities, JSON escaping, and quotes
+					url := strings.ReplaceAll(match[1], "&amp;", "&")
+					url = strings.ReplaceAll(url, "&quot;", "\"")
+					url = strings.ReplaceAll(url, "\\u002F", "/")
+					url = strings.ReplaceAll(url, "\\/", "/")
+					url = strings.ReplaceAll(url, `\u0026`, "&")
+					
+					// Remove surrounding quotes if present
+					if strings.HasPrefix(url, "\"") && strings.HasSuffix(url, "\"") {
+						url = url[1 : len(url)-1]
+					}
+					
 					urls = append(urls, url)
 				}
 			}
@@ -984,9 +1011,18 @@ func (te *TikTokExtractor) extractVxTikTokMediaURLs(html string) []string {
 			// Pattern matches full URL
 			matches := re.FindAllString(html, -1)
 			for _, match := range matches {
-				// Decode URL escaping  
-				url := strings.ReplaceAll(match, `\/`, `/`)
-				url = strings.ReplaceAll(url, `\u0026`, `&`)
+				// Clean up URL: remove HTML entities, JSON escaping, and quotes
+				url := strings.ReplaceAll(match, "&amp;", "&")
+				url = strings.ReplaceAll(url, "&quot;", "\"")
+				url = strings.ReplaceAll(url, "\\u002F", "/")
+				url = strings.ReplaceAll(url, "\\/", "/")
+				url = strings.ReplaceAll(url, `\u0026`, "&")
+				
+				// Remove surrounding quotes if present
+				if strings.HasPrefix(url, "\"") && strings.HasSuffix(url, "\"") {
+					url = url[1 : len(url)-1]
+				}
+				
 				urls = append(urls, url)
 			}
 		}
