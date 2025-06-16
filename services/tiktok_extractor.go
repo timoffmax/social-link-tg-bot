@@ -155,10 +155,14 @@ func (te *TikTokExtractor) extractViaDirectScraping(tiktokURL string, postID str
 	req.Header.Set("User-Agent", "Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.0 Mobile/15E148 Safari/604.1")
 	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8")
 	req.Header.Set("Accept-Language", "en-US,en;q=0.5")
-	req.Header.Set("Accept-Encoding", "gzip, deflate, br")
+	// Don't accept compression to avoid binary data issues
+	req.Header.Set("Accept-Encoding", "identity")
 	req.Header.Set("DNT", "1")
 	req.Header.Set("Connection", "keep-alive")
 	req.Header.Set("Upgrade-Insecure-Requests", "1")
+	req.Header.Set("Sec-Fetch-Dest", "document")
+	req.Header.Set("Sec-Fetch-Mode", "navigate")
+	req.Header.Set("Sec-Fetch-Site", "none")
 	
 	// Make request
 	resp, err := te.client.Do(req)
@@ -171,15 +175,25 @@ func (te *TikTokExtractor) extractViaDirectScraping(tiktokURL string, postID str
 		return nil, fmt.Errorf("TikTok HTTP %d: %s", resp.StatusCode, resp.Status)
 	}
 	
-	// Handle compressed response
+	// Handle compressed response with better detection
 	var reader io.Reader = resp.Body
-	if resp.Header.Get("Content-Encoding") == "gzip" {
+	contentEncoding := resp.Header.Get("Content-Encoding")
+	log.Printf("🔍 TikTok response Content-Encoding: %s", contentEncoding)
+	
+	if contentEncoding == "gzip" {
 		gzipReader, err := gzip.NewReader(resp.Body)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create gzip reader: %v", err)
 		}
 		defer gzipReader.Close()
 		reader = gzipReader
+		log.Printf("✅ Using gzip reader for TikTok response")
+	} else if contentEncoding == "br" {
+		// TikTok might use brotli compression
+		log.Printf("⚠️ TikTok using brotli compression - not supported, trying raw")
+	} else if contentEncoding == "deflate" {
+		// TikTok might use deflate compression  
+		log.Printf("⚠️ TikTok using deflate compression - not supported, trying raw")
 	}
 	
 	// Read response
