@@ -354,16 +354,10 @@ func (te *TikTokExtractor) parseHTMLForMedia(html string, postID string, usernam
 		mediaInfos = append(mediaInfos, mediaInfo)
 	}
 	
-	// If no media found but we have text, return text-only
-	if len(mediaInfos) == 0 && postText != "" {
-		log.Printf("📝 No TikTok media found, returning text content")
-		textMedia := &MediaInfo{
-			Type:    "text",
-			URL:     fmt.Sprintf("https://tiktok.com/@%s/photo/%s", username, postID),
-			Caption: postText,
-			Filename: "",
-		}
-		mediaInfos = append(mediaInfos, textMedia)
+	// If no media found, return empty (let fallback handle it)
+	if len(mediaInfos) == 0 {
+		log.Printf("📝 No TikTok media found, returning empty for fallback")
+		return nil, fmt.Errorf("no media extracted from TikTok post")
 	}
 	
 	return mediaInfos, nil
@@ -398,16 +392,10 @@ func (te *TikTokExtractor) parseVxTikTokHTML(html string, postID string, usernam
 		mediaInfos = append(mediaInfos, mediaInfo)
 	}
 	
-	// If no media found but we have text, return text-only
-	if len(mediaInfos) == 0 && postText != "" {
-		log.Printf("📝 No VxTikTok media found, returning text content")
-		textMedia := &MediaInfo{
-			Type:    "text",
-			URL:     fmt.Sprintf("https://tiktok.com/@%s/photo/%s", username, postID),
-			Caption: postText,
-			Filename: "",
-		}
-		mediaInfos = append(mediaInfos, textMedia)
+	// If no media found, return empty (let fallback handle it)
+	if len(mediaInfos) == 0 {
+		log.Printf("📝 No VxTikTok media found, returning empty for fallback")
+		return nil, fmt.Errorf("no media extracted from VxTikTok")
 	}
 	
 	return mediaInfos, nil
@@ -442,16 +430,10 @@ func (te *TikTokExtractor) parseAPIResponse(jsonResponse string, postID string, 
 		mediaInfos = append(mediaInfos, mediaInfo)
 	}
 	
-	// If no media found but we have text, return text-only
-	if len(mediaInfos) == 0 && postText != "" {
-		log.Printf("📝 No API media found, returning text content")
-		textMedia := &MediaInfo{
-			Type:    "text",
-			URL:     fmt.Sprintf("https://tiktok.com/@%s/photo/%s", username, postID),
-			Caption: postText,
-			Filename: "",
-		}
-		mediaInfos = append(mediaInfos, textMedia)
+	// If no media found, return empty (let fallback handle it)
+	if len(mediaInfos) == 0 {
+		log.Printf("📝 No API media found, returning empty for fallback")
+		return nil, fmt.Errorf("no media extracted from API response")
 	}
 	
 	return mediaInfos, nil
