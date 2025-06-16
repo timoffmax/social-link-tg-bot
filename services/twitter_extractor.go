@@ -549,42 +549,60 @@ func (te *TwitterExtractor) parseEmbedResponse(response, tweetID string) ([]*Med
 	
 	log.Printf("📝 Extracted tweet text from embed: %s", tweetText)
 	
-	// Extract pic.twitter.com URLs and convert them
-	picPattern := regexp.MustCompile(`pic\.twitter\.com/([a-zA-Z0-9]+)`)
-	picMatches := picPattern.FindAllStringSubmatch(html, -1)
-	
+	// Extract actual media URLs from embed HTML
 	var mediaInfos []*MediaInfo
 	
-	// Check if we have media references
-	hasMedia := len(picMatches) > 0
+	// Try to extract actual pbs.twimg.com URLs from the embed HTML
+	mediaURLs := te.extractMediaURLs(html)
+	log.Printf("📸 Found %d media URLs in embed HTML: %v", len(mediaURLs), mediaURLs)
 	
-	if hasMedia {
-		log.Printf("🖼️ Found %d pic.twitter.com references", len(picMatches))
+	// Download each media item
+	for i, mediaURL := range mediaURLs {
+		mediaInfo, err := te.downloadMedia(mediaURL, tweetID, i)
+		if err != nil {
+			log.Printf("⚠️ Failed to download media %d: %v", i, err)
+			continue
+		}
 		
-		// For each pic.twitter.com URL, we need to try to get the actual image
-		// Since we can't directly resolve these without authentication,
-		// we'll add a note about media being present
-		for _, match := range picMatches {
-			if len(match) > 1 {
-				picID := match[1]
-				log.Printf("📸 Found pic.twitter.com/%s", picID)
+		// Use tweet text as caption
+		if tweetText != "" {
+			mediaInfo.Caption = tweetText
+		}
+		
+		mediaInfos = append(mediaInfos, mediaInfo)
+	}
+	
+	// If no actual media found, check for pic.twitter.com references
+	if len(mediaInfos) == 0 {
+		picPattern := regexp.MustCompile(`pic\.twitter\.com/([a-zA-Z0-9]+)`)
+		picMatches := picPattern.FindAllStringSubmatch(html, -1)
+		
+		if len(picMatches) > 0 {
+			log.Printf("🖼️ Found %d pic.twitter.com references but no direct media URLs", len(picMatches))
+			for _, match := range picMatches {
+				if len(match) > 1 {
+					picID := match[1]
+					log.Printf("📸 Found pic.twitter.com/%s", picID)
+				}
 			}
 		}
 	}
 	
-	// Create the response with appropriate caption
-	caption := tweetText
-	if hasMedia && caption != "" {
+	// If we found actual media, return it
+	if len(mediaInfos) > 0 {
+		return mediaInfos, nil
+	}
+	
+	// If no media found but we have text, create fallback link
+	if tweetText != "" {
 		// Add fixupx link for media access
 		username, _ := te.extractUsernameFromEmbedData(embedData)
 		if username == "" {
 			username = "user"
 		}
 		fixedURL := fmt.Sprintf("https://fixupx.com/%s/status/%s", username, tweetID)
-		caption = fmt.Sprintf("%s\n\n🖼️ Media available at: %s", tweetText, fixedURL)
-	}
-	
-	if caption != "" {
+		caption := fmt.Sprintf("%s\n\n🖼️ Media available at: %s", tweetText, fixedURL)
+		
 		textMedia := &MediaInfo{
 			Type:    "text",
 			URL:     fmt.Sprintf("https://x.com/i/web/status/%s", tweetID),
