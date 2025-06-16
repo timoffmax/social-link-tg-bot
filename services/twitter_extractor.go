@@ -606,7 +606,9 @@ func (te *TwitterExtractor) extractTweetText(html string) string {
 		`<p[^>]*class="[^"]*tweet-content[^"]*"[^>]*>(.*?)</p>`,
 		`<div[^>]*class="[^"]*timeline-tweet[^"]*"[^>]*>.*?<div[^>]*class="[^"]*tweet-text[^"]*"[^>]*>(.*?)</div>`,
 		
-		// Modern Twitter data-testid patterns
+		// Modern Twitter data-testid patterns (2025 X/Twitter structure)
+		`<div[^>]*data-testid="tweetText"[^>]*class="[^"]*css-146c3p1[^"]*"[^>]*>(.*?)</div>`,
+		`<div[^>]*class="[^"]*css-146c3p1[^"]*"[^>]*data-testid="tweetText"[^>]*>(.*?)</div>`,
 		`<div[^>]*data-testid="tweetText"[^>]*>(.*?)</div>`,
 		`<span[^>]*data-testid="tweetText"[^>]*>(.*?)</span>`,
 		
@@ -668,6 +670,12 @@ func (te *TwitterExtractor) extractMediaURLs(html string) []string {
 	
 	// Patterns to match image and video URLs - updated for Nitter and modern Twitter
 	patterns := []string{
+		// Modern X/Twitter patterns (2025) - highest priority
+		`<img[^>]*class="[^"]*css-9pa8cd[^"]*"[^>]*src="([^"]*pbs\.twimg\.com[^"]*)"`,
+		`<img[^>]*src="([^"]*pbs\.twimg\.com[^"]*)"[^>]*class="[^"]*css-9pa8cd[^"]*"`,
+		`<img[^>]*draggable="true"[^>]*src="([^"]*pbs\.twimg\.com[^"]*)"`,
+		`<img[^>]*alt="Image"[^>]*src="([^"]*pbs\.twimg\.com[^"]*)"`,
+		
 		// Nitter-specific patterns (high priority)
 		`<img[^>]*src="([^"]*nitter[^"]*pic[^"]*\.jpg[^"]*)"`,
 		`<img[^>]*src="([^"]*nitter[^"]*pic[^"]*\.png[^"]*)"`,
@@ -1004,7 +1012,9 @@ func (te *TwitterExtractor) extractFixupxMediaURLs(html string) []string {
 	
 	// Fixupx-specific patterns for media URLs
 	patterns := []string{
-		// Direct image/video URLs
+		// Direct image/video URLs with specific CSS patterns (2025 X/Twitter structure)
+		`<img[^>]*class="[^"]*css-9pa8cd[^"]*"[^>]*src="([^"]*pbs\.twimg\.com[^"]*)"`,
+		`<img[^>]*src="([^"]*pbs\.twimg\.com[^"]*)"[^>]*class="[^"]*css-9pa8cd[^"]*"`,
 		`<img[^>]*src="([^"]*(?:pbs\.twimg\.com|twimg\.com)[^"]*)"`,
 		`<video[^>]*src="([^"]*(?:video\.twimg\.com|twimg\.com)[^"]*)"`,
 		`<source[^>]*src="([^"]*(?:video\.twimg\.com|twimg\.com)[^"]*)"`,
