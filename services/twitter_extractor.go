@@ -549,12 +549,6 @@ func (te *TwitterExtractor) parseEmbedResponse(response, tweetID string) ([]*Med
 	
 	log.Printf("📝 Extracted tweet text from embed: %s", tweetText)
 	
-	// Check if text is truncated (common in embed API)
-	isTruncated := te.isTextTruncated(tweetText)
-	if isTruncated {
-		log.Printf("⚠️ Tweet text appears to be truncated, will try other methods for full text")
-	}
-	
 	// Extract actual media URLs from embed HTML
 	var mediaInfos []*MediaInfo
 	
@@ -587,21 +581,16 @@ func (te *TwitterExtractor) parseEmbedResponse(response, tweetID string) ([]*Med
 	picPattern := regexp.MustCompile(`pic\.twitter\.com/([a-zA-Z0-9]+)`)
 	picMatches := picPattern.FindAllStringSubmatch(html, -1)
 	
-	if len(picMatches) > 0 || isTruncated {
-		if len(picMatches) > 0 {
-			log.Printf("🖼️ Found %d pic.twitter.com references but no direct media URLs", len(picMatches))
-			for _, match := range picMatches {
-				if len(match) > 1 {
-					picID := match[1]
-					log.Printf("📸 Found pic.twitter.com/%s", picID)
-				}
+	if len(picMatches) > 0 {
+		log.Printf("🖼️ Found %d pic.twitter.com references but no direct media URLs", len(picMatches))
+		for _, match := range picMatches {
+			if len(match) > 1 {
+				picID := match[1]
+				log.Printf("📸 Found pic.twitter.com/%s", picID)
 			}
 		}
-		if isTruncated {
-			log.Printf("📝 Text is truncated, trying other methods for full text")
-		}
-		// Return error to trigger fallback to other extraction methods
-		return nil, fmt.Errorf("embed has media references or truncated text, trying other methods")
+		// Return error to trigger fallback to other extraction methods for media
+		return nil, fmt.Errorf("embed contains pic.twitter.com references but no extractable media URLs")
 	}
 	
 	// If no media found and no text, return error
