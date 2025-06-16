@@ -572,45 +572,40 @@ func (te *TwitterExtractor) parseEmbedResponse(response, tweetID string) ([]*Med
 		mediaInfos = append(mediaInfos, mediaInfo)
 	}
 	
-	// If no actual media found, check for pic.twitter.com references
-	if len(mediaInfos) == 0 {
-		picPattern := regexp.MustCompile(`pic\.twitter\.com/([a-zA-Z0-9]+)`)
-		picMatches := picPattern.FindAllStringSubmatch(html, -1)
-		
-		if len(picMatches) > 0 {
-			log.Printf("🖼️ Found %d pic.twitter.com references but no direct media URLs", len(picMatches))
-			for _, match := range picMatches {
-				if len(match) > 1 {
-					picID := match[1]
-					log.Printf("📸 Found pic.twitter.com/%s", picID)
-				}
-			}
-		}
-	}
-	
 	// If we found actual media, return it
 	if len(mediaInfos) > 0 {
 		return mediaInfos, nil
 	}
 	
-	// If no media found but we have text, create fallback link
-	if tweetText != "" {
-		// Add fixupx link for media access
-		username, _ := te.extractUsernameFromEmbedData(embedData)
-		if username == "" {
-			username = "user"
+	// If no actual media found, check for pic.twitter.com references
+	picPattern := regexp.MustCompile(`pic\.twitter\.com/([a-zA-Z0-9]+)`)
+	picMatches := picPattern.FindAllStringSubmatch(html, -1)
+	
+	if len(picMatches) > 0 {
+		log.Printf("🖼️ Found %d pic.twitter.com references but no direct media URLs", len(picMatches))
+		for _, match := range picMatches {
+			if len(match) > 1 {
+				picID := match[1]
+				log.Printf("📸 Found pic.twitter.com/%s", picID)
+			}
 		}
-		fixedURL := fmt.Sprintf("https://fixupx.com/%s/status/%s", username, tweetID)
-		caption := fmt.Sprintf("%s\n\n🖼️ Media available at: %s", tweetText, fixedURL)
-		
-		textMedia := &MediaInfo{
-			Type:    "text",
-			URL:     fmt.Sprintf("https://x.com/i/web/status/%s", tweetID),
-			Caption: caption,
-			Filename: "",
-		}
-		mediaInfos = append(mediaInfos, textMedia)
+		// Return error to trigger fallback to other extraction methods
+		return nil, fmt.Errorf("embed contains pic.twitter.com references but no extractable media URLs")
 	}
+	
+	// If no media found and no text, return error
+	if tweetText == "" {
+		return nil, fmt.Errorf("no media or text found in embed")
+	}
+	
+	// If we have text but no media references, create text response
+	textMedia := &MediaInfo{
+		Type:    "text",
+		URL:     fmt.Sprintf("https://x.com/i/web/status/%s", tweetID),
+		Caption: tweetText,
+		Filename: "",
+	}
+	mediaInfos = append(mediaInfos, textMedia)
 	
 	return mediaInfos, nil
 }
