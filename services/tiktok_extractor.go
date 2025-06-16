@@ -550,17 +550,31 @@ func (te *TikTokExtractor) extractMediaURLsFromJSON(jsonStr string) []string {
 			continue
 		}
 		
-		// For TikTok slideshow images, remove query parameters to detect true duplicates
+		// For TikTok slideshow images, create a normalized base URL for duplicate detection
 		baseURL := cleanURL
-		if strings.Contains(cleanURL, "tiktokcdn.com") && strings.Contains(cleanURL, "?") {
+		if strings.Contains(cleanURL, "tiktokcdn.com") {
+			// Remove query parameters for duplicate detection
 			if qIndex := strings.Index(cleanURL, "?"); qIndex != -1 {
 				baseURL = cleanURL[:qIndex]
+			}
+			
+			// Extract the unique image hash from the URL for better deduplication
+			// URL format: .../9a78140b7d87427482e4392117b4ead9~tplv-photomode-image.jpeg
+			if hashStart := strings.LastIndex(baseURL, "/"); hashStart != -1 {
+				hashPart := baseURL[hashStart+1:]
+				if tildeIndex := strings.Index(hashPart, "~"); tildeIndex != -1 {
+					imageHash := hashPart[:tildeIndex]
+					baseURL = imageHash // Use just the hash for deduplication
+				}
 			}
 		}
 		
 		if !seen[baseURL] {
 			seen[baseURL] = true
 			uniqueURLs = append(uniqueURLs, cleanURL)
+			log.Printf("✅ Added unique URL with base: %s", baseURL)
+		} else {
+			log.Printf("⏭️ Skipping duplicate URL with base: %s", baseURL)
 		}
 	}
 	
@@ -674,6 +688,10 @@ func (te *TikTokExtractor) extractMediaURLs(html string) []string {
 		`"url":"(https://[^"]*photomode-image[^"]*\.jpeg[^"]*)"`,
 		`"imageURL":"(https://[^"]*photomode-image[^"]*\.jpeg[^"]*)"`,
 		`"src":"(https://[^"]*photomode-image[^"]*\.jpeg[^"]*)"`,
+		
+		// Fallback: Extract any photomode-image URL from JSON (with escaping)
+		`"(https:\\u002F\\u002F[^"]*photomode-image[^"]*\.jpeg[^"]*)"`,
+		`"(https:[^"]*photomode-image[^"]*\.jpeg[^"]*)"`,
 		
 		// Photo mode specific patterns  
 		`"photoMode"[^}]*"url":"([^"]*)"`,
