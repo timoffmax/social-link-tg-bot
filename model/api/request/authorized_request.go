@@ -144,7 +144,6 @@ func prepareMultipartRequest(r *AuthorizedRequest, requestURL string) (*http.Req
 		
 		if len(filePathsResult) > 0 && len(fileFieldResult) > 0 {
 			filePaths := filePathsResult[0]
-			fieldName := fileFieldResult[0].String()
 			
 			isMediaGroupPayload = true
 			
