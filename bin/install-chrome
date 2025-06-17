@@ -1,70 +1,138 @@
 #!/bin/bash
 
 # Install Chrome/Chromium on production server for TikTok slideshow extraction
+# This script works without sudo privileges by using portable Chrome
 
-echo "🔍 Installing Chrome/Chromium for TikTok slideshow support..."
+echo "🔍 Installing Chrome for TikTok slideshow support (user-space installation)..."
 
-# Check if running as root/sudo
-if [ "$EUID" -ne 0 ]; then
-    echo "❌ This script needs to be run with sudo privileges"
-    echo "Please run: sudo ./bin/install-chrome"
+# Set installation directory in user's home directory
+CHROME_DIR="$HOME/chrome"
+CHROME_BINARY="$CHROME_DIR/chrome"
+
+# Check if Chrome is already installed in user space
+if [ -f "$CHROME_BINARY" ]; then
+    echo "✅ Chrome already installed at $CHROME_BINARY"
+    echo "📍 Chrome version: $($CHROME_BINARY --version 2>/dev/null || echo 'Unknown')"
+    exit 0
+fi
+
+# Create Chrome directory
+mkdir -p "$CHROME_DIR"
+cd "$CHROME_DIR"
+
+echo "📦 Downloading portable Chrome..."
+
+# Download Chrome for Linux (portable version)
+CHROME_URL="https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb"
+DEB_FILE="google-chrome-stable.deb"
+
+if command -v wget &> /dev/null; then
+    wget -O "$DEB_FILE" "$CHROME_URL"
+elif command -v curl &> /dev/null; then
+    curl -L -o "$DEB_FILE" "$CHROME_URL"
+else
+    echo "❌ Neither wget nor curl found. Cannot download Chrome."
+    echo "Please install wget or curl first."
     exit 1
 fi
 
-# Update package lists
-echo "📦 Updating package lists..."
-apt update
-
-# Try to install Google Chrome first
-echo "🌐 Attempting to install Google Chrome..."
-if ! command -v wget &> /dev/null; then
-    apt install -y wget
+# Check if download was successful
+if [ ! -f "$DEB_FILE" ] || [ ! -s "$DEB_FILE" ]; then
+    echo "❌ Failed to download Chrome package"
+    exit 1
 fi
 
-# Add Google Chrome repository
-wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | apt-key add -
-echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" > /etc/apt/sources.list.d/google-chrome.list
-
-apt update
-
-# Install Google Chrome
-if apt install -y google-chrome-stable; then
-    echo "✅ Google Chrome installed successfully!"
-    echo "📍 Chrome location: $(which google-chrome-stable)"
-else
-    echo "⚠️ Google Chrome installation failed, trying Chromium..."
-    
-    # Fallback to Chromium
-    if apt install -y chromium chromium-driver; then
-        echo "✅ Chromium installed successfully!"
-        echo "📍 Chromium location: $(which chromium)"
+# Extract Chrome from .deb package without installing system-wide
+echo "📂 Extracting Chrome package..."
+if command -v dpkg-deb &> /dev/null; then
+    dpkg-deb -x "$DEB_FILE" extracted/
+elif command -v ar &> /dev/null; then
+    # Alternative extraction method using ar
+    ar x "$DEB_FILE"
+    if [ -f "data.tar.xz" ]; then
+        tar -xf data.tar.xz
+        mv opt/google/chrome/* .
+    elif [ -f "data.tar.gz" ]; then
+        tar -xf data.tar.gz  
+        mv opt/google/chrome/* .
     else
-        echo "❌ Both Chrome and Chromium installation failed"
-        echo "🔍 Please install manually or check system compatibility"
+        echo "❌ Could not find data archive in .deb package"
+        exit 1
+    fi
+else
+    echo "❌ Cannot extract .deb package. Neither dpkg-deb nor ar found."
+    echo "Trying alternative download method..."
+    
+    # Fallback: try to get Chromium instead
+    rm -f "$DEB_FILE"
+    echo "📦 Trying Chromium portable installation..."
+    
+    # Download Chromium (often more readily available)
+    CHROMIUM_URL="https://commondatastorage.googleapis.com/chromium-browser-snapshots/Linux_x64/LAST_CHANGE"
+    if command -v wget &> /dev/null; then
+        LATEST=$(wget -qO- "$CHROMIUM_URL")
+        CHROMIUM_ZIP_URL="https://commondatastorage.googleapis.com/chromium-browser-snapshots/Linux_x64/$LATEST/chrome-linux.zip"
+        wget -O chromium.zip "$CHROMIUM_ZIP_URL"
+    else
+        echo "❌ Cannot download Chromium either. Please install dpkg-deb, ar, or wget."
+        exit 1
+    fi
+    
+    if command -v unzip &> /dev/null; then
+        unzip -q chromium.zip
+        if [ -d "chrome-linux" ]; then
+            mv chrome-linux/* .
+            CHROME_BINARY="$CHROME_DIR/chrome"
+        else
+            echo "❌ Failed to extract Chromium"
+            exit 1
+        fi
+    else
+        echo "❌ unzip not found. Cannot extract Chromium."
         exit 1
     fi
 fi
 
-# Verify installation
-echo "🔍 Verifying installation..."
-if command -v google-chrome-stable &> /dev/null; then
-    echo "✅ Google Chrome found: $(which google-chrome-stable)"
-    google-chrome-stable --version
-elif command -v google-chrome &> /dev/null; then
-    echo "✅ Google Chrome found: $(which google-chrome)"
-    google-chrome --version
-elif command -v chromium &> /dev/null; then
-    echo "✅ Chromium found: $(which chromium)"
-    chromium --version
-elif command -v chromium-browser &> /dev/null; then
-    echo "✅ Chromium found: $(which chromium-browser)"
-    chromium-browser --version
-else
-    echo "❌ No Chrome/Chromium found after installation"
-    exit 1
+# If we used dpkg-deb extraction, move Chrome to the right location
+if [ -d "extracted/opt/google/chrome" ]; then
+    mv extracted/opt/google/chrome/* .
+    rm -rf extracted/
+    CHROME_BINARY="$CHROME_DIR/chrome"
+elif [ -d "extracted/usr/bin" ]; then
+    mv extracted/usr/bin/google-chrome-stable chrome
+    CHROME_BINARY="$CHROME_DIR/chrome"
 fi
 
-echo ""
-echo "🎉 Chrome/Chromium installation complete!"
-echo "🚀 The TikTok slideshow extraction feature should now work properly"
-echo "📋 You can test by restarting the bot: sudo systemctl restart social-link-bot"
+# Clean up download files
+rm -f "$DEB_FILE" chromium.zip data.tar.* control.tar.*
+
+# Make Chrome executable
+chmod +x "$CHROME_BINARY" 2>/dev/null
+
+# Verify installation
+echo "🔍 Verifying Chrome installation..."
+if [ -f "$CHROME_BINARY" ] && [ -x "$CHROME_BINARY" ]; then
+    echo "✅ Chrome installed successfully at $CHROME_BINARY"
+    
+    # Test Chrome version (suppress errors in case of missing dependencies)
+    VERSION=$("$CHROME_BINARY" --version 2>/dev/null || echo "Installed (version check failed)")
+    echo "📍 Chrome version: $VERSION"
+    
+    # Create a symlink in a directory that might be in PATH for easier access
+    mkdir -p "$HOME/bin" 2>/dev/null
+    ln -sf "$CHROME_BINARY" "$HOME/bin/chrome" 2>/dev/null
+    
+    echo ""
+    echo "🎉 Chrome installation complete!"
+    echo "📍 Chrome binary: $CHROME_BINARY"
+    echo "🔧 A symlink was created at $HOME/bin/chrome (if $HOME/bin is in your PATH)"
+    echo "🚀 The TikTok slideshow extraction feature should now work properly"
+    echo "📋 You can test by restarting the bot: systemctl --user restart social-link-bot"
+    echo ""
+    echo "ℹ️  If the bot still can't find Chrome, make sure the path detection in"
+    echo "    tiktok_extractor.go includes: $CHROME_BINARY"
+else
+    echo "❌ Chrome installation failed"
+    echo "🔍 Please check the installation manually or try installing Chrome system-wide"
+    exit 1
+fi

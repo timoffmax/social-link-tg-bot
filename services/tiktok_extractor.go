@@ -324,7 +324,12 @@ func (te *TikTokExtractor) extractViaHeadlessBrowser(tiktokURL string, postID st
 	// Create Chrome instance with extensive logging suppression and cookie handling fixes
 	// Try different Chrome executable paths for production servers
 	execPath := ""
+	homeDir := os.Getenv("HOME")
 	possiblePaths := []string{
+		// User-space Chrome installation (no sudo required)
+		filepath.Join(homeDir, "chrome/chrome"),
+		filepath.Join(homeDir, "bin/chrome"),
+		// System-wide installations
 		"/usr/bin/google-chrome",
 		"/usr/bin/google-chrome-stable", 
 		"/usr/bin/chromium-browser",
