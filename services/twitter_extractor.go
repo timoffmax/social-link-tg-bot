@@ -577,10 +577,6 @@ func (te *TwitterExtractor) parseEmbedResponse(response, tweetID string) ([]*Med
 		return mediaInfos, nil
 	}
 	
-	// If no actual media found, check for pic.twitter.com references
-	picPattern := regexp.MustCompile(`pic\.twitter\.com/([a-zA-Z0-9]+)`)
-	picMatches := picPattern.FindAllStringSubmatch(html, -1)
-	
 	// If no media found and no text, return error
 	if tweetText == "" {
 		return nil, fmt.Errorf("no media or text found in embed")
