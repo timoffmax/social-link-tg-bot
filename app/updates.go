@@ -337,10 +337,23 @@ func sendMediaFile(mediaInfo *services.MediaInfo, origChat *response.TgChat) err
 		// Note: NewSendVideo automatically sends the message
 
 	default:
+		// Determine the document type for better user experience
+		var documentName string
+		var enhancedCaption string
+		
+		if strings.HasSuffix(strings.ToLower(mediaInfo.Filename), ".webm") {
+			documentName = "video.webm"
+			enhancedCaption = fmt.Sprintf("🎥 Video (WebM format)\n\n%s", caption)
+			log.Printf("📹 Sending WebM video as document for better compatibility")
+		} else {
+			documentName = "document.bin"
+			enhancedCaption = caption
+		}
+		
 		documentPayload := payload.TgPlSendDocument{
 			ChatId:   origChat.Id,
-			Document: "document.bin", // Simple filename for multipart upload
-			Caption:  caption,
+			Document: documentName,
+			Caption:  enhancedCaption,
 			FilePath: mediaInfo.Filename,
 		}
 		message.NewSendDocument(documentPayload)

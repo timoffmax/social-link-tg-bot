@@ -820,8 +820,11 @@ func (yd *YtDlpDownloader) detectMediaType(filePath string) string {
 	switch ext {
 	case ".jpg", ".jpeg", ".png", ".gif", ".webp":
 		return "photo"
-	case ".mp4", ".mov", ".avi", ".mkv", ".webm":
+	case ".mp4", ".mov", ".avi", ".mkv":
 		return "video"
+	case ".webm":
+		// WebM files are better sent as documents in Telegram due to format support issues
+		return "document"
 	default:
 		return "document"
 	}
