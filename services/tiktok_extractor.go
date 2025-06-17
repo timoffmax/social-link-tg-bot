@@ -322,6 +322,25 @@ func (te *TikTokExtractor) extractViaHeadlessBrowser(tiktokURL string, postID st
 	defer cancel()
 	
 	// Create Chrome instance with extensive logging suppression and cookie handling fixes
+	// Try different Chrome executable paths for production servers
+	execPath := ""
+	possiblePaths := []string{
+		"/usr/bin/google-chrome",
+		"/usr/bin/google-chrome-stable", 
+		"/usr/bin/chromium-browser",
+		"/usr/bin/chromium",
+		"/opt/google/chrome/chrome",
+		"/snap/bin/chromium",
+	}
+	
+	for _, path := range possiblePaths {
+		if _, err := os.Stat(path); err == nil {
+			execPath = path
+			break
+		}
+	}
+	
+	// Start with default allocator options
 	opts := append(chromedp.DefaultExecAllocatorOptions[:],
 		chromedp.DisableGPU,
 		chromedp.NoSandbox,
@@ -359,6 +378,14 @@ func (te *TikTokExtractor) extractViaHeadlessBrowser(tiktokURL string, postID st
 		chromedp.Flag("no-sandbox", true),
 		chromedp.Flag("disable-setuid-sandbox", true),
 	)
+	
+	// Add custom Chrome path if found
+	if execPath != "" {
+		log.Printf("🔍 Found Chrome at: %s", execPath)
+		opts = append(opts, chromedp.ExecPath(execPath))
+	} else {
+		log.Printf("⚠️ No Chrome found on system, will try default (may fail)")
+	}
 	
 	allocCtx, allocCancel := chromedp.NewExecAllocator(ctx, opts...)
 	defer allocCancel()
