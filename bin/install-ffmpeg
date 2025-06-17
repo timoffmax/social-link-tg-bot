@@ -1,0 +1,121 @@
+#!/bin/bash
+
+# Install ffmpeg for video conversion support
+# This script works without sudo privileges by installing a static ffmpeg binary
+
+echo "🎬 Installing ffmpeg for video conversion support..."
+
+# Set installation directory in user's home directory
+FFMPEG_DIR="$HOME/bin"
+FFMPEG_BINARY="$FFMPEG_DIR/ffmpeg"
+
+# Check if ffmpeg is already installed
+if [ -f "$FFMPEG_BINARY" ]; then
+    echo "✅ ffmpeg already installed at $FFMPEG_BINARY"
+    echo "📍 ffmpeg version: $($FFMPEG_BINARY -version 2>/dev/null | head -1 || echo 'Unknown')"
+    exit 0
+fi
+
+# Create bin directory
+mkdir -p "$FFMPEG_DIR"
+cd "$FFMPEG_DIR"
+
+echo "📦 Downloading static ffmpeg binary..."
+
+# Download static ffmpeg build (no dependencies required)
+# Using John Van Sickle's static builds which are reliable and up-to-date
+FFMPEG_URL="https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz"
+ARCHIVE_NAME="ffmpeg-static.tar.xz"
+
+if command -v wget &> /dev/null; then
+    wget -O "$ARCHIVE_NAME" "$FFMPEG_URL"
+elif command -v curl &> /dev/null; then
+    curl -L -o "$ARCHIVE_NAME" "$FFMPEG_URL"
+else
+    echo "❌ Neither wget nor curl found. Cannot download ffmpeg."
+    echo "Please install wget or curl first."
+    exit 1
+fi
+
+# Check if download was successful
+if [ ! -f "$ARCHIVE_NAME" ] || [ ! -s "$ARCHIVE_NAME" ]; then
+    echo "❌ Failed to download ffmpeg archive"
+    exit 1
+fi
+
+# Extract ffmpeg from archive
+echo "📂 Extracting ffmpeg..."
+if command -v tar &> /dev/null; then
+    tar -xf "$ARCHIVE_NAME"
+    
+    # Find the extracted directory (it will have a name like ffmpeg-6.1-amd64-static)
+    EXTRACTED_DIR=$(find . -maxdepth 1 -type d -name "ffmpeg-*-amd64-static" | head -1)
+    
+    if [ -n "$EXTRACTED_DIR" ] && [ -d "$EXTRACTED_DIR" ]; then
+        # Copy ffmpeg binary to our bin directory
+        cp "$EXTRACTED_DIR/ffmpeg" ./ffmpeg
+        
+        # Also copy ffprobe which might be useful
+        if [ -f "$EXTRACTED_DIR/ffprobe" ]; then
+            cp "$EXTRACTED_DIR/ffprobe" ./ffprobe
+        fi
+        
+        # Clean up extracted directory
+        rm -rf "$EXTRACTED_DIR"
+    else
+        echo "❌ Could not find extracted ffmpeg directory"
+        exit 1
+    fi
+else
+    echo "❌ tar not found. Cannot extract ffmpeg."
+    exit 1
+fi
+
+# Clean up download
+rm -f "$ARCHIVE_NAME"
+
+# Make ffmpeg executable
+chmod +x "$FFMPEG_BINARY"
+
+# Verify installation
+echo "🔍 Verifying ffmpeg installation..."
+if [ -f "$FFMPEG_BINARY" ] && [ -x "$FFMPEG_BINARY" ]; then
+    echo "✅ ffmpeg installed successfully at $FFMPEG_BINARY"
+    
+    # Test ffmpeg version
+    VERSION=$("$FFMPEG_BINARY" -version 2>/dev/null | head -1 || echo "Installed (version check failed)")
+    echo "📍 ffmpeg version: $VERSION"
+    
+    # Check if ~/bin is in PATH
+    if [[ ":$PATH:" == *":$HOME/bin:"* ]]; then
+        echo "✅ $HOME/bin is already in PATH"
+    else
+        echo "⚠️ $HOME/bin is not in PATH"
+        echo "💡 Add this to your ~/.bashrc or ~/.profile:"
+        echo "export PATH=\"$HOME/bin:\$PATH\""
+        
+        # Try to add to PATH for current session
+        export PATH="$HOME/bin:$PATH"
+        echo "✅ Added to PATH for current session"
+    fi
+    
+    echo ""
+    echo "🎉 ffmpeg installation complete!"
+    echo "📍 ffmpeg binary: $FFMPEG_BINARY"
+    echo "🎬 The bot can now convert WebM videos to MP4 for better Telegram compatibility"
+    echo "📋 You can test by restarting the bot"
+    
+    # Test basic ffmpeg functionality
+    echo ""
+    echo "🧪 Testing ffmpeg functionality..."
+    if "$FFMPEG_BINARY" -f lavfi -i testsrc=duration=1:size=320x240:rate=1 -f null - &>/dev/null; then
+        echo "✅ ffmpeg is working correctly"
+    else
+        echo "⚠️ ffmpeg test failed, but binary is installed"
+    fi
+    
+else
+    echo "❌ ffmpeg installation failed"
+    echo "🔍 Please check the installation manually"
+    exit 1
+fi

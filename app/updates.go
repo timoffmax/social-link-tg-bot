@@ -327,11 +327,68 @@ func sendMediaFile(mediaInfo *services.MediaInfo, origChat *response.TgChat) err
 		}
 
 	case "video":
+		finalVideoPath := mediaInfo.Filename
+		
+		// Check if this is a WebM file that needs conversion
+		if strings.HasSuffix(strings.ToLower(mediaInfo.Filename), ".webm") {
+			log.Printf("🎬 WebM video detected, attempting conversion to MP4")
+			
+			// Initialize video converter
+			videoConverter := services.NewVideoConverter(".", os.TempDir())
+			
+			if videoConverter.IsAvailable() {
+				// Try to convert WebM to MP4
+				convertedPath, err := videoConverter.ConvertWebMToMP4(mediaInfo.Filename)
+				if err != nil {
+					log.Printf("❌ WebM conversion failed: %v, falling back to document", err)
+					
+					// Fallback: send as document
+					documentPayload := payload.TgPlSendDocument{
+						ChatId:   origChat.Id,
+						Document: "video.webm",
+						Caption:  fmt.Sprintf("🎥 Video (WebM format - conversion failed)\n\n%s", caption),
+						FilePath: mediaInfo.Filename,
+					}
+					message.NewSendDocument(documentPayload)
+					return nil
+				} else {
+					log.Printf("✅ Successfully converted WebM to MP4: %s", convertedPath)
+					finalVideoPath = convertedPath
+					
+					// Clean up original WebM file after successful conversion
+					defer func() {
+						if err := os.Remove(mediaInfo.Filename); err != nil {
+							log.Printf("⚠️ Failed to cleanup original WebM file: %v", err)
+						}
+						// Clean up converted MP4 file after sending
+						defer func() {
+							if err := os.Remove(convertedPath); err != nil {
+								log.Printf("⚠️ Failed to cleanup converted MP4 file: %v", err)
+							}
+						}()
+					}()
+				}
+			} else {
+				log.Printf("⚠️ ffmpeg not available, sending WebM as document")
+				
+				// Fallback: send as document
+				documentPayload := payload.TgPlSendDocument{
+					ChatId:   origChat.Id,
+					Document: "video.webm",
+					Caption:  fmt.Sprintf("🎥 Video (WebM format)\n\n%s", caption),
+					FilePath: mediaInfo.Filename,
+				}
+				message.NewSendDocument(documentPayload)
+				return nil
+			}
+		}
+		
+		// Send as video (either original MP4 or converted from WebM)
 		videoPayload := payload.TgPlSendVideo{
 			ChatId:   origChat.Id,
 			Video:    "video.mp4", // Simple filename for multipart upload
 			Caption:  caption,
-			FilePath: mediaInfo.Filename,
+			FilePath: finalVideoPath,
 		}
 		message.NewSendVideo(videoPayload)
 		// Note: NewSendVideo automatically sends the message
