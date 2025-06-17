@@ -161,14 +161,25 @@ func processMediaDownload(url string, origChat *response.TgChat, downloader *ser
 		return
 	}
 
-	// Send confirmation message
-	confirmMsg := payload.TgPlSendMessage{
-		ChatId: origChat.Id,
-		Text:   "📥 Downloaded media, sending...",
+	// Check if we actually have any downloadable media files (not just text)
+	hasActualMedia := false
+	for _, mediaInfo := range mediaInfos {
+		if mediaInfo.Type != "text" && mediaInfo.Filename != "" {
+			hasActualMedia = true
+			break
+		}
 	}
-	message.NewSendMessage(confirmMsg)
-	// Note: NewSendMessage automatically sends the message
-	log.Printf("✅ Successfully sent confirmation message to chat %d", origChat.Id)
+
+	// Only send confirmation message if we have actual media files
+	if hasActualMedia {
+		confirmMsg := payload.TgPlSendMessage{
+			ChatId: origChat.Id,
+			Text:   "📥 Downloaded media, sending...",
+		}
+		message.NewSendMessage(confirmMsg)
+		// Note: NewSendMessage automatically sends the message
+		log.Printf("✅ Successfully sent confirmation message to chat %d", origChat.Id)
+	}
 
 	// Group photos and send them together, send other media individually
 	log.Printf("Downloaded %d media files from %s", len(mediaInfos), url)

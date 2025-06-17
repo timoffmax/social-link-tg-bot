@@ -586,42 +586,14 @@ func (te *TwitterExtractor) parseEmbedResponse(response, tweetID string) ([]*Med
 		return nil, fmt.Errorf("no media or text found in embed")
 	}
 	
-	// Create text response with fixupx link if media is referenced
-	hasMediaReferences := len(picMatches) > 0
-	if hasMediaReferences {
-		log.Printf("🖼️ Found %d pic.twitter.com references but no direct media URLs", len(picMatches))
-		for _, match := range picMatches {
-			if len(match) > 1 {
-				picID := match[1]
-				log.Printf("📸 Found pic.twitter.com/%s", picID)
-			}
-		}
-		
-		// Add fixupx link for media access
-		username, _ := te.extractUsernameFromEmbedData(embedData)
-		if username == "" {
-			username = "user"
-		}
-		fixedURL := fmt.Sprintf("https://fixupx.com/%s/status/%s", username, tweetID)
-		caption := fmt.Sprintf("%s\n\n🖼️ Media available at: %s", tweetText, fixedURL)
-		
-		textMedia := &MediaInfo{
-			Type:    "text",
-			URL:     fmt.Sprintf("https://x.com/i/web/status/%s", tweetID),
-			Caption: caption,
-			Filename: "",
-		}
-		mediaInfos = append(mediaInfos, textMedia)
-	} else {
-		// Just text, no media references
-		textMedia := &MediaInfo{
-			Type:    "text",
-			URL:     fmt.Sprintf("https://x.com/i/web/status/%s", tweetID),
-			Caption: tweetText,
-			Filename: "",
-		}
-		mediaInfos = append(mediaInfos, textMedia)
+	// Just return text without adding pic.twitter.com links or fixupx references
+	textMedia := &MediaInfo{
+		Type:    "text",
+		URL:     fmt.Sprintf("https://x.com/i/web/status/%s", tweetID),
+		Caption: tweetText,
+		Filename: "",
 	}
+	mediaInfos = append(mediaInfos, textMedia)
 	
 	return mediaInfos, nil
 }
