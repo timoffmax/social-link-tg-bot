@@ -4,17 +4,51 @@ import (
 	"github.com/joho/godotenv"
 	"github.com/timoffmax/social-link-bot/services"
 	"log"
+	"os"
+	"path/filepath"
 	"time"
 )
 
 func Run() {
 	initApp()
+	initLogging()
+	runStartupChecks()
 	startCleanupTask()
+	defer services.CloseLogger()
 	listenForUpdates()
 }
 
 func initApp() {
 	loadEnvFile()
+}
+
+func initLogging() {
+	// Get current working directory
+	workingDir, err := os.Getwd()
+	if err != nil {
+		log.Printf("Warning: Could not get working directory: %v", err)
+		workingDir = "."
+	}
+	
+	// Create logs directory path
+	logDir := filepath.Join(workingDir, "logs")
+	
+	// Initialize file logging
+	err = services.InitLogger(logDir)
+	if err != nil {
+		log.Printf("Warning: Could not initialize file logging: %v", err)
+		log.Printf("Continuing with console-only logging...")
+	}
+}
+
+func runStartupChecks() {
+	checker := services.NewStartupChecker()
+	checker.RunStartupChecks()
+	
+	// Run a quick functional test
+	log.Printf("\n🧪 Running quick functional test...")
+	tester := services.NewRealLinkTester()
+	tester.RunQuickTest()
 }
 
 func loadEnvFile() {

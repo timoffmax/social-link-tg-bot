@@ -171,16 +171,8 @@ func (yd *YtDlpDownloader) DownloadMedia(url string) ([]*MediaInfo, error) {
 		log.Printf("Download failed with proxy '%s': %v", proxy, err)
 	}
 	
-	// If all yt-dlp attempts failed, try universal headless browser as final fallback
-	log.Printf("All yt-dlp attempts failed, trying universal headless browser fallback")
-	browserExtractor := NewUniversalBrowserExtractor(yd.WorkingDir, yd.TempDir)
-	mediaInfos, err := browserExtractor.ExtractMedia(url)
-	if err == nil && len(mediaInfos) > 0 {
-		log.Printf("✅ Universal headless browser fallback succeeded with %d items", len(mediaInfos))
-		return mediaInfos, nil
-	}
-	
-	return nil, fmt.Errorf("all download attempts failed including headless browser, last yt-dlp error: %v, browser error: %v", lastErr, err)
+	// Return the last error from yt-dlp attempts
+	return nil, fmt.Errorf("all yt-dlp download attempts failed: %v", lastErr)
 }
 
 // attemptDownload tries to download with a specific proxy (or empty string for no proxy)

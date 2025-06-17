@@ -1,6 +1,7 @@
 package services
 
 import (
+	"compress/gzip"
 	"context"
 	"fmt"
 	"io"
@@ -235,6 +236,14 @@ func (ube *UniversalBrowserExtractor) extractTikTokMedia(mediaURL string) ([]*Me
 	if err != nil {
 		return nil, err
 	}
+	
+	// Debug: Save HTML content for analysis (temporary)
+	if os.Getenv("DEBUG_TIKTOK") == "true" {
+		debugFile := filepath.Join(ube.tempDir, fmt.Sprintf("tiktok_debug_%d.html", time.Now().Unix()))
+		if err := os.WriteFile(debugFile, []byte(html), 0644); err == nil {
+			log.Printf("🐛 [DEBUG] Saved TikTok HTML to: %s", debugFile)
+		}
+	}
 
 	var mediaInfos []*MediaInfo
 
@@ -371,11 +380,21 @@ func (ube *UniversalBrowserExtractor) extractYouTubeMedia(mediaURL string) ([]*M
 func (ube *UniversalBrowserExtractor) extract9GAGMedia(mediaURL string) ([]*MediaInfo, error) {
 	log.Printf("😂 Extracting 9GAG media with headless browser")
 
-	// For 9GAG, use longer wait time and check for age-restricted content
-	html, err := ube.renderPageWithBrowserFor9GAG(mediaURL, 8*time.Second)
+	// Try the simple HTTP approach first since it used to work
+	html, err := ube.tryImproved9GAGFallback(mediaURL)
 	if err != nil {
-		return nil, err
+		log.Printf("⚠️ HTTP extraction failed, trying browser: %v", err)
+		// Fallback to browser if HTTP fails
+		html, err = ube.renderPageWithBrowserFor9GAG(mediaURL, 8*time.Second)
+		if err != nil {
+			return nil, fmt.Errorf("both HTTP and browser extraction failed: %v", err)
+		}
+		log.Printf("✅ 9GAG browser fallback succeeded, HTML length: %d", len(html))
+	} else {
+		log.Printf("✅ 9GAG HTTP extraction succeeded, HTML length: %d", len(html))
 	}
+	
+	log.Printf("📄 Retrieved HTML content from 9GAG, length: %d characters", len(html))
 
 	// Check if this is age-restricted content
 	if ube.is9GAGAgeRestricted(html) {
@@ -459,6 +478,116 @@ func (ube *UniversalBrowserExtractor) extract9GAGMedia(mediaURL string) ([]*Medi
 	}
 
 	return mediaInfos, nil
+}
+
+func (ube *UniversalBrowserExtractor) tryImproved9GAGFallback(pageURL string) (string, error) {
+	log.Printf("🌐 Trying improved 9GAG HTTP fallback")
+	
+	client := &http.Client{
+		Timeout: 15 * time.Second,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return nil // Follow redirects
+		},
+	}
+	
+	req, err := http.NewRequest("GET", pageURL, nil)
+	if err != nil {
+		return "", err
+	}
+	
+	// Set headers to better mimic a real browser session
+	req.Header.Set("User-Agent", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
+	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7")
+	req.Header.Set("Accept-Language", "en-US,en;q=0.9")
+	req.Header.Set("Accept-Encoding", "gzip, deflate, br")
+	req.Header.Set("Cache-Control", "no-cache")
+	req.Header.Set("Pragma", "no-cache")
+	req.Header.Set("Sec-Ch-Ua", `"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"`)
+	req.Header.Set("Sec-Ch-Ua-Mobile", "?0")
+	req.Header.Set("Sec-Ch-Ua-Platform", `"Linux"`)
+	req.Header.Set("Sec-Fetch-Dest", "document")
+	req.Header.Set("Sec-Fetch-Mode", "navigate")
+	req.Header.Set("Sec-Fetch-Site", "none")
+	req.Header.Set("Sec-Fetch-User", "?1")
+	req.Header.Set("Upgrade-Insecure-Requests", "1")
+	req.Header.Set("Referer", "https://9gag.com/")
+	
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	
+	if resp.StatusCode != 200 {
+		return "", fmt.Errorf("HTTP %d: %s", resp.StatusCode, resp.Status)
+	}
+	
+	var reader io.Reader = resp.Body
+	if resp.Header.Get("Content-Encoding") == "gzip" {
+		gzipReader, err := gzip.NewReader(resp.Body)
+		if err != nil {
+			return "", err
+		}
+		defer gzipReader.Close()
+		reader = gzipReader
+	}
+	
+	bodyBytes, err := io.ReadAll(reader)
+	if err != nil {
+		return "", err
+	}
+	
+	return string(bodyBytes), nil
+}
+
+// Keep old method as backup
+func (ube *UniversalBrowserExtractor) trySimple9GAGFallback(pageURL string) (string, error) {
+	log.Printf("🌐 Trying 9GAG HTTP fallback")
+	
+	client := &http.Client{
+		Timeout: 10 * time.Second,
+	}
+	
+	req, err := http.NewRequest("GET", pageURL, nil)
+	if err != nil {
+		return "", err
+	}
+	
+	// Set headers to mimic a regular browser
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36")
+	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8")
+	req.Header.Set("Accept-Language", "en-US,en;q=0.5")
+	req.Header.Set("Accept-Encoding", "gzip, deflate")
+	req.Header.Set("DNT", "1")
+	req.Header.Set("Connection", "keep-alive")
+	req.Header.Set("Upgrade-Insecure-Requests", "1")
+	
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	
+	if resp.StatusCode != 200 {
+		return "", fmt.Errorf("HTTP %d: %s", resp.StatusCode, resp.Status)
+	}
+	
+	var reader io.Reader = resp.Body
+	if resp.Header.Get("Content-Encoding") == "gzip" {
+		gzipReader, err := gzip.NewReader(resp.Body)
+		if err != nil {
+			return "", err
+		}
+		defer gzipReader.Close()
+		reader = gzipReader
+	}
+	
+	bodyBytes, err := io.ReadAll(reader)
+	if err != nil {
+		return "", err
+	}
+	
+	return string(bodyBytes), nil
 }
 
 func (ube *UniversalBrowserExtractor) extractGenericMedia(mediaURL string) ([]*MediaInfo, error) {
@@ -783,23 +912,49 @@ func (ube *UniversalBrowserExtractor) extractInstagramCaption(html string) strin
 }
 
 func (ube *UniversalBrowserExtractor) extractTwitterCaption(html string) string {
+	// Try to extract the main tweet text content first
 	patterns := []string{
+		// Try Open Graph description first
 		`<meta[^>]*property="og:description"[^>]*content="([^"]*)"`,
+		// Try regular description meta tag
 		`<meta[^>]*name="description"[^>]*content="([^"]*)"`,
+		// Try JSON data for tweet text
+		`"full_text":"([^"]*)"`,
 		`"text":"([^"]*)"`,
+		// Try tweet div content
+		`<div[^>]*data-testid="tweetText"[^>]*>([^<]*)</div>`,
 	}
+
+	var bestCaption string
+	maxLength := 0
 
 	for _, pattern := range patterns {
 		re := regexp.MustCompile(pattern)
 		if match := re.FindStringSubmatch(html); len(match) > 1 {
 			caption := strings.TrimSpace(match[1])
-			if caption != "" && !strings.Contains(caption, "Twitter") && !strings.Contains(caption, "X.com") {
-				return caption
+			
+			// Clean up common artifacts
+			caption = strings.ReplaceAll(caption, "\\n", "\n")
+			caption = strings.ReplaceAll(caption, "\\\"", "\"")
+			caption = strings.ReplaceAll(caption, "\\/", "/")
+			
+			// Skip generic descriptions
+			if caption != "" && 
+			   !strings.Contains(strings.ToLower(caption), "twitter") && 
+			   !strings.Contains(strings.ToLower(caption), "x.com") &&
+			   !strings.Contains(strings.ToLower(caption), "see posts, photos") &&
+			   len(caption) > maxLength {
+				bestCaption = caption
+				maxLength = len(caption)
 			}
 		}
 	}
 
-	return "Downloaded from Twitter"
+	if bestCaption != "" {
+		return bestCaption
+	}
+
+	return "Downloaded from Twitter/X"
 }
 
 func (ube *UniversalBrowserExtractor) extractTikTokCaption(html string) string {
@@ -985,8 +1140,11 @@ func (ube *UniversalBrowserExtractor) addPlatformHeaders(req *http.Request, plat
 
 // Specialized 9GAG browser functions for age-restricted content
 func (ube *UniversalBrowserExtractor) renderPageWithBrowserFor9GAG(pageURL string, waitTime time.Duration) (string, error) {
+	// Give 9GAG more time to resolve - it might just be slow
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
+	
+	log.Printf("🌐 Starting 9GAG extraction for: %s", pageURL)
 
 	// Find Chrome executable
 	homeDir := os.Getenv("HOME")
@@ -1009,7 +1167,7 @@ func (ube *UniversalBrowserExtractor) renderPageWithBrowserFor9GAG(pageURL strin
 		}
 	}
 
-	// Enhanced Chrome options for 9GAG with cookie support
+	// Enhanced Chrome options for 9GAG with cookie and proxy support
 	opts := append(chromedp.DefaultExecAllocatorOptions[:],
 		chromedp.DisableGPU,
 		chromedp.NoSandbox,
@@ -1048,6 +1206,17 @@ func (ube *UniversalBrowserExtractor) renderPageWithBrowserFor9GAG(pageURL strin
 		chromedp.Flag("accept-language", "en-US,en;q=0.9"),
 	)
 
+	// Add proxy support if configured via environment variables
+	proxyServer := os.Getenv("PROXY_SERVER") // e.g., "127.0.0.1:8080" or "proxy.example.com:3128"
+	if proxyServer != "" {
+		log.Printf("🌐 Using proxy server for 9GAG: %s", proxyServer)
+		opts = append(opts, chromedp.ProxyServer(proxyServer))
+	} else {
+		// Try some common free proxy services for 9GAG (optional)
+		// You can uncomment and configure these if needed
+		// opts = append(opts, chromedp.ProxyServer("proxy-server.com:port"))
+	}
+
 	if execPath != "" {
 		log.Printf("🔍 Using Chrome at: %s for 9GAG", execPath)
 		opts = append(opts, chromedp.ExecPath(execPath))
@@ -1060,17 +1229,43 @@ func (ube *UniversalBrowserExtractor) renderPageWithBrowserFor9GAG(pageURL strin
 	defer browserCancel()
 
 	var htmlContent string
+	
+	// Try a more patient approach - give 9GAG time to load
 	err := chromedp.Run(browserCtx,
-		// Set cookies for age verification if available
+		// Navigate to 9GAG domain first to set cookies
+		chromedp.Navigate("https://9gag.com"),
+		chromedp.Sleep(2*time.Second),
+		// Set cookies for age verification
 		ube.set9GAGCookies(),
+		chromedp.Sleep(1*time.Second),
+		// Now navigate to the actual page
 		chromedp.Navigate(pageURL),
-		chromedp.Sleep(waitTime),
+		chromedp.Sleep(8*time.Second), // Give it more time to load
 		// Try to handle age confirmation popup if present
 		ube.handle9GAGAgeConfirmation(),
-		chromedp.WaitVisible(`body`, chromedp.ByQuery),
-		chromedp.Sleep(3*time.Second), // Additional wait for content loading
+	)
+	
+	if err != nil {
+		log.Printf("⚠️ 9GAG navigation failed: %v, trying to get HTML anyway", err)
+	}
+	
+	// Try to get HTML content even if navigation partially failed
+	err = chromedp.Run(browserCtx,
 		chromedp.InnerHTML(`html`, &htmlContent, chromedp.ByQuery),
 	)
+	
+	// If that fails, try getting document content directly
+	if err != nil || len(htmlContent) < 1000 {
+		log.Printf("⚠️ Failed to get HTML via innerHTML, trying document.documentElement.outerHTML")
+		var docHTML string
+		err2 := chromedp.Run(browserCtx,
+			chromedp.Evaluate(`document.documentElement.outerHTML`, &docHTML),
+		)
+		if err2 == nil && len(docHTML) > len(htmlContent) {
+			htmlContent = docHTML
+			err = nil
+		}
+	}
 
 	if err != nil {
 		return "", fmt.Errorf("9GAG browser navigation failed: %v", err)
@@ -1232,50 +1427,22 @@ func (ube *UniversalBrowserExtractor) set9GAGCookies() chromedp.Action {
 
 func (ube *UniversalBrowserExtractor) set9GAGAgeVerificationCookies() chromedp.Action {
 	return chromedp.ActionFunc(func(ctx context.Context) error {
-		// Set cookies that indicate the user has verified their age
-		cookies := []*http.Cookie{
-			{
-				Name:   "age_verified",
-				Value:  "1",
-				Domain: ".9gag.com",
-				Path:   "/",
-			},
-			{
-				Name:   "mature_content",
-				Value:  "true",
-				Domain: ".9gag.com", 
-				Path:   "/",
-			},
-			{
-				Name:   "nsfw_ok",
-				Value:  "1",
-				Domain: ".9gag.com",
-				Path:   "/",
-			},
-			{
-				Name:   "user_preference",
-				Value:  "mature_allowed",
-				Domain: ".9gag.com",
-				Path:   "/",
-			},
+		// Set cookies using a more reliable method - all in one JavaScript call
+		script := `
+			document.cookie = "age_verified=1; domain=.9gag.com; path=/; max-age=86400";
+			document.cookie = "mature_content=true; domain=.9gag.com; path=/; max-age=86400";
+			document.cookie = "nsfw_ok=1; domain=.9gag.com; path=/; max-age=86400";
+			document.cookie = "user_preference=mature_allowed; domain=.9gag.com; path=/; max-age=86400";
+		`
+		
+		err := chromedp.Evaluate(script, nil).Do(ctx)
+		if err != nil {
+			log.Printf("⚠️ Failed to set 9GAG cookies: %v", err)
+		} else {
+			log.Printf("🍪 Set 9GAG age verification cookies")
 		}
-
-		for _, cookie := range cookies {
-			// Use chromedp.ActionFunc to set cookies manually
-			err := chromedp.ActionFunc(func(ctx context.Context) error {
-				// Set cookie using JavaScript execution as chromedp doesn't have direct SetCookies
-				script := fmt.Sprintf(`document.cookie = "%s=%s; domain=%s; path=%s"`, 
-					cookie.Name, cookie.Value, cookie.Domain, cookie.Path)
-				return chromedp.Evaluate(script, nil).Do(ctx)
-			}).Do(ctx)
-			
-			if err != nil {
-				log.Printf("⚠️ Failed to set 9GAG cookie %s: %v", cookie.Name, err)
-			}
-		}
-
-		log.Printf("🍪 Set 9GAG age verification cookies")
-		return nil
+		
+		return nil // Continue even if cookie setting fails
 	})
 }
 

@@ -1,0 +1,132 @@
+package services
+
+import (
+	"fmt"
+	"log"
+	"os"
+	"path/filepath"
+	"time"
+)
+
+// SmartDownloader handles media downloads with platform-specific strategies
+type SmartDownloader struct {
+	ytdlp    *YtDlpDownloader
+	browser  *UniversalBrowserExtractor
+	tempDir  string
+	workingDir string
+}
+
+// NewSmartDownloader creates a new smart downloader instance
+func NewSmartDownloader() *SmartDownloader {
+	workingDir, err := os.Getwd()
+	if err != nil {
+		log.Printf("Failed to get working directory: %v", err)
+		workingDir = "."
+	}
+	
+	tempDir := filepath.Join(workingDir, "temp")
+	os.MkdirAll(tempDir, 0755)
+	
+	return &SmartDownloader{
+		ytdlp:    NewYtDlpDownloader(),
+		browser:  NewUniversalBrowserExtractor(workingDir, tempDir),
+		tempDir:  tempDir,
+		workingDir: workingDir,
+	}
+}
+
+// DownloadMedia downloads media using the optimal strategy for the platform
+func (sd *SmartDownloader) DownloadMedia(url string) ([]*MediaInfo, error) {
+	startTime := time.Now()
+	
+	// Get the extraction strategy for this URL
+	strategy := GetExtractionStrategy(url)
+	strategy.LogStrategy()
+	
+	var lastErr error
+	
+	// Try each method in order
+	for _, method := range strategy.Methods {
+		methodStartTime := time.Now()
+		
+		switch method {
+		case MethodYtDlp:
+			log.Printf("🎯 Trying yt-dlp extraction for %s", strategy.Platform)
+			mediaInfos, err := sd.tryYtDlpExtraction(url, strategy.Platform)
+			methodDuration := time.Since(methodStartTime)
+			
+			if err == nil && len(mediaInfos) > 0 {
+				log.Printf("✅ yt-dlp extraction succeeded with %d items", len(mediaInfos))
+				LogExtraction(strategy.Platform, url, "yt-dlp", true, len(mediaInfos), time.Since(startTime))
+				return mediaInfos, nil
+			}
+			lastErr = err
+			log.Printf("❌ yt-dlp extraction failed: %v", err)
+			LogExtraction(strategy.Platform, url, "yt-dlp", false, 0, methodDuration)
+			
+		case MethodBrowser:
+			log.Printf("🌐 Trying browser extraction for %s", strategy.Platform)
+			mediaInfos, err := sd.browser.ExtractMedia(url)
+			methodDuration := time.Since(methodStartTime)
+			
+			if err == nil && len(mediaInfos) > 0 {
+				log.Printf("✅ Browser extraction succeeded with %d items", len(mediaInfos))
+				LogExtraction(strategy.Platform, url, "browser", true, len(mediaInfos), time.Since(startTime))
+				return mediaInfos, nil
+			}
+			lastErr = err
+			log.Printf("❌ Browser extraction failed: %v", err)
+			LogExtraction(strategy.Platform, url, "browser", false, 0, methodDuration)
+			
+		case MethodFixedLink:
+			if strategy.HasFixedLink {
+				log.Printf("🔗 Returning fixed link as fallback")
+				fixedURL := strategy.GetFixedURL(url)
+				if fixedURL != "" {
+					// Return a text-only MediaInfo with the fixed link
+					LogExtraction(strategy.Platform, url, "fixed-link", true, 1, time.Since(startTime))
+					return []*MediaInfo{{
+						Type:    "text",
+						URL:     url,
+						Caption: fixedURL,
+						Filename: "",
+					}}, nil
+				}
+			}
+		}
+	}
+	
+	// If all methods failed, return error
+	totalDuration := time.Since(startTime)
+	LogExtraction(strategy.Platform, url, "all-methods", false, 0, totalDuration)
+	return nil, fmt.Errorf("all extraction methods failed for %s: %v", url, lastErr)
+}
+
+// tryYtDlpExtraction attempts to extract media using yt-dlp with platform-specific logic
+func (sd *SmartDownloader) tryYtDlpExtraction(url string, platform string) ([]*MediaInfo, error) {
+	// Use platform-specific methods that already exist
+	switch platform {
+	case "twitter":
+		return sd.ytdlp.DownloadTwitterMedia(url)
+	case "instagram":
+		return sd.ytdlp.DownloadInstagramMedia(url)
+	case "tiktok":
+		return sd.ytdlp.DownloadTikTokMedia(url)
+	case "youtube":
+		return sd.ytdlp.DownloadYouTubeMedia(url)
+	case "9gag":
+		return sd.ytdlp.Download9GAGMedia(url)
+	default:
+		return sd.ytdlp.DownloadMedia(url)
+	}
+}
+
+// IsAvailable checks if the downloader is available
+func (sd *SmartDownloader) IsAvailable() bool {
+	return sd.ytdlp.IsAvailable()
+}
+
+// CleanupFile removes a temporary file
+func (sd *SmartDownloader) CleanupFile(filename string) {
+	sd.ytdlp.CleanupFile(filename)
+}

@@ -6,6 +6,8 @@ import (
 	"log"
 	"os"
 	"strings"
+	"sync"
+	"time"
 	"github.com/timoffmax/social-link-bot/model/api/request/message"
 	"github.com/timoffmax/social-link-bot/model/api/request/payload"
 	"github.com/timoffmax/social-link-bot/model/api/response"
@@ -13,23 +15,47 @@ import (
 	"github.com/timoffmax/social-link-bot/services"
 )
 
+var (
+	processedUpdates = make(map[int64]bool)
+	updatesMutex     sync.RWMutex
+)
+
 func listenForUpdates() {
 	var offset int
+	isFirstRun := true
+
+	// Start a goroutine to periodically clean up old processed update IDs
+	go func() {
+		ticker := time.NewTicker(10 * time.Minute)
+		defer ticker.Stop()
+		for range ticker.C {
+			cleanupOldUpdates()
+		}
+	}()
 
 	for {
-		lastProcessedUpd := processRecentUpdates(offset)
+		lastProcessedUpd := processRecentUpdates(offset, isFirstRun)
 
 		if nil != lastProcessedUpd {
 			offset = lastProcessedUpd.UpdateId + 1
 		}
+		
+		isFirstRun = false
 	}
 }
 
-func processRecentUpdates(offset int) *response.TgUpdate {
+func processRecentUpdates(offset int, isFirstRun bool) *response.TgUpdate {
 	var lastProcessedUpd *response.TgUpdate
 	updates := getRecentUpdates(offset)
 
 	for _, update := range updates {
+		// Skip old updates on first run (older than 1 minute)
+		if isFirstRun && isUpdateTooOld(update) {
+			log.Printf("Skipping old update %d (too old for first run)", update.UpdateId)
+			lastProcessedUpd = update
+			continue
+		}
+		
 		processUpdate(update)
 		lastProcessedUpd = update
 	}
@@ -50,6 +76,16 @@ func getRecentUpdates(offset int) []*response.TgUpdate {
 }
 
 func processUpdate(upd *response.TgUpdate) {
+	// Check for duplicate updates
+	updatesMutex.Lock()
+	if processedUpdates[int64(upd.UpdateId)] {
+		log.Printf("🔄 [DUPLICATE] Skipping already processed update %d", upd.UpdateId)
+		updatesMutex.Unlock()
+		return
+	}
+	processedUpdates[int64(upd.UpdateId)] = true
+	updatesMutex.Unlock()
+
 	var origMessage response.TgMessage
 	var origUser response.TgUser
 	var origChat response.TgChat
@@ -75,20 +111,21 @@ func processUpdate(upd *response.TgUpdate) {
 		return
 	}
 
-	// Initialize downloader
-	downloader := services.NewYtDlpDownloader()
+	// Initialize smart downloader
+	downloader := services.NewSmartDownloader()
 	
-	// Check if yt-dlp is available, fallback to fixed links if not
+	// Check if downloader is available, fallback to fixed links if not
 	if !downloader.IsAvailable() {
-		log.Println("yt-dlp not available, falling back to fixed links")
+		log.Println("Downloader not available, falling back to fixed links")
 		sendFixedLinks(&origMessage, &origChat)
 		return
 	}
 
 	// Process each social media link
 	for i, socialUrl := range socialLinks {
-		log.Printf("Processing link %d/%d: %s", i+1, len(socialLinks), socialUrl)
+		log.Printf("🔗 [DEBUG] Processing link %d/%d: %s", i+1, len(socialLinks), socialUrl)
 		processMediaDownload(socialUrl, &origChat, downloader)
+		log.Printf("🏁 [DEBUG] Finished processing link %d/%d: %s", i+1, len(socialLinks), socialUrl)
 	}
 }
 
@@ -103,66 +140,41 @@ func sendFixedLinks(origMessage *response.TgMessage, origChat *response.TgChat) 
 
 		requestPayload.Text = fixedUrl
 
-		message.NewSendMessage(requestPayload)
+		response := message.NewSendMessage(requestPayload)
+		services.LogTelegramMessage(origChat.Id, "fixed-link", response != nil, "")
 	}
 }
 
-func processMediaDownload(url string, origChat *response.TgChat, downloader *services.YtDlpDownloader) {
+func processMediaDownload(url string, origChat *response.TgChat, downloader *services.SmartDownloader) {
+	log.Printf("🚀 [DEBUG] Starting processMediaDownload for URL: %s", url)
 	// Send "typing" status to indicate processing
 	// (You could implement sendChatAction here)
 
-	// Try to download media using platform-specific methods
-	var mediaInfos []*services.MediaInfo
-	var err error
-	
-	if strings.Contains(url, "twitter.com") || strings.Contains(url, "x.com") {
-		mediaInfos, err = downloader.DownloadTwitterMedia(url)
-	} else if strings.Contains(url, "instagram.com") {
-		mediaInfos, err = downloader.DownloadInstagramMedia(url)
-	} else if strings.Contains(url, "tiktok.com") {
-		mediaInfos, err = downloader.DownloadTikTokMedia(url)
-	} else if strings.Contains(url, "youtube.com") || strings.Contains(url, "youtu.be") {
-		mediaInfos, err = downloader.DownloadYouTubeMedia(url)
-	} else if strings.Contains(url, "9gag.com") {
-		mediaInfos, err = downloader.Download9GAGMedia(url)
-	} else {
-		mediaInfos, err = downloader.DownloadMedia(url)
-	}
+	// Try to download media using smart downloader
+	mediaInfos, err := downloader.DownloadMedia(url)
 	if err != nil {
 		log.Printf("Failed to download media from %s: %v", url, err)
 		
-		// For Twitter/X posts, try to get text content even if no media found
-		if strings.Contains(url, "twitter.com") || strings.Contains(url, "x.com") {
-			if tweetText := tryGetTweetText(url, downloader); tweetText != "" {
-				log.Printf("No media found, but extracted tweet text: %s", tweetText)
-				textMsg := payload.TgPlSendMessage{
-					ChatId:    origChat.Id,
-					ParseMode: payload.ParseModeHTML,
-					Text:      fmt.Sprintf("📝 Tweet content:\n\n%s\n\n🔗 <a href=\"%s\">View original</a>", tweetText, url),
-				}
-				message.NewSendMessage(textMsg)
-				return
-			}
+		// Send error message
+		errorMsg := payload.TgPlSendMessage{
+			ChatId: origChat.Id,
+			Text:   getErrorMessage(url),
 		}
-		
-		// Fallback to sending fixed link
-		fixedUrl := getFixedUrl(url)
-		if fixedUrl != "" {
-			log.Printf("Falling back to fixed link: %s", fixedUrl)
-			fallbackMsg := payload.TgPlSendMessage{
-				ChatId:    origChat.Id,
-				ParseMode: payload.ParseModeHTML,
-				Text:      fixedUrl,
-			}
-			message.NewSendMessage(fallbackMsg)
-		} else {
-			// If no fixed link available, send error
-			errorMsg := payload.TgPlSendMessage{
-				ChatId: origChat.Id,
-				Text:   fmt.Sprintf("❌ Failed to download media from %s", url),
-			}
-			message.NewSendMessage(errorMsg)
+		response := message.NewSendMessage(errorMsg)
+		services.LogTelegramMessage(origChat.Id, "error", response != nil, "")
+		return
+	}
+	
+	// Check if this is a fixed link response (text-only with no filename)
+	if len(mediaInfos) == 1 && mediaInfos[0].Type == "text" && mediaInfos[0].Filename == "" {
+		// Send the fixed link
+		fixedLinkMsg := payload.TgPlSendMessage{
+			ChatId:    origChat.Id,
+			ParseMode: payload.ParseModeHTML,
+			Text:      mediaInfos[0].Caption,
 		}
+		response := message.NewSendMessage(fixedLinkMsg)
+		services.LogTelegramMessage(origChat.Id, "fixed-link", response != nil, "")
 		return
 	}
 
@@ -181,13 +193,26 @@ func processMediaDownload(url string, origChat *response.TgChat, downloader *ser
 			ChatId: origChat.Id,
 			Text:   "📥 Downloaded media, sending...",
 		}
-		message.NewSendMessage(confirmMsg)
-		// Note: NewSendMessage automatically sends the message
-		log.Printf("✅ Successfully sent confirmation message to chat %d", origChat.Id)
+		response := message.NewSendMessage(confirmMsg)
+		success := response != nil
+		services.LogTelegramMessage(origChat.Id, "confirmation", success, "")
+		if success {
+			log.Printf("✅ Successfully sent confirmation message to chat %d", origChat.Id)
+		}
 	}
 
 	// Group photos and send them together, send other media individually
 	log.Printf("Downloaded %d media files from %s", len(mediaInfos), url)
+	
+	// Debug: Log all media items
+	for i, media := range mediaInfos {
+		captionPreview := media.Caption
+		if len(captionPreview) > 50 {
+			captionPreview = captionPreview[:50] + "..."
+		}
+		log.Printf("🔍 [DEBUG] Media %d: Type=%s, URL=%s, Caption=%s, Filename=%s", 
+			i+1, media.Type, media.URL, captionPreview, media.Filename)
+	}
 	
 	// Separate photos from other media types
 	var photos []*services.MediaInfo
@@ -293,10 +318,31 @@ func processMediaDownload(url string, origChat *response.TgChat, downloader *ser
 func sendMediaFile(mediaInfo *services.MediaInfo, origChat *response.TgChat) error {
 	log.Printf("Sending media to chat ID: %d", origChat.Id)
 	
-	// Decode HTML entities and limit caption length to Telegram's 1024 character limit
+	// Decode HTML entities
 	caption := html.UnescapeString(mediaInfo.Caption)
-	if len(caption) > 1000 {
-		caption = caption[:997] + "..."
+	
+	// For Twitter/X posts, handle long text intelligently
+	if (strings.Contains(mediaInfo.URL, "twitter.com") || strings.Contains(mediaInfo.URL, "x.com")) && 
+	   len(caption) > 500 && mediaInfo.Type != "text" {
+		log.Printf("🐦 Long Twitter post detected (%d chars), sending text and media separately", len(caption))
+		
+		// Send text first (only if it's not a generic message)
+		if caption != "Downloaded from Twitter/X" && caption != "Downloaded from Twitter" && caption != "" {
+			textPayload := payload.TgPlSendMessage{
+				ChatId: origChat.Id,
+				Text:   caption,
+			}
+			message.NewSendMessage(textPayload)
+			log.Printf("✅ Sent Twitter text content")
+		}
+		
+		// Send media without caption 
+		caption = ""
+	} else {
+		// Normal handling - limit caption length to Telegram's 1024 character limit
+		if len(caption) > 1000 {
+			caption = caption[:997] + "..."
+		}
 	}
 	
 	switch mediaInfo.Type {
@@ -543,4 +589,33 @@ func tryGetTweetText(url string, downloader *services.YtDlpDownloader) string {
 	}
 	
 	return ""
+}
+
+
+// isUpdateTooOld checks if an update is older than 1 minute
+func isUpdateTooOld(update *response.TgUpdate) bool {
+	if update.Message.Date == 0 {
+		return false
+	}
+	
+	updateTime := time.Unix(int64(update.Message.Date), 0)
+	oneMinuteAgo := time.Now().Add(-1 * time.Minute)
+	
+	return updateTime.Before(oneMinuteAgo)
+}
+
+// cleanupOldUpdates removes processed update IDs older than 1 hour to prevent memory leaks
+func cleanupOldUpdates() {
+	updatesMutex.Lock()
+	defer updatesMutex.Unlock()
+	
+	// Keep only the last 1000 update IDs to prevent unbounded memory growth
+	if len(processedUpdates) > 1000 {
+		log.Printf("🧹 Cleaning up old processed update IDs (current count: %d)", len(processedUpdates))
+		
+		// Clear the map and start fresh
+		processedUpdates = make(map[int64]bool)
+		
+		log.Printf("✅ Cleaned up processed update IDs")
+	}
 }
