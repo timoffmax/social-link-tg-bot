@@ -533,11 +533,12 @@ func (te *TwitterExtractor) parseEmbedResponse(response, tweetID string) ([]*Med
 	
 	// Extract tweet text from the HTML
 	tweetText := ""
+	rawTweetText := ""
 	textPattern := regexp.MustCompile(`<p[^>]*lang="[^"]*"[^>]*dir="[^"]*"[^>]*>(.*?)</p>`)
 	if matches := textPattern.FindStringSubmatch(html); len(matches) > 1 {
-		rawText := matches[1]
+		rawTweetText = matches[1]
 		// Use the proper cleaning function that removes pic.twitter.com links
-		tweetText = te.cleanAndFormatTweetText(rawText)
+		tweetText = te.cleanAndFormatTweetText(rawTweetText)
 	}
 	
 	log.Printf("📝 Extracted tweet text from embed: %s", tweetText)
@@ -575,14 +576,39 @@ func (te *TwitterExtractor) parseEmbedResponse(response, tweetID string) ([]*Med
 		return nil, fmt.Errorf("no media or text found in embed")
 	}
 	
-	// Just return text without adding pic.twitter.com links or fixupx references
-	textMedia := &MediaInfo{
-		Type:    "text",
-		URL:     fmt.Sprintf("https://x.com/i/web/status/%s", tweetID),
-		Caption: tweetText,
-		Filename: "",
+	// Check if the original raw text contained pic.twitter.com references (indicating photos exist)
+	picPattern := regexp.MustCompile(`pic\.twitter\.com/([a-zA-Z0-9]+)`)
+	picMatches := picPattern.FindAllStringSubmatch(rawTweetText, -1)
+	hasPhotoReferences := len(picMatches) > 0
+	
+	if hasPhotoReferences {
+		// Photos exist but we couldn't download them - provide fixupx link
+		log.Printf("🖼️ Found %d pic.twitter.com references but no direct media URLs", len(picMatches))
+		
+		username, _ := te.extractUsernameFromEmbedData(embedData)
+		if username == "" {
+			username = "user"
+		}
+		fixedURL := fmt.Sprintf("https://fixupx.com/%s/status/%s", username, tweetID)
+		caption := fmt.Sprintf("%s\n\n🖼️ Photos: %s", tweetText, fixedURL)
+		
+		textMedia := &MediaInfo{
+			Type:    "text",
+			URL:     fmt.Sprintf("https://x.com/i/web/status/%s", tweetID),
+			Caption: caption,
+			Filename: "",
+		}
+		mediaInfos = append(mediaInfos, textMedia)
+	} else {
+		// Text-only tweet - just return clean text
+		textMedia := &MediaInfo{
+			Type:    "text",
+			URL:     fmt.Sprintf("https://x.com/i/web/status/%s", tweetID),
+			Caption: tweetText,
+			Filename: "",
+		}
+		mediaInfos = append(mediaInfos, textMedia)
 	}
-	mediaInfos = append(mediaInfos, textMedia)
 	
 	return mediaInfos, nil
 }
