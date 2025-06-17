@@ -17,6 +17,8 @@ type VideoConverter struct {
 }
 
 func NewVideoConverter(workingDir, tempDir string) *VideoConverter {
+	log.Printf("🎬 Initializing VideoConverter with workingDir: %s, tempDir: %s", workingDir, tempDir)
+	
 	vc := &VideoConverter{
 		tempDir:    tempDir,
 		workingDir: workingDir,
@@ -29,15 +31,19 @@ func NewVideoConverter(workingDir, tempDir string) *VideoConverter {
 		log.Printf("🎬 VideoConverter initialized with ffmpeg at: %s", vc.ffmpegPath)
 	} else {
 		log.Printf("⚠️ VideoConverter initialized without ffmpeg - conversion not available")
+		log.Printf("⚠️ Working directory was: %s", workingDir)
 	}
 	
 	return vc
 }
 
 func (vc *VideoConverter) findFfmpeg() string {
+	log.Printf("🔍 Starting ffmpeg search...")
+	
 	// Try different possible ffmpeg locations
 	possiblePaths := []string{
 		"ffmpeg",                                    // System PATH
+		"/home/botuser/bin/ffmpeg",                   // Production user installation
 		"/usr/bin/ffmpeg",                          // Standard system location
 		"/usr/local/bin/ffmpeg",                    // Local installation
 		"/opt/ffmpeg/bin/ffmpeg",                   // Custom installation
@@ -46,8 +52,12 @@ func (vc *VideoConverter) findFfmpeg() string {
 	}
 	
 	for _, path := range possiblePaths {
+		log.Printf("🔍 Testing ffmpeg path: %s", path)
 		if vc.testFfmpeg(path) {
+			log.Printf("✅ Found working ffmpeg at: %s", path)
 			return path
+		} else {
+			log.Printf("❌ ffmpeg test failed at: %s", path)
 		}
 	}
 	

@@ -333,8 +333,9 @@ func sendMediaFile(mediaInfo *services.MediaInfo, origChat *response.TgChat) err
 		if strings.HasSuffix(strings.ToLower(mediaInfo.Filename), ".webm") {
 			log.Printf("🎬 WebM video detected, attempting conversion to MP4")
 			
-			// Initialize video converter
-			videoConverter := services.NewVideoConverter(".", os.TempDir())
+			// Initialize video converter with proper working directory
+			workingDir, _ := os.Getwd()
+			videoConverter := services.NewVideoConverter(workingDir, os.TempDir())
 			
 			if videoConverter.IsAvailable() {
 				// Try to convert WebM to MP4
