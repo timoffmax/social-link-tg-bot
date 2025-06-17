@@ -573,16 +573,58 @@ func (te *TikTokExtractor) parseHTMLForMedia(html string, postID string, usernam
 	log.Printf("📝 Extracted TikTok text: %.200s", postText)
 	
 	// Extract media URLs using regex patterns
-	mediaURLs := te.extractMediaURLs(html)
-	log.Printf("📸 Extracted %d TikTok media URLs: %v", len(mediaURLs), mediaURLs)
+	allMediaURLs := te.extractMediaURLs(html)
+	log.Printf("📸 Extracted %d TikTok media URLs: %v", len(allMediaURLs), allMediaURLs)
 	
-	// Download each media item
-	for i, mediaURL := range mediaURLs {
+	// Separate video URLs from image URLs for smarter prioritization
+	var videoURLs []string
+	var imageURLs []string
+	
+	for _, url := range allMediaURLs {
+		if strings.Contains(url, ".mp4") || strings.Contains(url, "video/") || 
+		   strings.Contains(url, "playAddr") || strings.Contains(url, "downloadAddr") {
+			videoURLs = append(videoURLs, url)
+		} else if strings.Contains(url, ".jpeg") || strings.Contains(url, ".jpg") || 
+				  strings.Contains(url, ".png") || strings.Contains(url, ".webp") ||
+				  strings.Contains(url, "photomode-image") {
+			// Only include actual content images, filter out avatars and covers
+			if !strings.Contains(url, "cropcenter") && !strings.Contains(url, "zoomcover") &&
+			   !strings.Contains(url, "avatar") && !strings.Contains(url, "profile") {
+				imageURLs = append(imageURLs, url)
+			}
+		} else {
+			// Unknown format, try as image
+			imageURLs = append(imageURLs, url)
+		}
+	}
+	
+	log.Printf("🎥 Found %d video URLs: %v", len(videoURLs), videoURLs)
+	log.Printf("🖼️ Found %d image URLs (filtered): %v", len(imageURLs), imageURLs)
+	
+	// For regular video posts (not photo slideshows), prioritize video content
+	var prioritizedURLs []string
+	if len(videoURLs) > 0 {
+		log.Printf("🎬 Detected video content - prioritizing video URLs")
+		prioritizedURLs = append(prioritizedURLs, videoURLs...)
+		// Only add images if no videos can be downloaded (fallback)
+	} else if len(imageURLs) > 0 {
+		log.Printf("📷 Detected photo slideshow - using image URLs")
+		prioritizedURLs = append(prioritizedURLs, imageURLs...)
+	} else {
+		log.Printf("❓ No clear video or image content found, trying all URLs")
+		prioritizedURLs = allMediaURLs
+	}
+	
+	// Download each media item with the prioritized order
+	var successfulDownloads int
+	for i, mediaURL := range prioritizedURLs {
 		mediaInfo, err := te.downloadMedia(mediaURL, postID, i)
 		if err != nil {
 			log.Printf("⚠️ Failed to download TikTok media %d: %v", i, err)
 			continue
 		}
+		
+		successfulDownloads++
 		
 		// Use post text as caption
 		if postText != "" {
@@ -595,6 +637,33 @@ func (te *TikTokExtractor) parseHTMLForMedia(html string, postID string, usernam
 		}
 		
 		mediaInfos = append(mediaInfos, mediaInfo)
+		
+		// For video posts, if we successfully downloaded a video, we're done
+		if len(videoURLs) > 0 && successfulDownloads > 0 && strings.Contains(mediaURL, ".mp4") {
+			log.Printf("✅ Successfully downloaded video content, stopping here")
+			break
+		}
+	}
+	
+	// If we couldn't download any videos but there were video URLs, try images as fallback
+	if len(mediaInfos) == 0 && len(videoURLs) > 0 && len(imageURLs) > 0 {
+		log.Printf("🔄 Video downloads failed, trying image fallback")
+		for i, mediaURL := range imageURLs {
+			mediaInfo, err := te.downloadMedia(mediaURL, postID, i)
+			if err != nil {
+				log.Printf("⚠️ Failed to download fallback image %d: %v", i, err)
+				continue
+			}
+			
+			// Use post text as caption
+			if postText != "" {
+				mediaInfo.Caption = postText
+			} else if mediaInfo.Caption == "" && i == 0 {
+				mediaInfo.Caption = "🎵 TikTok (video unavailable)"
+			}
+			
+			mediaInfos = append(mediaInfos, mediaInfo)
+		}
 	}
 	
 	// If no media found, return empty (let fallback handle it)
