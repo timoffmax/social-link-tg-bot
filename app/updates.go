@@ -363,8 +363,13 @@ func sendPhotosAsMediaGroup(photos []*services.MediaInfo, origChat *response.TgC
 		}
 		
 		// Only add caption to the first photo to avoid clutter
-		if i == 0 && photoInfo.Caption != "" && !strings.HasPrefix(photoInfo.Caption, "#") {
-			mediaItem.Caption = photoInfo.Caption
+		if i == 0 && photoInfo.Caption != "" {
+			// Decode HTML entities and limit caption length to Telegram's 1024 character limit
+			caption := html.UnescapeString(photoInfo.Caption)
+			if len(caption) > 1000 {
+				caption = caption[:997] + "..."
+			}
+			mediaItem.Caption = caption
 		}
 		
 		mediaArray = append(mediaArray, mediaItem)

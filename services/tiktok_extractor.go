@@ -2,6 +2,7 @@ package services
 
 import (
 	"compress/gzip"
+	"context"
 	"fmt"
 	"io"
 	"log"
@@ -11,6 +12,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	
+	"github.com/chromedp/chromedp"
 )
 
 type TikTokExtractor struct {
@@ -59,6 +62,7 @@ func (te *TikTokExtractor) ExtractTikTokPost(tiktokURL string) ([]*MediaInfo, er
 		te.extractViaDirectScraping,
 		te.extractViaSlideshowAPI,
 		te.extractViaVxTikTokProxy,
+		te.extractViaHeadlessBrowser,
 		te.extractViaSimpleTextFallback,
 	}
 	
@@ -308,6 +312,208 @@ func (te *TikTokExtractor) extractViaVxTikTokProxy(tiktokURL string, postID stri
 	
 	// Parse vxtiktok HTML for media
 	return te.parseVxTikTokHTML(bodyStr, postID, username)
+}
+
+func (te *TikTokExtractor) extractViaHeadlessBrowser(tiktokURL string, postID string, username string) ([]*MediaInfo, error) {
+	log.Printf("🌐 Trying headless browser extraction for TikTok post %s by @%s", postID, username)
+	
+	// Create a context with timeout
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+	
+	// Create Chrome instance with extensive logging suppression and cookie handling fixes
+	opts := append(chromedp.DefaultExecAllocatorOptions[:],
+		chromedp.DisableGPU,
+		chromedp.NoSandbox,
+		chromedp.Headless,
+		chromedp.UserAgent("Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.0 Mobile/15E148 Safari/604.1"),
+		chromedp.Flag("disable-web-security", true),
+		chromedp.Flag("disable-extensions", true),
+		chromedp.Flag("disable-plugins", true),
+		chromedp.Flag("disable-images", false), // We need images for TikTok
+		chromedp.Flag("disable-javascript", false), // We need JS for TikTok
+		chromedp.Flag("mute-audio", true),
+		chromedp.Flag("no-first-run", true),
+		chromedp.Flag("no-default-browser-check", true),
+		chromedp.Flag("disable-default-apps", true),
+		chromedp.Flag("disable-popup-blocking", true),
+		chromedp.Flag("disable-translate", true),
+		chromedp.Flag("disable-background-timer-throttling", true),
+		chromedp.Flag("disable-renderer-backgrounding", true),
+		chromedp.Flag("disable-backgrounding-occluded-windows", true),
+		chromedp.Flag("disable-ipc-flooding-protection", true),
+		chromedp.Flag("enable-features", "VizDisplayCompositor"),
+		// Extensive logging suppression
+		chromedp.Flag("log-level", "3"), // Only show fatal errors
+		chromedp.Flag("silent", true),
+		chromedp.Flag("disable-logging", true),
+		chromedp.Flag("quiet", true),
+		chromedp.Flag("disable-dev-shm-usage", true),
+		// Cookie-related error suppression
+		chromedp.Flag("disable-cookie-encryption", true),
+		chromedp.Flag("disable-sync", true),
+		chromedp.Flag("disable-background-networking", true),
+		chromedp.Flag("disable-component-update", true),
+		chromedp.Flag("disable-domain-reliability", true),
+		chromedp.Flag("disable-features", "VizDisplayCompositor,AudioServiceOutOfProcess"),
+		chromedp.Flag("no-sandbox", true),
+		chromedp.Flag("disable-setuid-sandbox", true),
+	)
+	
+	allocCtx, allocCancel := chromedp.NewExecAllocator(ctx, opts...)
+	defer allocCancel()
+	
+	// Create context with custom logger that filters out cookie errors
+	browserCtx, browserCancel := chromedp.NewContext(allocCtx, chromedp.WithLogf(func(string, ...interface{}) {}))
+	defer browserCancel()
+	
+	// Navigate to TikTok URL and wait for content to load
+	var htmlContent string
+	err := chromedp.Run(browserCtx,
+		chromedp.Navigate(tiktokURL),
+		chromedp.Sleep(5*time.Second), // Wait for JavaScript to load
+		chromedp.WaitVisible(`body`, chromedp.ByQuery),
+		chromedp.Sleep(3*time.Second), // Additional wait for slideshow content
+		chromedp.InnerHTML(`html`, &htmlContent, chromedp.ByQuery),
+	)
+	
+	if err != nil {
+		log.Printf("❌ Headless browser navigation failed: %v", err)
+		return nil, fmt.Errorf("headless browser navigation failed: %v", err)
+	}
+	
+	log.Printf("🌐 Retrieved HTML content from headless browser, length: %d", len(htmlContent))
+	
+	// Try to extract slideshow images specifically
+	mediaInfos, err := te.extractSlideshowFromHTML(htmlContent, postID, username)
+	if err != nil {
+		log.Printf("❌ Failed to extract slideshow from browser HTML: %v", err)
+		return nil, err
+	}
+	
+	if len(mediaInfos) == 0 {
+		log.Printf("❌ No slideshow media found in browser HTML")
+		return nil, fmt.Errorf("no slideshow media found")
+	}
+	
+	log.Printf("✅ Headless browser extracted %d media items", len(mediaInfos))
+	return mediaInfos, nil
+}
+
+func (te *TikTokExtractor) extractSlideshowFromHTML(html string, postID string, username string) ([]*MediaInfo, error) {
+	var mediaInfos []*MediaInfo
+	
+	// Extract post text from JavaScript-rendered content
+	postText := te.extractPostTextFromRenderedHTML(html)
+	log.Printf("📝 Extracted text from browser HTML: %.200s", postText)
+	
+	// Enhanced patterns specifically for slideshow images loaded by JavaScript
+	slideshowPatterns := []string{
+		// 2025 TikTok slideshow patterns after JavaScript execution
+		`<img[^>]*src="(https://[^"]*\.tiktokcdn\.com/[^"]*~tplv-photomode-image\.jpeg[^"]*)"[^>]*class="[^"]*ImgPhotoSlide[^"]*"`,
+		`<img[^>]*class="[^"]*ImgPhotoSlide[^"]*"[^>]*src="(https://[^"]*\.tiktokcdn\.com/[^"]*~tplv-photomode-image\.jpeg[^"]*)"`,
+		
+		// Swiper slide images
+		`<div[^>]*class="[^"]*swiper-slide[^"]*"[^>]*>.*?<img[^>]*src="(https://[^"]*photomode-image[^"]*\.jpeg[^"]*)"`,
+		`swiper-slide[^>]*>.*?<img[^>]*src="(https://[^"]*photomode-image[^"]*\.jpeg[^"]*)"`,
+		
+		// Any img tag with photomode-image in fully loaded HTML
+		`<img[^>]*src="(https://[^"]*photomode-image[^"]*\.jpeg[^"]*)"`,
+		
+		// Direct CDN URLs that might be in the loaded HTML
+		`(https://p[0-9]+-sign-[a-z]+\.tiktokcdn\.com/tos-[^"]*~tplv-photomode-image\.jpeg[^"]*)`,
+		`(https://[^"]*\.tiktokcdn\.com/[^"]*photomode-image[^"]*\.jpeg[^"]*)`,
+		
+		// Data attributes that might contain URLs
+		`data-src="(https://[^"]*photomode-image[^"]*\.jpeg[^"]*)"`,
+		`data-image="(https://[^"]*photomode-image[^"]*\.jpeg[^"]*)"`,
+		
+		// Background images in style attributes
+		`background-image:\s*url\((https://[^)]*photomode-image[^)]*\.jpeg[^)]*)\)`,
+	}
+	
+	var allURLs []string
+	
+	for i, pattern := range slideshowPatterns {
+		re := regexp.MustCompile(pattern)
+		matches := re.FindAllStringSubmatch(html, -1)
+		
+		if len(matches) > 0 {
+			log.Printf("🎯 Slideshow pattern %d matched %d times", i+1, len(matches))
+		}
+		
+		for _, match := range matches {
+			if len(match) > 1 {
+				url := te.cleanURL(match[1])
+				if url != "" {
+					allURLs = append(allURLs, url)
+				}
+			}
+		}
+	}
+	
+	// Remove duplicates using better deduplication for TikTok CDN URLs
+	seen := make(map[string]bool)
+	var uniqueURLs []string
+	for _, url := range allURLs {
+		if url == "" {
+			continue
+		}
+		
+		// Create a normalized base URL for duplicate detection
+		baseURL := url
+		
+		// For TikTok slideshow images, normalize by removing CDN server differences
+		if strings.Contains(url, "tiktokcdn.com") && strings.Contains(url, "~tplv-photomode-image") {
+			// Extract the unique image hash from the URL for better deduplication
+			// URL format: https://p16-sign-sg.tiktokcdn.com/tos-alisg-i-photomode-sg/ccc7d4750fae4a6da2ffdc1a75bdd30b~tplv-photomode-image.jpeg
+			if hashStart := strings.LastIndex(url, "/"); hashStart != -1 {
+				hashPart := url[hashStart+1:]
+				if tildeIndex := strings.Index(hashPart, "~"); tildeIndex != -1 {
+					imageHash := hashPart[:tildeIndex]
+					baseURL = imageHash // Use just the hash for deduplication
+				}
+			}
+		}
+		
+		if !seen[baseURL] {
+			seen[baseURL] = true
+			uniqueURLs = append(uniqueURLs, url)
+			log.Printf("✅ Added unique slideshow URL: %s", url)
+		} else {
+			log.Printf("⏭️ Skipping duplicate slideshow URL (same hash): %s", url)
+		}
+	}
+	
+	log.Printf("🖼️ Found %d unique slideshow image URLs", len(uniqueURLs))
+	
+	// Download each image
+	for i, mediaURL := range uniqueURLs {
+		mediaInfo, err := te.downloadMedia(mediaURL, postID, i)
+		if err != nil {
+			log.Printf("⚠️ Failed to download slideshow image %d: %v", i, err)
+			continue
+		}
+		
+		// Use post text as caption
+		if postText != "" {
+			mediaInfo.Caption = postText
+		} else {
+			// Only set default caption for the first media item
+			if i == 0 {
+				mediaInfo.Caption = "🎵 TikTok slideshow"
+			}
+		}
+		
+		mediaInfos = append(mediaInfos, mediaInfo)
+	}
+	
+	// If no media found, return error
+	if len(mediaInfos) == 0 {
+		return nil, fmt.Errorf("no slideshow images extracted from HTML")
+	}
+	
+	return mediaInfos, nil
 }
 
 func (te *TikTokExtractor) extractViaSimpleTextFallback(tiktokURL string, postID string, username string) ([]*MediaInfo, error) {
@@ -578,6 +784,147 @@ func (te *TikTokExtractor) extractMediaURLsFromJSON(jsonStr string) []string {
 	log.Printf("🔍 Found %d unique URLs after deduplication", len(uniqueURLs))
 	
 	return uniqueURLs
+}
+
+// extractPostTextFromRenderedHTML extracts post text from JavaScript-rendered HTML
+func (te *TikTokExtractor) extractPostTextFromRenderedHTML(html string) string {
+	// Enhanced patterns specifically for JavaScript-rendered TikTok content
+	patterns := []string{
+		// 2025 TikTok structure patterns - post content after JS rendering
+		`<h1[^>]*data-e2e="browse-video-desc"[^>]*>([^<]*)</h1>`,
+		`<div[^>]*data-e2e="browse-video-desc"[^>]*>([^<]*)</div>`,
+		`<span[^>]*data-e2e="browse-video-desc"[^>]*>([^<]*)</span>`,
+		
+		// Caption containers in rendered HTML
+		`<div[^>]*class="[^"]*tiktok-.*?caption[^"]*"[^>]*>([^<]*)</div>`,
+		`<div[^>]*class="[^"]*caption[^"]*"[^>]*>([^<]*)</div>`,
+		`<span[^>]*class="[^"]*caption[^"]*"[^>]*>([^<]*)</span>`,
+		
+		// Video info containers
+		`<div[^>]*class="[^"]*video-info[^"]*"[^>]*>.*?<span[^>]*>([^<]*)</span>`,
+		`<div[^>]*class="[^"]*video-meta[^"]*"[^>]*>.*?<span[^>]*>([^<]*)</span>`,
+		
+		// Photo slideshow specific containers
+		`<div[^>]*class="[^"]*DivPhotoModeContainer[^"]*"[^>]*>.*?<span[^>]*>([^<]*)</span>`,
+		`<div[^>]*class="[^"]*PhotoModeContainer[^"]*"[^>]*>.*?<span[^>]*>([^<]*)</span>`,
+		
+		// Common content containers that may contain the caption
+		`<div[^>]*class="[^"]*content[^"]*"[^>]*>.*?<span[^>]*>([^<]*)</span>`,
+		`<div[^>]*class="[^"]*description[^"]*"[^>]*>([^<]*)</div>`,
+		
+		// Try to find any meaningful text in script tags (JSON data)
+		`"desc":"([^"]*)"`,
+		`"description":"([^"]*)"`,
+		`"title":"([^"]*)"`,
+		`"content":"([^"]*)"`,
+		`"text":"([^"]*)"`,
+		`"caption":"([^"]*)"`,
+		
+		// Look for structured data
+		`<script[^>]*type="application/ld\+json"[^>]*>.*?"description":"([^"]*)"`,
+		`<script[^>]*type="application/ld\+json"[^>]*>.*?"text":"([^"]*)"`,
+		
+		// Fallback to any text that's not generic
+		`<h1[^>]*>([^<]*)</h1>`,
+		`<h2[^>]*>([^<]*)</h2>`,
+		`<p[^>]*>([^<]*)</p>`,
+		
+		// Meta description as absolute fallback
+		`<meta[^>]*property="og:description"[^>]*content="([^"]*)"`,
+		`<meta[^>]*name="description"[^>]*content="([^"]*)"`,
+	}
+	
+	for i, pattern := range patterns {
+		re := regexp.MustCompile(`(?s)` + pattern)
+		matches := re.FindStringSubmatch(html)
+		if len(matches) > 1 {
+			text := matches[1]
+			
+			// Decode JSON escape sequences
+			text = strings.ReplaceAll(text, `\"`, `"`)
+			text = strings.ReplaceAll(text, `\\n`, "\n")
+			text = strings.ReplaceAll(text, `\\t`, "\t")
+			text = strings.ReplaceAll(text, `\\r`, "\r")
+			text = strings.ReplaceAll(text, `\u002F`, "/")
+			text = strings.ReplaceAll(text, `\/`, "/")
+			
+			// Clean up HTML entities
+			text = strings.ReplaceAll(text, "&amp;", "&")
+			text = strings.ReplaceAll(text, "&quot;", "\"")
+			text = strings.ReplaceAll(text, "&lt;", "<")
+			text = strings.ReplaceAll(text, "&gt;", ">")
+			text = strings.ReplaceAll(text, "&nbsp;", " ")
+			
+			// Remove HTML tags
+			text = regexp.MustCompile(`<[^>]*>`).ReplaceAllString(text, "")
+			
+			text = strings.TrimSpace(text)
+			
+			// Skip empty, null, or generic content
+			if text != "" && text != "null" && !isGenericTikTokText(text) && len(text) > 3 {
+				// For non-meta patterns (first 20), prefer meaningful content
+				if i < 20 && (strings.Contains(strings.ToLower(text), "check out") || strings.Contains(strings.ToLower(text), "post")) {
+					// This looks like a meta description, continue searching
+					continue
+				}
+				
+				log.Printf("✅ Found meaningful text with pattern %d: %s", i+1, text)
+				return text
+			}
+		}
+	}
+	
+	// If no meaningful text found, try to extract from any visible text elements
+	// Look for the longest non-generic text
+	textCandidates := te.extractAllVisibleText(html)
+	if len(textCandidates) > 0 {
+		for _, candidate := range textCandidates {
+			if !isGenericTikTokText(candidate) && len(candidate) > 10 && 
+			   !strings.Contains(strings.ToLower(candidate), "check out") &&
+			   !strings.Contains(strings.ToLower(candidate), "post") {
+				log.Printf("✅ Found text candidate: %s", candidate)
+				return candidate
+			}
+		}
+	}
+	
+	return ""
+}
+
+// extractAllVisibleText extracts all visible text from HTML and returns candidates
+func (te *TikTokExtractor) extractAllVisibleText(html string) []string {
+	var candidates []string
+	
+	// Remove script and style tags
+	cleanHTML := regexp.MustCompile(`<script[^>]*>.*?</script>`).ReplaceAllString(html, "")
+	cleanHTML = regexp.MustCompile(`<style[^>]*>.*?</style>`).ReplaceAllString(cleanHTML, "")
+	
+	// Extract all text from various tags
+	textPatterns := []string{
+		`<h[1-6][^>]*>([^<]*)</h[1-6]>`,
+		`<p[^>]*>([^<]*)</p>`,
+		`<div[^>]*>([^<]*)</div>`,
+		`<span[^>]*>([^<]*)</span>`,
+		`<a[^>]*>([^<]*)</a>`,
+	}
+	
+	seen := make(map[string]bool)
+	for _, pattern := range textPatterns {
+		re := regexp.MustCompile(pattern)
+		matches := re.FindAllStringSubmatch(cleanHTML, -1)
+		for _, match := range matches {
+			if len(match) > 1 {
+				text := strings.TrimSpace(match[1])
+				// Filter out very short text, empty text, and already seen text
+				if len(text) > 5 && !seen[text] {
+					seen[text] = true
+					candidates = append(candidates, text)
+				}
+			}
+		}
+	}
+	
+	return candidates
 }
 
 func (te *TikTokExtractor) extractPostText(html string) string {
