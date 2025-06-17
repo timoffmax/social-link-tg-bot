@@ -585,8 +585,21 @@ func (te *TwitterExtractor) parseEmbedResponse(response, tweetID string) ([]*Med
 	
 	log.Printf("📝 Extracted tweet text from embed: %s", tweetText)
 	
+	// Look for quoted tweets in the embed HTML and resolve them
+	quotedTweetText, quotedTweetMedia := te.extractAndResolveQuotedTweets(html, tweetText)
+	if quotedTweetText != "" {
+		// Merge main tweet text with quoted tweet content
+		tweetText = te.mergeMainAndQuotedContent(tweetText, quotedTweetText)
+		log.Printf("📝 Merged with quoted tweet content: %s", tweetText)
+	}
+	
 	// Extract actual media URLs from embed HTML
 	var mediaInfos []*MediaInfo
+	
+	// Add quoted tweet media first (if any)
+	for _, quotedMedia := range quotedTweetMedia {
+		mediaInfos = append(mediaInfos, quotedMedia)
+	}
 	
 	// Try to extract actual pbs.twimg.com URLs from the embed HTML
 	mediaURLs := te.extractMediaURLs(html)
@@ -673,9 +686,307 @@ func (te *TwitterExtractor) isTextTruncated(text string) bool {
 	return false
 }
 
+// extractAndResolveQuotedTweets finds quoted tweet URLs and resolves their content
+func (te *TwitterExtractor) extractAndResolveQuotedTweets(html, mainText string) (string, []*MediaInfo) {
+	// Look for quoted tweet URLs in the HTML and text
+	quotedURLs := te.findQuotedTweetURLs(html, mainText)
+	if len(quotedURLs) == 0 {
+		return "", nil
+	}
+	
+	log.Printf("🔍 Found %d quoted tweet URLs to resolve", len(quotedURLs))
+	
+	// Resolve the first quoted tweet (avoid complexity of multiple quotes)
+	quotedURL := quotedURLs[0]
+	quotedText, quotedMedia, err := te.resolveQuotedTweetContent(quotedURL)
+	if err != nil {
+		log.Printf("❌ Failed to resolve quoted tweet %s: %v", quotedURL, err)
+		return "", nil
+	}
+	
+	return quotedText, quotedMedia
+}
+
+// findQuotedTweetURLs extracts quoted tweet URLs from HTML and text
+func (te *TwitterExtractor) findQuotedTweetURLs(html, text string) []string {
+	var urls []string
+	
+	// Patterns to find quoted tweet URLs
+	urlPatterns := []string{
+		// Direct Twitter URLs in text
+		`https://(?:twitter\.com|x\.com)/[^/\s]+/status/(\d+)`,
+		// From HTML href attributes
+		`href="(https://(?:twitter\.com|x\.com)/[^"]+/status/\d+)"`,
+		// From data attributes
+		`data-tweet-url="(https://[^"]+)"`,
+		// From embed data
+		`"url":"(https://(?:twitter\.com|x\.com)/[^"]+/status/\d+)"`,
+	}
+	
+	seen := make(map[string]bool)
+	
+	for _, pattern := range urlPatterns {
+		re := regexp.MustCompile(pattern)
+		matches := re.FindAllStringSubmatch(html+" "+text, -1)
+		for _, match := range matches {
+			if len(match) > 1 {
+				url := match[1]
+				if !seen[url] {
+					urls = append(urls, url)
+					seen[url] = true
+				}
+			}
+		}
+	}
+	
+	return urls
+}
+
+// resolveQuotedTweetContent extracts content from a quoted tweet URL using embed API
+func (te *TwitterExtractor) resolveQuotedTweetContent(quotedURL string) (string, []*MediaInfo, error) {
+	log.Printf("🔄 Resolving quoted tweet content from: %s", quotedURL)
+	
+	// Extract tweet ID and username from the quoted URL
+	tweetID, username, err := te.extractTweetDetails(quotedURL)
+	if err != nil {
+		return "", nil, fmt.Errorf("failed to extract quoted tweet details: %v", err)
+	}
+	
+	// Use embed API to get quoted tweet content (simpler than full extraction)
+	quotedText, quotedMedia, err := te.extractQuotedTweetViaEmbed(tweetID, username)
+	if err != nil {
+		log.Printf("❌ Failed to extract quoted tweet via embed: %v", err)
+		return "", nil, err
+	}
+	
+	log.Printf("✅ Resolved quoted tweet: %d chars text, %d media items", len(quotedText), len(quotedMedia))
+	return quotedText, quotedMedia, nil
+}
+
+// extractQuotedTweetViaEmbed uses embed API specifically for quoted tweets
+func (te *TwitterExtractor) extractQuotedTweetViaEmbed(tweetID, username string) (string, []*MediaInfo, error) {
+	// Use Twitter's oembed API for the quoted tweet
+	embedURL := fmt.Sprintf("https://publish.twitter.com/oembed?url=https://x.com/%s/status/%s&omit_script=true", username, tweetID)
+	
+	req, err := http.NewRequest("GET", embedURL, nil)
+	if err != nil {
+		return "", nil, fmt.Errorf("failed to create embed request: %v", err)
+	}
+	
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+	
+	resp, err := te.client.Do(req)
+	if err != nil {
+		return "", nil, fmt.Errorf("failed to fetch embed: %v", err)
+	}
+	defer resp.Body.Close()
+	
+	if resp.StatusCode != 200 {
+		return "", nil, fmt.Errorf("embed API returned status %d", resp.StatusCode)
+	}
+	
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", nil, fmt.Errorf("failed to read embed response: %v", err)
+	}
+	
+	// Parse JSON response
+	var embedResp struct {
+		HTML string `json:"html"`
+	}
+	
+	if err := json.Unmarshal(body, &embedResp); err != nil {
+		return "", nil, fmt.Errorf("failed to parse embed JSON: %v", err)
+	}
+	
+	html := embedResp.HTML
+	
+	// Extract text from quoted tweet embed
+	quotedText := ""
+	textPattern := regexp.MustCompile(`<p[^>]*lang="[^"]*"[^>]*dir="[^"]*"[^>]*>(.*?)</p>`)
+	if matches := textPattern.FindStringSubmatch(html); len(matches) > 1 {
+		quotedText = te.cleanAndFormatTweetText(matches[1])
+	}
+	
+	// Extract media URLs from quoted tweet
+	var quotedMedia []*MediaInfo
+	mediaURLs := te.extractMediaURLs(html)
+	
+	for i, mediaURL := range mediaURLs {
+		mediaInfo, err := te.downloadMedia(mediaURL, tweetID, i)
+		if err != nil {
+			log.Printf("⚠️ Failed to download quoted tweet media %d: %v", i, err)
+			continue
+		}
+		
+		// Mark as quoted tweet media
+		mediaInfo.Caption = "📄 From quoted tweet: " + quotedText
+		quotedMedia = append(quotedMedia, mediaInfo)
+	}
+	
+	return quotedText, quotedMedia, nil
+}
+
+// mergeMainAndQuotedContent combines main tweet and quoted tweet text properly
+func (te *TwitterExtractor) mergeMainAndQuotedContent(mainText, quotedText string) string {
+	if mainText == "" {
+		return quotedText
+	}
+	if quotedText == "" {
+		return mainText
+	}
+	
+	// Clean up any existing quoted tweet placeholders in main text
+	mainText = strings.ReplaceAll(mainText, "📄 [Contains quoted/linked tweet]", "")
+	mainText = strings.TrimSpace(mainText)
+	
+	// Format with clear separation
+	return mainText + "\n\n📄 Quoted Tweet:\n" + quotedText
+}
+
+// separateQuotedTweet identifies and formats quoted/retweeted content separately
+func (te *TwitterExtractor) separateQuotedTweet(text string) string {
+	// Patterns for identifying quoted tweets in various formats
+	quotedTweetPatterns := []struct {
+		pattern     string
+		replacement string
+	}{
+		// HTML structure patterns for quoted tweets
+		{
+			pattern: `<div[^>]*class="[^"]*QuoteTweet[^"]*"[^>]*>(.*?)</div>`,
+			replacement: "\n\n📄 Quoted Tweet:\n$1",
+		},
+		{
+			pattern: `<div[^>]*class="[^"]*quote[^"]*"[^>]*>(.*?)</div>`,
+			replacement: "\n\n📄 Quoted Tweet:\n$1",
+		},
+		{
+			pattern: `<blockquote[^>]*>(.*?)</blockquote>`,
+			replacement: "\n\n📄 Quoted Tweet:\n$1",
+		},
+		// Twitter API JSON patterns for quoted tweets
+		{
+			pattern: `"quoted_status"[^}]*"full_text"\s*:\s*"([^"]*)"`,
+			replacement: "\n\n📄 Quoted Tweet:\n$1",
+		},
+		{
+			pattern: `"retweeted_status"[^}]*"full_text"\s*:\s*"([^"]*)"`,
+			replacement: "\n\n🔄 Retweeted:\n$1",
+		},
+		// Modern Twitter structure patterns
+		{
+			pattern: `<div[^>]*data-testid="quoteTweet"[^>]*>(.*?)</div>`,
+			replacement: "\n\n📄 Quoted Tweet:\n$1",
+		},
+		{
+			pattern: `<article[^>]*data-testid="tweet"[^>]*>.*?<article[^>]*data-testid="tweet"[^>]*>(.*?)</article>.*?</article>`,
+			replacement: "$1\n\n📄 Quoted Tweet:\n$2", // This would need more complex handling
+		},
+	}
+	
+	// Apply patterns to separate quoted content
+	for _, pattern := range quotedTweetPatterns {
+		re := regexp.MustCompile(`(?s)` + pattern.pattern)
+		if re.MatchString(text) {
+			text = re.ReplaceAllString(text, pattern.replacement)
+			break // Only apply the first matching pattern
+		}
+	}
+	
+	// Handle common quote tweet indicators in plain text
+	// Look for patterns like "RT @username:" or "QT @username:"
+	rtPattern := regexp.MustCompile(`(?m)^(RT @[^:]+:)\s*(.*)`)
+	text = rtPattern.ReplaceAllString(text, "\n🔄 Retweeted ($1)\n$2")
+	
+	qtPattern := regexp.MustCompile(`(?m)^(QT @[^:]+:)\s*(.*)`)
+	text = qtPattern.ReplaceAllString(text, "\n📄 Quoted Tweet ($1)\n$2")
+	
+	// Handle embedded tweet URLs that indicate quotes/retweets
+	embedUrlPattern := regexp.MustCompile(`https://t\.co/[a-zA-Z0-9]+`)
+	embedMatches := embedUrlPattern.FindAllString(text, -1)
+	if len(embedMatches) > 0 {
+		// If we find t.co links, they might be quoted tweets
+		for _, embedUrl := range embedMatches {
+			// Replace t.co links with a note about quoted content
+			text = strings.ReplaceAll(text, embedUrl, "\n\n📄 [Contains quoted/linked tweet]")
+		}
+	}
+	
+	// Handle specific patterns for embedded quote tweet URLs from Twitter
+	twitterUrlPattern := regexp.MustCompile(`https://(?:twitter\.com|x\.com)/[^/]+/status/\d+`)
+	twitterMatches := twitterUrlPattern.FindAllString(text, -1)
+	if len(twitterMatches) > 0 {
+		// If we find actual Twitter URLs embedded in the text, mark them as quoted tweets
+		for _, twitterUrl := range twitterMatches {
+			text = strings.ReplaceAll(text, twitterUrl, "\n\n📄 Quoted Tweet: "+twitterUrl)
+		}
+	}
+	
+	// Detect and format conversation-style content (like the translation example)
+	// This handles cases where there's a main tweet content followed by dialogue/conversation
+	if strings.Contains(text, ":") && strings.Contains(text, "\n") {
+		// Check if this looks like a conversation format
+		lines := strings.Split(text, "\n")
+		var mainContent []string
+		var conversationContent []string
+		var inConversation bool
+		
+		for _, line := range lines {
+			line = strings.TrimSpace(line)
+			if line == "" {
+				if inConversation {
+					conversationContent = append(conversationContent, "")
+				} else {
+					mainContent = append(mainContent, "")
+				}
+				continue
+			}
+			
+			// Detect conversation patterns (Speaker: text format)
+			if regexp.MustCompile(`^[A-Za-z\s]+:\s`).MatchString(line) || 
+			   regexp.MustCompile(`^A fan:\s`).MatchString(line) || 
+			   regexp.MustCompile(`^Faye:\s`).MatchString(line) ||
+			   strings.HasPrefix(line, "Starts at minute") {
+				inConversation = true
+			}
+			
+			if inConversation {
+				conversationContent = append(conversationContent, line)
+			} else {
+				mainContent = append(mainContent, line)
+			}
+		}
+		
+		// If we detected conversation content, format it properly
+		if len(conversationContent) > 0 && len(mainContent) > 0 {
+			mainText := strings.Join(mainContent, "\n")
+			conversationText := strings.Join(conversationContent, "\n")
+			
+			if strings.TrimSpace(mainText) != "" && strings.TrimSpace(conversationText) != "" {
+				text = strings.TrimSpace(mainText) + "\n\n📄 Referenced content:\n" + strings.TrimSpace(conversationText)
+			}
+		}
+	}
+	
+	// Handle hashtags that might indicate the original content source
+	// This helps separate attribution from main content
+	hashtagPattern := regexp.MustCompile(`\n\s*(#[A-Za-z0-9_]+)\s*$`)
+	if match := hashtagPattern.FindStringSubmatch(text); len(match) > 1 {
+		// Move hashtag to separate line with context
+		hashtag := match[1]
+		text = hashtagPattern.ReplaceAllString(text, "")
+		text = strings.TrimSpace(text) + "\n\n📌 " + hashtag
+	}
+	
+	return text
+}
+
 // cleanAndFormatTweetText cleans HTML and preserves proper formatting
 func (te *TwitterExtractor) cleanAndFormatTweetText(rawText string) string {
 	text := rawText
+	
+	// First, try to separate main tweet from quoted tweet
+	text = te.separateQuotedTweet(text)
 	
 	// Preserve line breaks from various HTML elements
 	text = strings.ReplaceAll(text, "<br>", "\n")
@@ -714,13 +1025,25 @@ func (te *TwitterExtractor) cleanAndFormatTweetText(rawText string) string {
 	// Clean up multiple consecutive newlines but preserve intentional spacing
 	text = regexp.MustCompile(`\n{3,}`).ReplaceAllString(text, "\n\n")
 	
-	// Clean up spaces but preserve line structure
+	// Clean up spaces but preserve line structure and formatting
 	lines := strings.Split(text, "\n")
 	var cleanedLines []string
-	for _, line := range lines {
+	
+	for i, line := range lines {
 		cleanedLine := strings.TrimSpace(line)
+		
+		// Always include non-empty lines
 		if cleanedLine != "" {
 			cleanedLines = append(cleanedLines, cleanedLine)
+		} else {
+			// For empty lines, preserve them if they're not at the start/end
+			// and if they're not consecutive (avoid multiple empty lines)
+			if i > 0 && i < len(lines)-1 {
+				// Only add empty line if the previous added line wasn't empty
+				if len(cleanedLines) > 0 && cleanedLines[len(cleanedLines)-1] != "" {
+					cleanedLines = append(cleanedLines, "")
+				}
+			}
 		}
 	}
 	
@@ -1163,11 +1486,24 @@ func (te *TwitterExtractor) parseFixupxHTML(html string, tweetID string, usernam
 	tweetText := te.extractFixupxTweetText(html)
 	log.Printf("📝 Extracted tweet text from fixupx: %.200s", tweetText)
 	
+	// Look for quoted tweets in the fixupx HTML and resolve them
+	quotedTweetText, quotedTweetMedia := te.extractAndResolveQuotedTweets(html, tweetText)
+	if quotedTweetText != "" {
+		// Merge main tweet text with quoted tweet content
+		tweetText = te.mergeMainAndQuotedContent(tweetText, quotedTweetText)
+		log.Printf("📝 Merged with quoted tweet content from fixupx: %s", tweetText)
+	}
+	
 	// Extract media URLs from fixupx page
 	mediaURLs := te.extractFixupxMediaURLs(html)
 	log.Printf("📸 Extracted %d media URLs from fixupx: %v", len(mediaURLs), mediaURLs)
 	
-	// Download each media item
+	// Add quoted tweet media first (if any)
+	for _, quotedMedia := range quotedTweetMedia {
+		mediaInfos = append(mediaInfos, quotedMedia)
+	}
+	
+	// Download each media item from main tweet
 	for i, mediaURL := range mediaURLs {
 		mediaInfo, err := te.downloadMedia(mediaURL, tweetID, i)
 		if err != nil {

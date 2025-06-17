@@ -48,16 +48,53 @@ func processRecentUpdates(offset int, isFirstRun bool) *response.TgUpdate {
 	var lastProcessedUpd *response.TgUpdate
 	updates := getRecentUpdates(offset)
 
+	if len(updates) == 0 {
+		return nil
+	}
+
+	// Filter out old updates on first run
+	var validUpdates []*response.TgUpdate
 	for _, update := range updates {
-		// Skip old updates on first run (older than 1 minute)
 		if isFirstRun && isUpdateTooOld(update) {
 			log.Printf("Skipping old update %d (too old for first run)", update.UpdateId)
 			lastProcessedUpd = update
 			continue
 		}
+		validUpdates = append(validUpdates, update)
+	}
+
+	// Process updates concurrently for better performance
+	if len(validUpdates) == 1 {
+		// Single update - process directly
+		log.Printf("📱 [SINGLE UPDATE] Processing update %d", validUpdates[0].UpdateId)
+		processUpdate(validUpdates[0])
+		lastProcessedUpd = validUpdates[0]
+	} else if len(validUpdates) > 1 {
+		// Multiple updates - process concurrently
+		log.Printf("🚀 [MULTI-UPDATE] Starting concurrent processing of %d updates", len(validUpdates))
+		var wg sync.WaitGroup
 		
-		processUpdate(update)
-		lastProcessedUpd = update
+		for i, update := range validUpdates {
+			wg.Add(1)
+			go func(index int, upd *response.TgUpdate) {
+				defer wg.Done()
+				log.Printf("📱 [UPDATE-THREAD-%d] START: Processing update %d", index+1, upd.UpdateId)
+				processUpdate(upd)
+				log.Printf("✅ [UPDATE-THREAD-%d] DONE: Finished update %d", index+1, upd.UpdateId)
+			}(i, update)
+		}
+		
+		log.Printf("⏳ [MULTI-UPDATE] Waiting for all %d update threads to complete...", len(validUpdates))
+		wg.Wait()
+		log.Printf("✅ [MULTI-UPDATE] All %d updates processed successfully", len(validUpdates))
+		
+		// Return the last update in the batch for offset tracking
+		lastProcessedUpd = validUpdates[len(validUpdates)-1]
+	}
+
+	// If we had updates but all were filtered out, return the last filtered one
+	if lastProcessedUpd == nil && len(updates) > 0 {
+		lastProcessedUpd = updates[len(updates)-1]
 	}
 
 	return lastProcessedUpd
@@ -121,11 +158,30 @@ func processUpdate(upd *response.TgUpdate) {
 		return
 	}
 
-	// Process each social media link
-	for i, socialUrl := range socialLinks {
-		log.Printf("🔗 [DEBUG] Processing link %d/%d: %s", i+1, len(socialLinks), socialUrl)
-		processMediaDownload(socialUrl, &origChat, downloader)
-		log.Printf("🏁 [DEBUG] Finished processing link %d/%d: %s", i+1, len(socialLinks), socialUrl)
+	// Process social media links concurrently for better performance
+	if len(socialLinks) == 1 {
+		// Single link - process directly (no need for goroutine overhead)
+		log.Printf("🔗 [SINGLE] Processing link: %s", socialLinks[0])
+		processMediaDownload(socialLinks[0], &origChat, &origMessage, downloader)
+		log.Printf("🏁 [SINGLE] Finished processing link: %s", socialLinks[0])
+	} else {
+		// Multiple links - process concurrently with goroutines
+		log.Printf("🚀 [MULTI-THREAD] Starting concurrent processing of %d links", len(socialLinks))
+		var wg sync.WaitGroup
+		
+		for i, socialUrl := range socialLinks {
+			wg.Add(1)
+			go func(index int, url string) {
+				defer wg.Done()
+				log.Printf("🔗 [THREAD-%d] START: Processing link %d/%d: %s", index+1, index+1, len(socialLinks), url)
+				processMediaDownload(url, &origChat, &origMessage, downloader)
+				log.Printf("🏁 [THREAD-%d] DONE: Finished processing link %d/%d: %s", index+1, index+1, len(socialLinks), url)
+			}(i, socialUrl)
+		}
+		
+		log.Printf("⏳ [MULTI-THREAD] Waiting for all %d threads to complete...", len(socialLinks))
+		wg.Wait()
+		log.Printf("✅ [MULTI-THREAD] All %d links processed successfully", len(socialLinks))
 	}
 }
 
@@ -145,7 +201,7 @@ func sendFixedLinks(origMessage *response.TgMessage, origChat *response.TgChat) 
 	}
 }
 
-func processMediaDownload(url string, origChat *response.TgChat, downloader *services.SmartDownloader) {
+func processMediaDownload(url string, origChat *response.TgChat, origMessage *response.TgMessage, downloader *services.SmartDownloader) {
 	log.Printf("🚀 [DEBUG] Starting processMediaDownload for URL: %s", url)
 	// Send "typing" status to indicate processing
 	// (You could implement sendChatAction here)
@@ -157,8 +213,10 @@ func processMediaDownload(url string, origChat *response.TgChat, downloader *ser
 		
 		// Send error message
 		errorMsg := payload.TgPlSendMessage{
-			ChatId: origChat.Id,
-			Text:   getErrorMessage(url),
+			ChatId:              origChat.Id,
+			Text:                getErrorMessage(url),
+			ReplyToMessageId:    origMessage.MessageId,
+			DisableNotification: true,
 		}
 		response := message.NewSendMessage(errorMsg)
 		services.LogTelegramMessage(origChat.Id, "error", response != nil, "")
@@ -167,39 +225,20 @@ func processMediaDownload(url string, origChat *response.TgChat, downloader *ser
 	
 	// Check if this is a fixed link response (text-only with no filename)
 	if len(mediaInfos) == 1 && mediaInfos[0].Type == "text" && mediaInfos[0].Filename == "" {
-		// Send the fixed link
+		// Send the fixed link as reply with silent notification
 		fixedLinkMsg := payload.TgPlSendMessage{
-			ChatId:    origChat.Id,
-			ParseMode: payload.ParseModeHTML,
-			Text:      mediaInfos[0].Caption,
+			ChatId:              origChat.Id,
+			ParseMode:           payload.ParseModeHTML,
+			Text:                mediaInfos[0].Caption,
+			ReplyToMessageId:    origMessage.MessageId,
+			DisableNotification: true,
 		}
 		response := message.NewSendMessage(fixedLinkMsg)
 		services.LogTelegramMessage(origChat.Id, "fixed-link", response != nil, "")
 		return
 	}
 
-	// Check if we actually have any downloadable media files (not just text)
-	hasActualMedia := false
-	for _, mediaInfo := range mediaInfos {
-		if mediaInfo.Type != "text" && mediaInfo.Filename != "" {
-			hasActualMedia = true
-			break
-		}
-	}
-
-	// Only send confirmation message if we have actual media files
-	if hasActualMedia {
-		confirmMsg := payload.TgPlSendMessage{
-			ChatId: origChat.Id,
-			Text:   "📥 Downloaded media, sending...",
-		}
-		response := message.NewSendMessage(confirmMsg)
-		success := response != nil
-		services.LogTelegramMessage(origChat.Id, "confirmation", success, "")
-		if success {
-			log.Printf("✅ Successfully sent confirmation message to chat %d", origChat.Id)
-		}
-	}
+	// Skip confirmation message - send media directly for better UX
 
 	// Group photos and send them together, send other media individually
 	log.Printf("Downloaded %d media files from %s", len(mediaInfos), url)
@@ -244,14 +283,14 @@ func processMediaDownload(url string, origChat *response.TgChat, downloader *ser
 	// Send photos as a media group if there are multiple photos
 	if len(photos) > 1 {
 		log.Printf("Sending %d photos as media group", len(photos))
-		err := sendPhotosAsMediaGroup(photos, origChat)
+		err := sendPhotosAsMediaGroup(photos, origChat, origMessage)
 		if err != nil {
 			log.Printf("Failed to send photos as media group: %v", err)
 			// Fallback: send photos individually
 			log.Printf("Fallback: sending photos individually")
 			for i, photoInfo := range photos {
 				log.Printf("Sending photo %d/%d: %s", i+1, len(photos), photoInfo.Filename)
-				err := sendMediaFile(photoInfo, origChat)
+				err := sendMediaFile(photoInfo, origChat, origMessage)
 				if err != nil {
 					log.Printf("Failed to send photo file %s: %v", photoInfo.Filename, err)
 				} else {
@@ -269,7 +308,7 @@ func processMediaDownload(url string, origChat *response.TgChat, downloader *ser
 	} else if len(photos) == 1 {
 		// Send single photo normally
 		log.Printf("Sending single photo: %s", photos[0].Filename)
-		err := sendMediaFile(photos[0], origChat)
+		err := sendMediaFile(photos[0], origChat, origMessage)
 		if err != nil {
 			log.Printf("Failed to send photo file %s: %v", photos[0].Filename, err)
 		} else {
@@ -290,7 +329,7 @@ func processMediaDownload(url string, origChat *response.TgChat, downloader *ser
 			}
 		}
 		
-		err := sendMediaFile(mediaInfo, origChat)
+		err := sendMediaFile(mediaInfo, origChat, origMessage)
 		if err != nil {
 			log.Printf("Failed to send media file %s: %v", mediaInfo.Filename, err)
 			
@@ -298,10 +337,12 @@ func processMediaDownload(url string, origChat *response.TgChat, downloader *ser
 			log.Printf("Trying fallback: sending video as document...")
 			
 			documentPayload := payload.TgPlSendDocument{
-				ChatId:   origChat.Id,
-				Document: "video.mp4",
-				Caption:  "📹 Downloaded media (sent as document)",
-				FilePath: mediaInfo.Filename,
+				ChatId:              origChat.Id,
+				Document:            "video.mp4",
+				Caption:             "📹 Downloaded media (sent as document)",
+				FilePath:            mediaInfo.Filename,
+				ReplyToMessageId:    origMessage.MessageId,
+				DisableNotification: true,
 			}
 			message.NewSendDocument(documentPayload)
 			// Note: NewSendDocument automatically sends the message
@@ -315,7 +356,7 @@ func processMediaDownload(url string, origChat *response.TgChat, downloader *ser
 	}
 }
 
-func sendMediaFile(mediaInfo *services.MediaInfo, origChat *response.TgChat) error {
+func sendMediaFile(mediaInfo *services.MediaInfo, origChat *response.TgChat, origMessage *response.TgMessage) error {
 	log.Printf("Sending media to chat ID: %d", origChat.Id)
 	
 	// Decode HTML entities
@@ -323,17 +364,20 @@ func sendMediaFile(mediaInfo *services.MediaInfo, origChat *response.TgChat) err
 	
 	// For Twitter/X posts, handle long text intelligently
 	if (strings.Contains(mediaInfo.URL, "twitter.com") || strings.Contains(mediaInfo.URL, "x.com")) && 
-	   len(caption) > 500 && mediaInfo.Type != "text" {
-		log.Printf("🐦 Long Twitter post detected (%d chars), sending text and media separately", len(caption))
+	   len(caption) > 300 && mediaInfo.Type != "text" && 
+	   strings.Contains(caption, "\n") { // Only split if it has line breaks (structured text)
+		log.Printf("🐦 Long structured Twitter post detected (%d chars), sending text and media separately", len(caption))
 		
-		// Send text first (only if it's not a generic message)
+		// Send text first (only if it's not a generic message) with reply and silent notification
 		if caption != "Downloaded from Twitter/X" && caption != "Downloaded from Twitter" && caption != "" {
 			textPayload := payload.TgPlSendMessage{
-				ChatId: origChat.Id,
-				Text:   caption,
+				ChatId:              origChat.Id,
+				Text:                caption,
+				ReplyToMessageId:    origMessage.MessageId,
+				DisableNotification: true,
 			}
 			message.NewSendMessage(textPayload)
-			log.Printf("✅ Sent Twitter text content")
+			log.Printf("✅ Sent Twitter text content separately")
 		}
 		
 		// Send media without caption 
@@ -347,20 +391,24 @@ func sendMediaFile(mediaInfo *services.MediaInfo, origChat *response.TgChat) err
 	
 	switch mediaInfo.Type {
 	case "text":
-		// Send text-only content as a message
+		// Send text-only content as a message with reply and silent notification
 		textPayload := payload.TgPlSendMessage{
-			ChatId: origChat.Id,
-			Text:   mediaInfo.Caption,
+			ChatId:              origChat.Id,
+			Text:                mediaInfo.Caption,
+			ReplyToMessageId:    origMessage.MessageId,
+			DisableNotification: true,
 		}
 		message.NewSendMessage(textPayload)
 		// Note: NewSendMessage automatically sends the message
 		
 	case "photo":
 		photoPayload := payload.TgPlSendPhoto{
-			ChatId:   origChat.Id,
-			Photo:    "photo.jpg", // Simple filename for multipart upload
-			Caption:  caption,
-			FilePath: mediaInfo.Filename,
+			ChatId:              origChat.Id,
+			Photo:               "photo.jpg", // Simple filename for multipart upload
+			Caption:             caption,
+			FilePath:            mediaInfo.Filename,
+			ReplyToMessageId:    origMessage.MessageId,
+			DisableNotification: true,
 		}
 		response := message.NewSendPhoto(photoPayload)
 		// Check if the photo was sent successfully
@@ -391,10 +439,12 @@ func sendMediaFile(mediaInfo *services.MediaInfo, origChat *response.TgChat) err
 					
 					// Fallback: send as document
 					documentPayload := payload.TgPlSendDocument{
-						ChatId:   origChat.Id,
-						Document: "video.webm",
-						Caption:  fmt.Sprintf("🎥 Video (WebM format - conversion failed)\n\n%s", caption),
-						FilePath: mediaInfo.Filename,
+						ChatId:              origChat.Id,
+						Document:            "video.webm",
+						Caption:             fmt.Sprintf("🎥 Video (WebM format - conversion failed)\n\n%s", caption),
+						FilePath:            mediaInfo.Filename,
+						ReplyToMessageId:    origMessage.MessageId,
+						DisableNotification: true,
 					}
 					message.NewSendDocument(documentPayload)
 					return nil
@@ -420,22 +470,26 @@ func sendMediaFile(mediaInfo *services.MediaInfo, origChat *response.TgChat) err
 				
 				// Fallback: send as document
 				documentPayload := payload.TgPlSendDocument{
-					ChatId:   origChat.Id,
-					Document: "video.webm",
-					Caption:  fmt.Sprintf("🎥 Video (WebM format)\n\n%s", caption),
-					FilePath: mediaInfo.Filename,
+					ChatId:              origChat.Id,
+					Document:            "video.webm",
+					Caption:             fmt.Sprintf("🎥 Video (WebM format)\n\n%s", caption),
+					FilePath:            mediaInfo.Filename,
+					ReplyToMessageId:    origMessage.MessageId,
+					DisableNotification: true,
 				}
 				message.NewSendDocument(documentPayload)
 				return nil
 			}
 		}
 		
-		// Send as video (either original MP4 or converted from WebM)
+		// Send as video (either original MP4 or converted from WebM) with reply and silent notification
 		videoPayload := payload.TgPlSendVideo{
-			ChatId:   origChat.Id,
-			Video:    "video.mp4", // Simple filename for multipart upload
-			Caption:  caption,
-			FilePath: finalVideoPath,
+			ChatId:              origChat.Id,
+			Video:               "video.mp4", // Simple filename for multipart upload
+			Caption:             caption,
+			FilePath:            finalVideoPath,
+			ReplyToMessageId:    origMessage.MessageId,
+			DisableNotification: true,
 		}
 		message.NewSendVideo(videoPayload)
 		// Note: NewSendVideo automatically sends the message
@@ -455,10 +509,12 @@ func sendMediaFile(mediaInfo *services.MediaInfo, origChat *response.TgChat) err
 		}
 		
 		documentPayload := payload.TgPlSendDocument{
-			ChatId:   origChat.Id,
-			Document: documentName,
-			Caption:  enhancedCaption,
-			FilePath: mediaInfo.Filename,
+			ChatId:              origChat.Id,
+			Document:            documentName,
+			Caption:             enhancedCaption,
+			FilePath:            mediaInfo.Filename,
+			ReplyToMessageId:    origMessage.MessageId,
+			DisableNotification: true,
 		}
 		message.NewSendDocument(documentPayload)
 		// Note: NewSendDocument automatically sends the message
@@ -467,7 +523,7 @@ func sendMediaFile(mediaInfo *services.MediaInfo, origChat *response.TgChat) err
 	return nil
 }
 
-func sendPhotosAsMediaGroup(photos []*services.MediaInfo, origChat *response.TgChat) error {
+func sendPhotosAsMediaGroup(photos []*services.MediaInfo, origChat *response.TgChat, origMessage *response.TgMessage) error {
 	if len(photos) == 0 {
 		return fmt.Errorf("no photos to send")
 	}
@@ -497,11 +553,13 @@ func sendPhotosAsMediaGroup(photos []*services.MediaInfo, origChat *response.TgC
 		filePaths = append(filePaths, photoInfo.Filename)
 	}
 	
-	// Create the media group payload
+	// Create the media group payload with reply and silent notification
 	mediaGroupPayload := payload.TgPlSendMediaGroup{
-		ChatId:    origChat.Id,
-		Media:     mediaArray,
-		FilePaths: filePaths,
+		ChatId:              origChat.Id,
+		Media:               mediaArray,
+		FilePaths:           filePaths,
+		ReplyToMessageId:    origMessage.MessageId,
+		DisableNotification: true,
 	}
 	
 	// Send the media group
