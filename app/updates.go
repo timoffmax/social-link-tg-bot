@@ -202,6 +202,16 @@ func processMediaDownload(url string, origChat *response.TgChat, downloader *ser
 		}
 	}
 	
+	// For TikTok slideshows, ensure only the first photo has the generic caption
+	if strings.Contains(url, "tiktok.com") && len(photos) > 1 {
+		for i := 1; i < len(photos); i++ {
+			// Clear caption for subsequent photos if it's the generic "Downloaded from TikTok"
+			if photos[i].Caption == "Downloaded from TikTok" {
+				photos[i].Caption = ""
+			}
+		}
+	}
+	
 	// Send photos as a media group if there are multiple photos
 	if len(photos) > 1 {
 		log.Printf("Sending %d photos as media group", len(photos))

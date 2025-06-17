@@ -349,6 +349,11 @@ func (te *TikTokExtractor) parseHTMLForMedia(html string, postID string, usernam
 		// Use post text as caption
 		if postText != "" {
 			mediaInfo.Caption = postText
+		} else if mediaInfo.Caption == "" {
+			// Only set default caption for the first media item
+			if i == 0 {
+				mediaInfo.Caption = "🎵 TikTok"
+			}
 		}
 		
 		mediaInfos = append(mediaInfos, mediaInfo)
@@ -387,6 +392,11 @@ func (te *TikTokExtractor) parseVxTikTokHTML(html string, postID string, usernam
 		// Use post text as caption
 		if postText != "" {
 			mediaInfo.Caption = postText
+		} else if mediaInfo.Caption == "" {
+			// Only set default caption for the first media item
+			if i == 0 {
+				mediaInfo.Caption = "🎵 TikTok"
+			}
 		}
 		
 		mediaInfos = append(mediaInfos, mediaInfo)
@@ -425,6 +435,11 @@ func (te *TikTokExtractor) parseAPIResponse(jsonResponse string, postID string, 
 		// Use post text as caption
 		if postText != "" {
 			mediaInfo.Caption = postText
+		} else if mediaInfo.Caption == "" {
+			// Only set default caption for the first media item
+			if i == 0 {
+				mediaInfo.Caption = "🎵 TikTok"
+			}
 		}
 		
 		mediaInfos = append(mediaInfos, mediaInfo)
@@ -1020,7 +1035,7 @@ func (te *TikTokExtractor) downloadMedia(mediaURL, postID string, index int) (*M
 	return &MediaInfo{
 		Type:     mediaType,
 		URL:      fmt.Sprintf("https://tiktok.com/@username/photo/%s", postID),
-		Caption:  "Downloaded from TikTok",
+		Caption:  "", // Caption will be set by the caller with post text
 		Filename: filename,
 	}, nil
 }
