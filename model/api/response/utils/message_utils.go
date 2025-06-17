@@ -11,9 +11,11 @@ func GetAllLinks(message *response.TgMessage) []string {
 	tikTokLinks := GetTikTokLinks(message)
 	twitterLinks := GetTwitterLinks(message)
 	youtubeLinks := GetYouTubeLinks(message)
+	ninegagLinks := Get9GAGLinks(message)
 	
 	result := append(append(instagramLinks, tikTokLinks...), twitterLinks...)
 	result = append(result, youtubeLinks...)
+	result = append(result, ninegagLinks...)
 
 	return result
 }
@@ -23,9 +25,11 @@ func GetAllSocialLinks(message *response.TgMessage) []string {
 	tikTokLinks := GetOriginalTikTokLinks(message)
 	twitterLinks := GetOriginalTwitterLinks(message)
 	youtubeLinks := GetOriginalYouTubeLinks(message)
+	ninegagLinks := GetOriginal9GAGLinks(message)
 	
 	result := append(append(instagramLinks, tikTokLinks...), twitterLinks...)
 	result = append(result, youtubeLinks...)
+	result = append(result, ninegagLinks...)
 
 	return result
 }
@@ -55,7 +59,7 @@ func GetTikTokLinks(message *response.TgMessage) []string {
 }
 
 func GetTwitterLinks(message *response.TgMessage) []string {
-	regex := regexp.MustCompile(`https:\/\/(x)\.com\/[^\s]+`)
+	regex := regexp.MustCompile(`https:\/\/(twitter|x)\.com\/[^\s]+`)
 	result := regex.FindAllString(message.Text, -1)
 
 	for i, url := range result {
@@ -83,11 +87,15 @@ func fixTikTokLink(link string) string {
 }
 
 func fixTwitterLink(link string) string {
-	searchFor := "x.com"
-	replaceWith := "fixupx.com"
-	result := strings.Replace(link, searchFor, replaceWith, -1)
-
-	return result
+	// Handle both twitter.com and x.com URLs
+	if strings.Contains(link, "twitter.com") {
+		result := strings.Replace(link, "twitter.com", "fixupx.com", -1)
+		return result
+	} else if strings.Contains(link, "x.com") {
+		result := strings.Replace(link, "x.com", "fixupx.com", -1)
+		return result
+	}
+	return link
 }
 
 func GetOriginalInstagramLinks(message *response.TgMessage) []string {
@@ -101,7 +109,7 @@ func GetOriginalTikTokLinks(message *response.TgMessage) []string {
 }
 
 func GetOriginalTwitterLinks(message *response.TgMessage) []string {
-	regex := regexp.MustCompile(`https:\/\/x\.com\/[^\s]+`)
+	regex := regexp.MustCompile(`https:\/\/(twitter|x)\.com\/[^\s]+`)
 	return regex.FindAllString(message.Text, -1)
 }
 
@@ -118,5 +126,18 @@ func GetYouTubeLinks(message *response.TgMessage) []string {
 func GetOriginalYouTubeLinks(message *response.TgMessage) []string {
 	// Match YouTube Shorts URLs: youtube.com/shorts/*, youtu.be/*, m.youtube.com/shorts/*
 	regex := regexp.MustCompile(`https:\/\/(www\.|m\.)?(youtube\.com\/shorts\/|youtu\.be\/)[^\s]+`)
+	return regex.FindAllString(message.Text, -1)
+}
+
+func Get9GAGLinks(message *response.TgMessage) []string {
+	regex := regexp.MustCompile(`https:\/\/(www\.)?9gag\.com\/gag\/[^\s]+`)
+	result := regex.FindAllString(message.Text, -1)
+	
+	// No fixed link service for 9GAG, return as-is
+	return result
+}
+
+func GetOriginal9GAGLinks(message *response.TgMessage) []string {
+	regex := regexp.MustCompile(`https:\/\/(www\.)?9gag\.com\/gag\/[^\s]+`)
 	return regex.FindAllString(message.Text, -1)
 }

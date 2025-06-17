@@ -121,6 +121,10 @@ func processMediaDownload(url string, origChat *response.TgChat, downloader *ser
 		mediaInfos, err = downloader.DownloadInstagramMedia(url)
 	} else if strings.Contains(url, "tiktok.com") {
 		mediaInfos, err = downloader.DownloadTikTokMedia(url)
+	} else if strings.Contains(url, "youtube.com") || strings.Contains(url, "youtu.be") {
+		mediaInfos, err = downloader.DownloadYouTubeMedia(url)
+	} else if strings.Contains(url, "9gag.com") {
+		mediaInfos, err = downloader.Download9GAGMedia(url)
 	} else {
 		mediaInfos, err = downloader.DownloadMedia(url)
 	}
@@ -421,6 +425,9 @@ func getFixedUrl(url string) string {
 	}
 	
 	// Twitter/X
+	if strings.Contains(url, "twitter.com") {
+		return strings.Replace(url, "twitter.com", "fixupx.com", 1)
+	}
 	if strings.Contains(url, "x.com") {
 		return strings.Replace(url, "x.com", "fixupx.com", 1)
 	}
@@ -440,7 +447,7 @@ func getErrorMessage(url string) string {
 			"3. Place in bot directory"
 	} else if strings.Contains(url, "9gag.com") {
 		return "❌ Failed to download from 9GAG.\n\n" +
-			"9GAG download support is limited."
+			"9GAG content may be region-restricted or unavailable."
 	}
 	
 	return fmt.Sprintf("❌ Failed to download media from %s", url)

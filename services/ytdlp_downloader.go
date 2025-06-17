@@ -171,7 +171,16 @@ func (yd *YtDlpDownloader) DownloadMedia(url string) ([]*MediaInfo, error) {
 		log.Printf("Download failed with proxy '%s': %v", proxy, err)
 	}
 	
-	return nil, fmt.Errorf("all download attempts failed, last error: %v", lastErr)
+	// If all yt-dlp attempts failed, try universal headless browser as final fallback
+	log.Printf("All yt-dlp attempts failed, trying universal headless browser fallback")
+	browserExtractor := NewUniversalBrowserExtractor(yd.WorkingDir, yd.TempDir)
+	mediaInfos, err := browserExtractor.ExtractMedia(url)
+	if err == nil && len(mediaInfos) > 0 {
+		log.Printf("✅ Universal headless browser fallback succeeded with %d items", len(mediaInfos))
+		return mediaInfos, nil
+	}
+	
+	return nil, fmt.Errorf("all download attempts failed including headless browser, last yt-dlp error: %v, browser error: %v", lastErr, err)
 }
 
 // attemptDownload tries to download with a specific proxy (or empty string for no proxy)
@@ -321,7 +330,15 @@ func (yd *YtDlpDownloader) DownloadInstagramMedia(url string) ([]*MediaInfo, err
 	
 	// Strategy 2: Try thumbnails-only approach for image posts/carousels
 	log.Printf("Normal download failed, trying thumbnails-only approach for Instagram")
-	return yd.downloadThumbnailsOnly(url, "Instagram")
+	mediaInfos, err = yd.downloadThumbnailsOnly(url, "Instagram")
+	if err == nil && len(mediaInfos) > 0 {
+		return mediaInfos, nil
+	}
+	
+	// Strategy 3: Universal headless browser fallback
+	log.Printf("yt-dlp failed completely, trying universal headless browser for Instagram")
+	browserExtractor := NewUniversalBrowserExtractor(yd.WorkingDir, yd.TempDir)
+	return browserExtractor.ExtractMedia(url)
 }
 
 func (yd *YtDlpDownloader) DownloadTikTokMedia(url string) ([]*MediaInfo, error) {
@@ -378,7 +395,45 @@ func (yd *YtDlpDownloader) DownloadTwitterMedia(url string) ([]*MediaInfo, error
 	// Strategy 3: Use custom Twitter extractor as fallback
 	log.Printf("yt-dlp failed completely, trying custom Twitter extractor")
 	twitterExtractor := NewTwitterExtractor(yd.WorkingDir, yd.TempDir)
-	return twitterExtractor.ExtractTweet(url)
+	mediaInfos, err = twitterExtractor.ExtractTweet(url)
+	if err == nil && len(mediaInfos) > 0 {
+		return mediaInfos, nil
+	}
+	
+	// Strategy 4: Universal headless browser fallback
+	log.Printf("Custom extractor failed, trying universal headless browser for Twitter")
+	browserExtractor := NewUniversalBrowserExtractor(yd.WorkingDir, yd.TempDir)
+	return browserExtractor.ExtractMedia(url)
+}
+
+func (yd *YtDlpDownloader) DownloadYouTubeMedia(url string) ([]*MediaInfo, error) {
+	// For YouTube, try yt-dlp first then fallback to headless browser for thumbnails
+	
+	// Strategy 1: Try normal yt-dlp download first 
+	mediaInfos, err := yd.DownloadMedia(url)
+	if err == nil && len(mediaInfos) > 0 {
+		return mediaInfos, nil
+	}
+	
+	// Strategy 2: Universal headless browser fallback (mainly for thumbnails and metadata)
+	log.Printf("yt-dlp failed, trying universal headless browser for YouTube")
+	browserExtractor := NewUniversalBrowserExtractor(yd.WorkingDir, yd.TempDir)
+	return browserExtractor.ExtractMedia(url)
+}
+
+func (yd *YtDlpDownloader) Download9GAGMedia(url string) ([]*MediaInfo, error) {
+	// For 9GAG, try yt-dlp first then fallback to headless browser
+	
+	// Strategy 1: Try normal yt-dlp download first (may work for some 9GAG content)
+	mediaInfos, err := yd.DownloadMedia(url)
+	if err == nil && len(mediaInfos) > 0 {
+		return mediaInfos, nil
+	}
+	
+	// Strategy 2: Universal headless browser fallback (primary method for 9GAG)
+	log.Printf("yt-dlp failed, trying universal headless browser for 9GAG")
+	browserExtractor := NewUniversalBrowserExtractor(yd.WorkingDir, yd.TempDir)
+	return browserExtractor.ExtractMedia(url)
 }
 
 // downloadThumbnailsOnly tries to download only thumbnails and metadata for posts
