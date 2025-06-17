@@ -535,16 +535,9 @@ func (te *TwitterExtractor) parseEmbedResponse(response, tweetID string) ([]*Med
 	tweetText := ""
 	textPattern := regexp.MustCompile(`<p[^>]*lang="[^"]*"[^>]*dir="[^"]*"[^>]*>(.*?)</p>`)
 	if matches := textPattern.FindStringSubmatch(html); len(matches) > 1 {
-		tweetText = matches[1]
-		// Clean up HTML entities
-		tweetText = strings.ReplaceAll(tweetText, "&#39;", "'")
-		tweetText = strings.ReplaceAll(tweetText, "&amp;", "&")
-		tweetText = strings.ReplaceAll(tweetText, "&lt;", "<")
-		tweetText = strings.ReplaceAll(tweetText, "&gt;", ">")
-		tweetText = strings.ReplaceAll(tweetText, "&quot;", `"`)
-		// Remove any remaining HTML tags
-		tweetText = regexp.MustCompile(`<[^>]*>`).ReplaceAllString(tweetText, "")
-		tweetText = strings.TrimSpace(tweetText)
+		rawText := matches[1]
+		// Use the proper cleaning function that removes pic.twitter.com links
+		tweetText = te.cleanAndFormatTweetText(rawText)
 	}
 	
 	log.Printf("📝 Extracted tweet text from embed: %s", tweetText)
