@@ -467,14 +467,9 @@ func (te *TwitterExtractor) extractViaFixupxProxy(tweetID string, username strin
 		return nil, fmt.Errorf("failed to create fixupx request: %v", err)
 	}
 	
-	// Add headers to mimic a real browser
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
-	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8")
-	req.Header.Set("Accept-Language", "en-US,en;q=0.5")
-	req.Header.Set("Accept-Encoding", "gzip, deflate, br")
-	req.Header.Set("DNT", "1")
-	req.Header.Set("Connection", "keep-alive")
-	req.Header.Set("Upgrade-Insecure-Requests", "1")
+	// Use minimal headers to get the compact response like curl
+	req.Header.Set("User-Agent", "curl/7.68.0")
+	req.Header.Set("Accept", "*/*")
 	
 	// Make request
 	resp, err := te.client.Do(req)
@@ -1050,6 +1045,9 @@ func (te *TwitterExtractor) parseFixupxMetaTags(html string, tweetID string, use
 	
 	log.Printf("📝 Parsing fixupx meta tags for tweet %s by @%s", tweetID, username)
 	
+	// Log response size for debugging
+	log.Printf("🔍 Fixupx response length: %d bytes", len(html))
+	
 	// Extract tweet text from og:description meta tag
 	tweetText := ""
 	descPattern := regexp.MustCompile(`<meta[^>]*property="og:description"[^>]*content="([^"]*)"`)
@@ -1066,14 +1064,27 @@ func (te *TwitterExtractor) parseFixupxMetaTags(html string, tweetID string, use
 	
 	log.Printf("📝 Extracted tweet text from fixupx: %s", tweetText)
 	
+	// Check if fixupx has the media URLs
+	if !strings.Contains(html, "pbs.twimg.com") {
+		log.Printf("❌ No pbs.twimg.com found in fixupx HTML")
+	}
+	
 	// Extract media URLs from og:image and twitter:image meta tags
 	var mediaURLs []string
 	
-	// Look for og:image and twitter:image meta tags
+	// Look for og:image and twitter:image meta tags - handle both compact and full response formats
 	imagePatterns := []string{
+		// Standard format
 		`<meta[^>]*property="og:image"[^>]*content="([^"]*pbs\.twimg\.com[^"]*)"`,
 		`<meta[^>]*property="twitter:image"[^>]*content="([^"]*pbs\.twimg\.com[^"]*)"`,
 		`<meta[^>]*name="twitter:image"[^>]*content="([^"]*pbs\.twimg\.com[^"]*)"`,
+		// Compact format (without spaces)
+		`<meta property="og:image" content="([^"]*pbs\.twimg\.com[^"]*)"`,
+		`<meta property="twitter:image" content="([^"]*pbs\.twimg\.com[^"]*)"`,
+		`<meta name="twitter:image" content="([^"]*pbs\.twimg\.com[^"]*)"`,
+		// Handle different quote styles
+		`property="og:image"[^>]*content="(https://pbs\.twimg\.com[^"]*)"`,
+		`property="twitter:image"[^>]*content="(https://pbs\.twimg\.com[^"]*)"`,
 	}
 	
 	for _, pattern := range imagePatterns {
