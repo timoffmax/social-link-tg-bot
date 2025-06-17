@@ -406,18 +406,27 @@ func (ube *UniversalBrowserExtractor) extract9GAGMedia(mediaURL string) ([]*Medi
 		mediaInfos = append(mediaInfos, mediaInfo)
 	}
 
-	// 9GAG video patterns
+	// 9GAG video patterns (prioritize main video sources)
 	videoPatterns := []string{
+		// Primary video sources (avoid thumb/preview)
+		`<video[^>]*class="[^"]*video-post[^"]*"[^>]*src="(https://img-9gag-fun\.9cache\.com/[^"]*\.mp4[^"]*)"`,
+		`<source[^>]*type="video/mp4"[^>]*src="(https://img-9gag-fun\.9cache\.com/[^"]*\.mp4[^"]*)"`,
+		`"videoUrl":"(https://[^"]*\.9cache\.com/[^"]*\.mp4[^"]*)"`,
+		// Open Graph video meta tag
+		`<meta[^>]*property="og:video"[^>]*content="(https://[^"]*\.9cache\.com/[^"]*\.mp4[^"]*)"`,
+		// Fallback patterns
 		`<video[^>]*src="(https://img-9gag-fun\.9cache\.com/[^"]*\.mp4[^"]*)"`,
 		`<source[^>]*src="(https://img-9gag-fun\.9cache\.com/[^"]*\.mp4[^"]*)"`,
-		`"videoUrl":"(https://[^"]*\.9cache\.com/[^"]*\.mp4[^"]*)"`,
 	}
 
 	videoURLs := ube.extractURLsWithPatterns(html, videoPatterns)
-	log.Printf("🎥 Found %d 9GAG videos", len(videoURLs))
+	
+	// Deduplicate 9GAG videos (often multiple qualities of same video)
+	uniqueVideos := ube.deduplicate9GAGVideos(videoURLs)
+	log.Printf("🎥 Found %d unique 9GAG videos (deduplicated from %d)", len(uniqueVideos), len(videoURLs))
 
 	// Download videos
-	for i, videoURL := range videoURLs {
+	for i, videoURL := range uniqueVideos {
 		// Clean JSON escaped URLs
 		cleanURL := strings.ReplaceAll(videoURL, "\\", "")
 		filename, err := ube.downloadMediaFile(cleanURL, "9gag", "video", i)
@@ -646,6 +655,74 @@ func (ube *UniversalBrowserExtractor) deduplicateTikTokImages(imageURLs []string
 	}
 
 	return unique
+}
+
+func (ube *UniversalBrowserExtractor) deduplicate9GAGVideos(videoURLs []string) []string {
+	if len(videoURLs) <= 1 {
+		return videoURLs
+	}
+
+	// Extract base video ID from 9GAG URLs and prefer highest quality
+	seen := make(map[string]string) // videoID -> bestURL
+	videoIDPattern := regexp.MustCompile(`([a-zA-Z0-9]+)\.mp4`)
+
+	for _, videoURL := range videoURLs {
+		videoID := ""
+		if match := videoIDPattern.FindStringSubmatch(videoURL); len(match) > 1 {
+			videoID = match[1]
+		} else {
+			videoID = videoURL // Use full URL as fallback
+		}
+
+		// If we haven't seen this video ID, or this URL seems better quality, use it
+		if existingURL, exists := seen[videoID]; !exists {
+			seen[videoID] = videoURL
+		} else {
+			// Prefer URLs with higher quality indicators (larger file paths, no "thumb" or "preview")
+			if ube.is9GAGVideoHigherQuality(videoURL, existingURL) {
+				seen[videoID] = videoURL
+			}
+		}
+	}
+
+	// Convert map back to slice
+	var unique []string
+	for _, url := range seen {
+		unique = append(unique, url)
+	}
+
+	return unique
+}
+
+func (ube *UniversalBrowserExtractor) is9GAGVideoHigherQuality(newURL, existingURL string) bool {
+	// Prefer URLs that don't contain quality indicators for lower quality
+	lowQualityIndicators := []string{"thumb", "preview", "small", "mobile", "_s.mp4", "_m.mp4"}
+	
+	newURLLower := strings.ToLower(newURL)
+	existingURLLower := strings.ToLower(existingURL)
+	
+	// Count low quality indicators in each URL
+	newLowQualityCount := 0
+	existingLowQualityCount := 0
+	
+	for _, indicator := range lowQualityIndicators {
+		if strings.Contains(newURLLower, indicator) {
+			newLowQualityCount++
+		}
+		if strings.Contains(existingURLLower, indicator) {
+			existingLowQualityCount++
+		}
+	}
+	
+	// Prefer the URL with fewer low quality indicators
+	if newLowQualityCount < existingLowQualityCount {
+		return true
+	} else if newLowQualityCount > existingLowQualityCount {
+		return false
+	}
+	
+	// If same number of indicators, prefer longer URL (often higher quality)
+	return len(newURL) > len(existingURL)
 }
 
 // URL cleaning methods
