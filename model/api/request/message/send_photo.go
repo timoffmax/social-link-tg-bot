@@ -1,6 +1,7 @@
 package message
 
 import (
+	"log"
 	"github.com/timoffmax/social-link-bot/model/api/request"
 	"github.com/timoffmax/social-link-bot/model/api/request/payload"
 	"github.com/timoffmax/social-link-bot/model/api/response"
@@ -31,7 +32,16 @@ func NewSendPhoto(payload payload.TgPlSendPhoto) *SendPhoto {
 }
 
 func (service *SendPhoto) send() *response.TgMessage {
-	service.Request.Send(service.ResponsePayload)
+	respInfo, err := service.Request.Send(service.ResponsePayload)
+	
+	if err != nil {
+		log.Printf("❌ SendPhoto API error: %v", err)
+		log.Printf("❌ Response info: %+v", respInfo)
+	} else if respInfo.StatusCode != 200 {
+		log.Printf("❌ SendPhoto HTTP error: %d - %s", respInfo.StatusCode, respInfo.Message)
+	} else {
+		log.Printf("✅ SendPhoto API success: %d", respInfo.StatusCode)
+	}
 
 	return service.ResponsePayload
 }

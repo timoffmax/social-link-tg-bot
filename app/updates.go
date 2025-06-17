@@ -2,6 +2,7 @@ package app
 
 import (
 	"fmt"
+	"html"
 	"log"
 	"os"
 	"strings"
@@ -277,6 +278,13 @@ func processMediaDownload(url string, origChat *response.TgChat, downloader *ser
 
 func sendMediaFile(mediaInfo *services.MediaInfo, origChat *response.TgChat) error {
 	log.Printf("Sending media to chat ID: %d", origChat.Id)
+	
+	// Decode HTML entities and limit caption length to Telegram's 1024 character limit
+	caption := html.UnescapeString(mediaInfo.Caption)
+	if len(caption) > 1000 {
+		caption = caption[:997] + "..."
+	}
+	
 	switch mediaInfo.Type {
 	case "text":
 		// Send text-only content as a message
@@ -291,17 +299,24 @@ func sendMediaFile(mediaInfo *services.MediaInfo, origChat *response.TgChat) err
 		photoPayload := payload.TgPlSendPhoto{
 			ChatId:   origChat.Id,
 			Photo:    "photo.jpg", // Simple filename for multipart upload
-			Caption:  mediaInfo.Caption,
+			Caption:  caption,
 			FilePath: mediaInfo.Filename,
 		}
-		message.NewSendPhoto(photoPayload)
-		// Note: NewSendPhoto automatically sends the message
+		response := message.NewSendPhoto(photoPayload)
+		// Check if the photo was sent successfully
+		if response.ResponsePayload != nil && response.ResponsePayload.MessageId != 0 {
+			log.Printf("✅ Photo sent successfully! Message ID: %d", response.ResponsePayload.MessageId)
+		} else {
+			log.Printf("❌ Photo sending failed or no response received")
+			log.Printf("Response details: %+v", response)
+			return fmt.Errorf("failed to send photo")
+		}
 
 	case "video":
 		videoPayload := payload.TgPlSendVideo{
 			ChatId:   origChat.Id,
 			Video:    "video.mp4", // Simple filename for multipart upload
-			Caption:  mediaInfo.Caption,
+			Caption:  caption,
 			FilePath: mediaInfo.Filename,
 		}
 		message.NewSendVideo(videoPayload)
@@ -311,7 +326,7 @@ func sendMediaFile(mediaInfo *services.MediaInfo, origChat *response.TgChat) err
 		documentPayload := payload.TgPlSendDocument{
 			ChatId:   origChat.Id,
 			Document: "document.bin", // Simple filename for multipart upload
-			Caption:  mediaInfo.Caption,
+			Caption:  caption,
 			FilePath: mediaInfo.Filename,
 		}
 		message.NewSendDocument(documentPayload)
