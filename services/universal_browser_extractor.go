@@ -145,88 +145,11 @@ func (ube *UniversalBrowserExtractor) extractInstagramMedia(mediaURL string) ([]
 }
 
 func (ube *UniversalBrowserExtractor) extractTwitterMedia(mediaURL string) ([]*MediaInfo, error) {
-	log.Printf("🐦 Extracting Twitter media with headless browser")
+	log.Printf("🐦 Extracting Twitter media with custom Twitter extractor (includes quote resolution)")
 
-	html, err := ube.renderPageWithBrowser(mediaURL, 6*time.Second)
-	if err != nil {
-		return nil, err
-	}
-
-	var mediaInfos []*MediaInfo
-
-	// Twitter image patterns
-	imagePatterns := []string{
-		`<img[^>]*src="(https://pbs\.twimg\.com/media/[^"]*\.jpg[^"]*)"`,
-		`<img[^>]*src="(https://pbs\.twimg\.com/media/[^"]*\.png[^"]*)"`,
-		`<img[^>]*src="(https://pbs\.twimg\.com/media/[^"]*\.webp[^"]*)"`,
-	}
-
-	imageURLs := ube.extractURLsWithPatterns(html, imagePatterns)
-	log.Printf("🖼️ Found %d Twitter images", len(imageURLs))
-
-	// Download images
-	for i, imageURL := range imageURLs {
-		cleanURL := ube.cleanTwitterURL(imageURL)
-		filename, err := ube.downloadMediaFile(cleanURL, "twitter", "photo", i)
-		if err != nil {
-			log.Printf("❌ Failed to download Twitter image %d: %v", i+1, err)
-			continue
-		}
-
-		mediaInfo := &MediaInfo{
-			Type:     "photo",
-			URL:      mediaURL,
-			Caption:  ube.extractTwitterCaption(html),
-			Filename: filename,
-		}
-		mediaInfos = append(mediaInfos, mediaInfo)
-	}
-
-	// Twitter video patterns
-	videoPatterns := []string{
-		`<video[^>]*src="(https://video\.twimg\.com/[^"]*\.mp4[^"]*)"`,
-		`<source[^>]*src="(https://video\.twimg\.com/[^"]*\.mp4[^"]*)"`,
-	}
-
-	videoURLs := ube.extractURLsWithPatterns(html, videoPatterns)
-	log.Printf("🎥 Found %d Twitter videos", len(videoURLs))
-
-	// Download videos
-	for i, videoURL := range videoURLs {
-		cleanURL := ube.cleanTwitterURL(videoURL)
-		filename, err := ube.downloadMediaFile(cleanURL, "twitter", "video", i)
-		if err != nil {
-			log.Printf("❌ Failed to download Twitter video %d: %v", i+1, err)
-			continue
-		}
-
-		mediaInfo := &MediaInfo{
-			Type:     "video",
-			URL:      mediaURL,
-			Caption:  ube.extractTwitterCaption(html),
-			Filename: filename,
-		}
-		mediaInfos = append(mediaInfos, mediaInfo)
-	}
-
-	// If no media found, return text content if available
-	if len(mediaInfos) == 0 {
-		if tweetText := ube.extractTwitterCaption(html); tweetText != "" {
-			mediaInfo := &MediaInfo{
-				Type:     "text",
-				URL:      mediaURL,
-				Caption:  tweetText,
-				Filename: "",
-			}
-			mediaInfos = append(mediaInfos, mediaInfo)
-		}
-	}
-
-	if len(mediaInfos) == 0 {
-		return nil, fmt.Errorf("no Twitter media found")
-	}
-
-	return mediaInfos, nil
+	// Use the custom Twitter extractor which has sophisticated quote resolution
+	twitterExtractor := NewTwitterExtractor(ube.workingDir, ube.tempDir)
+	return twitterExtractor.ExtractTweet(mediaURL)
 }
 
 func (ube *UniversalBrowserExtractor) extractTikTokMedia(mediaURL string) ([]*MediaInfo, error) {
@@ -1114,6 +1037,14 @@ func (ube *UniversalBrowserExtractor) addPlatformHeaders(req *http.Request, plat
 		req.Header.Set("sec-fetch-dest", "image")
 		req.Header.Set("sec-fetch-mode", "no-cors")
 		req.Header.Set("sec-fetch-site", "cross-site")
+		req.Header.Set("x-ig-app-id", "936619743392459")
+		req.Header.Set("x-ig-www-claim", "0")
+		req.Header.Set("x-requested-with", "XMLHttpRequest")
+		
+		// Add Instagram cookies if available
+		if cookiesPath := filepath.Join(ube.workingDir, "cookies.txt"); ube.fileExists(cookiesPath) {
+			ube.addInstagramCookiesFromFile(req, cookiesPath)
+		}
 
 	case "twitter":
 		req.Header.Set("Referer", "https://twitter.com/")
@@ -1135,6 +1066,49 @@ func (ube *UniversalBrowserExtractor) addPlatformHeaders(req *http.Request, plat
 		req.Header.Set("sec-fetch-dest", "image")
 		req.Header.Set("sec-fetch-mode", "no-cors")
 		req.Header.Set("sec-fetch-site", "cross-site")
+	}
+}
+
+// fileExists checks if a file exists
+func (ube *UniversalBrowserExtractor) fileExists(filepath string) bool {
+	_, err := os.Stat(filepath)
+	return !os.IsNotExist(err)
+}
+
+// addInstagramCookiesFromFile adds Instagram cookies from cookies.txt to the request
+func (ube *UniversalBrowserExtractor) addInstagramCookiesFromFile(req *http.Request, cookiesPath string) {
+	file, err := os.Open(cookiesPath)
+	if err != nil {
+		return
+	}
+	defer file.Close()
+	
+	content, err := io.ReadAll(file)
+	if err != nil {
+		return
+	}
+	
+	lines := strings.Split(string(content), "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		
+		parts := strings.Fields(line)
+		if len(parts) >= 7 && strings.Contains(parts[0], "instagram.com") {
+			cookieName := parts[5]
+			cookieValue := parts[6]
+			
+			// Add important Instagram cookies
+			if cookieName == "sessionid" || cookieName == "csrftoken" || cookieName == "ds_user_id" {
+				cookie := &http.Cookie{
+					Name:  cookieName,
+					Value: cookieValue,
+				}
+				req.AddCookie(cookie)
+			}
+		}
 	}
 }
 

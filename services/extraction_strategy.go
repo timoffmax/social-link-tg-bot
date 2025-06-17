@@ -40,13 +40,13 @@ func GetExtractionStrategy(url string) *ExtractionStrategy {
 				FixedLinkDomain: "instagramez.com",
 			}
 		}
-		// Photos and stories: fixed link first, then browser
+		// Photos and stories: try browser first, then yt-dlp, fixed link as last resort
 		return &ExtractionStrategy{
 			Platform: "instagram",
 			Methods: []ExtractionMethod{
-				MethodFixedLink,
 				MethodBrowser,
 				MethodYtDlp,
+				MethodFixedLink,
 			},
 			HasFixedLink: true,
 			FixedLinkDomain: "instagramez.com",
@@ -80,13 +80,14 @@ func GetExtractionStrategy(url string) *ExtractionStrategy {
 		}
 	}
 	
-	// Twitter/X: yt-dlp first (works with cookies), fixed link as immediate fallback (no browser)
+	// Twitter/X: yt-dlp first, then custom browser extractor for quotes, then fixed link
 	if strings.Contains(url, "twitter.com") || strings.Contains(url, "x.com") {
 		return &ExtractionStrategy{
 			Platform: "twitter",
 			Methods: []ExtractionMethod{
 				MethodYtDlp,
-				MethodFixedLink, // Skip browser, go straight to fixed link
+				MethodBrowser, // Custom Twitter extractor with quote resolution
+				MethodFixedLink,
 			},
 			HasFixedLink: true,
 			FixedLinkDomain: "fixupx.com",
