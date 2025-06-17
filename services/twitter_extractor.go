@@ -659,6 +659,10 @@ func (te *TwitterExtractor) cleanAndFormatTweetText(rawText string) string {
 	text = strings.ReplaceAll(text, "&quot;", `"`)
 	text = strings.ReplaceAll(text, "&#39;", "'")
 	
+	// Remove pic.twitter.com links
+	picTwitterPattern := regexp.MustCompile(`\s*pic\.twitter\.com/[a-zA-Z0-9]+\s*`)
+	text = picTwitterPattern.ReplaceAllString(text, "")
+	
 	// Clean up multiple consecutive newlines but preserve intentional spacing
 	text = regexp.MustCompile(`\n{3,}`).ReplaceAllString(text, "\n\n")
 	
