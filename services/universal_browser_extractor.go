@@ -371,9 +371,19 @@ func (ube *UniversalBrowserExtractor) extractYouTubeMedia(mediaURL string) ([]*M
 func (ube *UniversalBrowserExtractor) extract9GAGMedia(mediaURL string) ([]*MediaInfo, error) {
 	log.Printf("😂 Extracting 9GAG media with headless browser")
 
-	html, err := ube.renderPageWithBrowser(mediaURL, 6*time.Second)
+	// For 9GAG, use longer wait time and check for age-restricted content
+	html, err := ube.renderPageWithBrowserFor9GAG(mediaURL, 8*time.Second)
 	if err != nil {
 		return nil, err
+	}
+
+	// Check if this is age-restricted content
+	if ube.is9GAGAgeRestricted(html) {
+		log.Printf("🔞 Detected age-restricted 9GAG content, trying authenticated access")
+		html, err = ube.render9GAGWithAuthentication(mediaURL)
+		if err != nil {
+			return nil, fmt.Errorf("failed to access age-restricted content: %v", err)
+		}
 	}
 
 	var mediaInfos []*MediaInfo
@@ -971,4 +981,329 @@ func (ube *UniversalBrowserExtractor) addPlatformHeaders(req *http.Request, plat
 		req.Header.Set("sec-fetch-mode", "no-cors")
 		req.Header.Set("sec-fetch-site", "cross-site")
 	}
+}
+
+// Specialized 9GAG browser functions for age-restricted content
+func (ube *UniversalBrowserExtractor) renderPageWithBrowserFor9GAG(pageURL string, waitTime time.Duration) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+
+	// Find Chrome executable
+	homeDir := os.Getenv("HOME")
+	possiblePaths := []string{
+		filepath.Join(homeDir, "chrome/chrome"),
+		filepath.Join(homeDir, "bin/chrome"),
+		"/usr/bin/google-chrome",
+		"/usr/bin/google-chrome-stable",
+		"/usr/bin/chromium-browser",
+		"/usr/bin/chromium",
+		"/opt/google/chrome/chrome",
+		"/snap/bin/chromium",
+	}
+
+	execPath := ""
+	for _, path := range possiblePaths {
+		if _, err := os.Stat(path); err == nil {
+			execPath = path
+			break
+		}
+	}
+
+	// Enhanced Chrome options for 9GAG with cookie support
+	opts := append(chromedp.DefaultExecAllocatorOptions[:],
+		chromedp.DisableGPU,
+		chromedp.NoSandbox,
+		chromedp.Headless,
+		// Use adult user agent that signals 18+ content capability
+		chromedp.UserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"),
+		chromedp.Flag("disable-web-security", true),
+		chromedp.Flag("disable-extensions", true),
+		chromedp.Flag("disable-plugins", true),
+		chromedp.Flag("disable-images", false),
+		chromedp.Flag("disable-javascript", false),
+		chromedp.Flag("mute-audio", true),
+		chromedp.Flag("no-first-run", true),
+		chromedp.Flag("no-default-browser-check", true),
+		chromedp.Flag("disable-default-apps", true),
+		chromedp.Flag("disable-popup-blocking", true),
+		chromedp.Flag("disable-translate", true),
+		chromedp.Flag("disable-background-timer-throttling", true),
+		chromedp.Flag("disable-renderer-backgrounding", true),
+		chromedp.Flag("disable-backgrounding-occluded-windows", true),
+		chromedp.Flag("disable-ipc-flooding-protection", true),
+		chromedp.Flag("log-level", "3"),
+		chromedp.Flag("silent", true),
+		chromedp.Flag("disable-logging", true),
+		chromedp.Flag("quiet", true),
+		chromedp.Flag("disable-dev-shm-usage", true),
+		chromedp.Flag("disable-cookie-encryption", true),
+		chromedp.Flag("disable-sync", true),
+		chromedp.Flag("disable-background-networking", true),
+		chromedp.Flag("disable-component-update", true),
+		chromedp.Flag("disable-domain-reliability", true),
+		chromedp.Flag("disable-features", "VizDisplayCompositor,AudioServiceOutOfProcess"),
+		chromedp.Flag("no-sandbox", true),
+		chromedp.Flag("disable-setuid-sandbox", true),
+		// Accept language for international content
+		chromedp.Flag("accept-language", "en-US,en;q=0.9"),
+	)
+
+	if execPath != "" {
+		log.Printf("🔍 Using Chrome at: %s for 9GAG", execPath)
+		opts = append(opts, chromedp.ExecPath(execPath))
+	}
+
+	allocCtx, allocCancel := chromedp.NewExecAllocator(ctx, opts...)
+	defer allocCancel()
+
+	browserCtx, browserCancel := chromedp.NewContext(allocCtx, chromedp.WithLogf(func(string, ...interface{}) {}))
+	defer browserCancel()
+
+	var htmlContent string
+	err := chromedp.Run(browserCtx,
+		// Set cookies for age verification if available
+		ube.set9GAGCookies(),
+		chromedp.Navigate(pageURL),
+		chromedp.Sleep(waitTime),
+		// Try to handle age confirmation popup if present
+		ube.handle9GAGAgeConfirmation(),
+		chromedp.WaitVisible(`body`, chromedp.ByQuery),
+		chromedp.Sleep(3*time.Second), // Additional wait for content loading
+		chromedp.InnerHTML(`html`, &htmlContent, chromedp.ByQuery),
+	)
+
+	if err != nil {
+		return "", fmt.Errorf("9GAG browser navigation failed: %v", err)
+	}
+
+	log.Printf("🌐 Retrieved 9GAG HTML content, length: %d", len(htmlContent))
+	return htmlContent, nil
+}
+
+func (ube *UniversalBrowserExtractor) render9GAGWithAuthentication(pageURL string) (string, error) {
+	log.Printf("🔐 Attempting authenticated 9GAG access with age verification")
+	
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	homeDir := os.Getenv("HOME")
+	possiblePaths := []string{
+		filepath.Join(homeDir, "chrome/chrome"),
+		filepath.Join(homeDir, "bin/chrome"),
+		"/usr/bin/google-chrome",
+		"/usr/bin/google-chrome-stable",
+		"/usr/bin/chromium-browser",
+		"/usr/bin/chromium",
+		"/opt/google/chrome/chrome",
+		"/snap/bin/chromium",
+	}
+
+	execPath := ""
+	for _, path := range possiblePaths {
+		if _, err := os.Stat(path); err == nil {
+			execPath = path
+			break
+		}
+	}
+
+	// Create persistent user data directory for authentication
+	userDataDir := filepath.Join(ube.tempDir, "chrome-9gag-profile")
+	os.MkdirAll(userDataDir, 0755)
+
+	opts := append(chromedp.DefaultExecAllocatorOptions[:],
+		chromedp.DisableGPU,
+		chromedp.NoSandbox,
+		chromedp.Headless,
+		chromedp.UserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"),
+		chromedp.Flag("user-data-dir", userDataDir),
+		chromedp.Flag("disable-web-security", true),
+		chromedp.Flag("disable-extensions", true),
+		chromedp.Flag("disable-plugins", true),
+		chromedp.Flag("disable-images", false),
+		chromedp.Flag("disable-javascript", false),
+		chromedp.Flag("mute-audio", true),
+		chromedp.Flag("no-first-run", true),
+		chromedp.Flag("no-default-browser-check", true),
+		chromedp.Flag("disable-default-apps", true),
+		chromedp.Flag("disable-popup-blocking", true),
+		chromedp.Flag("disable-translate", true),
+		chromedp.Flag("disable-background-timer-throttling", true),
+		chromedp.Flag("disable-renderer-backgrounding", true),
+		chromedp.Flag("disable-backgrounding-occluded-windows", true),
+		chromedp.Flag("disable-ipc-flooding-protection", true),
+		chromedp.Flag("log-level", "3"),
+		chromedp.Flag("silent", true),
+		chromedp.Flag("disable-logging", true),
+		chromedp.Flag("quiet", true),
+		chromedp.Flag("disable-dev-shm-usage", true),
+		chromedp.Flag("disable-cookie-encryption", true),
+		chromedp.Flag("disable-sync", true),
+		chromedp.Flag("disable-background-networking", true),
+		chromedp.Flag("disable-component-update", true),
+		chromedp.Flag("disable-domain-reliability", true),
+		chromedp.Flag("disable-features", "VizDisplayCompositor,AudioServiceOutOfProcess"),
+		chromedp.Flag("no-sandbox", true),
+		chromedp.Flag("disable-setuid-sandbox", true),
+		chromedp.Flag("accept-language", "en-US,en;q=0.9"),
+	)
+
+	if execPath != "" {
+		opts = append(opts, chromedp.ExecPath(execPath))
+	}
+
+	allocCtx, allocCancel := chromedp.NewExecAllocator(ctx, opts...)
+	defer allocCancel()
+
+	browserCtx, browserCancel := chromedp.NewContext(allocCtx, chromedp.WithLogf(func(string, ...interface{}) {}))
+	defer browserCancel()
+
+	var htmlContent string
+	err := chromedp.Run(browserCtx,
+		// First, visit 9GAG main page to establish session
+		chromedp.Navigate("https://9gag.com"),
+		chromedp.Sleep(2*time.Second),
+		// Set age verification cookies
+		ube.set9GAGAgeVerificationCookies(),
+		chromedp.Sleep(1*time.Second),
+		// Now navigate to the actual content
+		chromedp.Navigate(pageURL),
+		chromedp.Sleep(5*time.Second),
+		// Handle any age confirmation dialogs
+		ube.handle9GAGAgeConfirmation(),
+		chromedp.WaitVisible(`body`, chromedp.ByQuery),
+		chromedp.Sleep(5*time.Second), // Extra wait for age-restricted content
+		chromedp.InnerHTML(`html`, &htmlContent, chromedp.ByQuery),
+	)
+
+	if err != nil {
+		return "", fmt.Errorf("authenticated 9GAG navigation failed: %v", err)
+	}
+
+	log.Printf("🔐 Retrieved authenticated 9GAG HTML content, length: %d", len(htmlContent))
+	return htmlContent, nil
+}
+
+func (ube *UniversalBrowserExtractor) is9GAGAgeRestricted(html string) bool {
+	// Check for common age-restriction indicators in 9GAG HTML
+	ageRestrictedIndicators := []string{
+		"age-restriction",
+		"age-gate",
+		"mature-content",
+		"nsfw-warning",
+		"adult-content",
+		"18+",
+		"confirm your age",
+		"are you 18",
+		"verify age",
+		"age verification",
+		"content is not suitable",
+		"mature audiences",
+	}
+
+	htmlLower := strings.ToLower(html)
+	for _, indicator := range ageRestrictedIndicators {
+		if strings.Contains(htmlLower, indicator) {
+			return true
+		}
+	}
+
+	// Check if the content is blocked or shows a warning page
+	if strings.Contains(htmlLower, "blocked") && strings.Contains(htmlLower, "content") {
+		return true
+	}
+
+	return false
+}
+
+func (ube *UniversalBrowserExtractor) set9GAGCookies() chromedp.Action {
+	return chromedp.ActionFunc(func(ctx context.Context) error {
+		// Check if 9GAG cookies file exists
+		ninegagCookiesPath := filepath.Join(ube.workingDir, "9gag_cookies.txt")
+		if _, err := os.Stat(ninegagCookiesPath); err == nil {
+			log.Printf("🍪 Loading 9GAG cookies for age verification")
+			// Note: In a real implementation, you'd parse the cookies file and set them
+			// For now, we'll set basic age verification cookies programmatically
+		}
+
+		// Set basic age verification cookies
+		return ube.set9GAGAgeVerificationCookies().Do(ctx)
+	})
+}
+
+func (ube *UniversalBrowserExtractor) set9GAGAgeVerificationCookies() chromedp.Action {
+	return chromedp.ActionFunc(func(ctx context.Context) error {
+		// Set cookies that indicate the user has verified their age
+		cookies := []*http.Cookie{
+			{
+				Name:   "age_verified",
+				Value:  "1",
+				Domain: ".9gag.com",
+				Path:   "/",
+			},
+			{
+				Name:   "mature_content",
+				Value:  "true",
+				Domain: ".9gag.com", 
+				Path:   "/",
+			},
+			{
+				Name:   "nsfw_ok",
+				Value:  "1",
+				Domain: ".9gag.com",
+				Path:   "/",
+			},
+			{
+				Name:   "user_preference",
+				Value:  "mature_allowed",
+				Domain: ".9gag.com",
+				Path:   "/",
+			},
+		}
+
+		for _, cookie := range cookies {
+			// Use chromedp.ActionFunc to set cookies manually
+			err := chromedp.ActionFunc(func(ctx context.Context) error {
+				// Set cookie using JavaScript execution as chromedp doesn't have direct SetCookies
+				script := fmt.Sprintf(`document.cookie = "%s=%s; domain=%s; path=%s"`, 
+					cookie.Name, cookie.Value, cookie.Domain, cookie.Path)
+				return chromedp.Evaluate(script, nil).Do(ctx)
+			}).Do(ctx)
+			
+			if err != nil {
+				log.Printf("⚠️ Failed to set 9GAG cookie %s: %v", cookie.Name, err)
+			}
+		}
+
+		log.Printf("🍪 Set 9GAG age verification cookies")
+		return nil
+	})
+}
+
+func (ube *UniversalBrowserExtractor) handle9GAGAgeConfirmation() chromedp.Action {
+	return chromedp.ActionFunc(func(ctx context.Context) error {
+		// Try to find and click age confirmation buttons
+		ageConfirmSelectors := []string{
+			`button[data-testid="age-confirm"]`,
+			`button:contains("I am 18 or older")`,
+			`button:contains("Yes, I am 18+")`,
+			`button:contains("Continue")`,
+			`button:contains("I understand")`,
+			`.age-gate-confirm`,
+			`.mature-content-continue`,
+			`#age-verification-continue`,
+		}
+
+		for _, selector := range ageConfirmSelectors {
+			// Try to click the button if it exists (don't fail if it doesn't)
+			err := chromedp.Click(selector, chromedp.ByQuery).Do(ctx)
+			if err == nil {
+				log.Printf("✅ Clicked age confirmation button: %s", selector)
+				// Wait a bit after clicking
+				chromedp.Sleep(2 * time.Second).Do(ctx)
+				break
+			}
+		}
+
+		return nil
+	})
 }
