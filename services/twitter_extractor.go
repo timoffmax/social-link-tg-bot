@@ -70,7 +70,7 @@ func (te *TwitterExtractor) ExtractTweet(twitterURL string) ([]*MediaInfo, error
 	for i, method := range methods {
 		log.Printf("📡 Trying extraction method %d/%d", i+1, len(methods))
 		mediaInfos, err := method(tweetID, username)
-		if err == nil && len(mediaInfos) > 0 {
+		if err == nil && len(mediaInfos) > 0 && te.isValidExtraction(mediaInfos) {
 			log.Printf("✅ Success with method %d: found %d items", i+1, len(mediaInfos))
 			return mediaInfos, nil
 		}
@@ -78,6 +78,53 @@ func (te *TwitterExtractor) ExtractTweet(twitterURL string) ([]*MediaInfo, error
 	}
 	
 	return nil, fmt.Errorf("all extraction methods failed")
+}
+
+// isValidExtraction checks if the extraction result is meaningful
+func (te *TwitterExtractor) isValidExtraction(mediaInfos []*MediaInfo) bool {
+	if len(mediaInfos) == 0 {
+		return false
+	}
+	
+	// If we have actual media files, it's always valid
+	for _, info := range mediaInfos {
+		if info.Type != "text" && info.Filename != "" {
+			return true
+		}
+	}
+	
+	// For text-only results, check if the content is meaningful
+	for _, info := range mediaInfos {
+		if info.Type == "text" {
+			text := strings.TrimSpace(info.Caption)
+			
+			// Reject if text is too short or just domain names
+			if len(text) < 10 {
+				log.Printf("🚫 Rejecting extraction: text too short (%d chars): %s", len(text), text)
+				return false
+			}
+			
+			// Reject if text is just domain names or error messages
+			lowercaseText := strings.ToLower(text)
+			badTexts := []string{
+				"nitter.it", "nitter.net", "twitter.com", "x.com",
+				"fixupx.com", "not found", "error", "failed",
+				"access denied", "rate limit", "unavailable",
+			}
+			
+			for _, badText := range badTexts {
+				if strings.Contains(lowercaseText, badText) && len(text) < 50 {
+					log.Printf("🚫 Rejecting extraction: contains bad text '%s': %s", badText, text)
+					return false
+				}
+			}
+			
+			// If we get here, it's meaningful text content
+			return true
+		}
+	}
+	
+	return false
 }
 
 func (te *TwitterExtractor) extractTweetDetails(twitterURL string) (string, string, error) {
