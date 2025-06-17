@@ -460,8 +460,8 @@ func (te *TwitterExtractor) extractViaFixupxProxy(tweetID string, username strin
 	bodyStr := string(body)
 	log.Printf("🔍 Fixupx response length: %d bytes", len(bodyStr))
 	
-	// Parse fixupx HTML for media and text
-	return te.parseFixupxHTML(bodyStr, tweetID, username)
+	// Parse fixupx HTML for direct media URLs from meta tags (more reliable)
+	return te.parseFixupxMetaTags(bodyStr, tweetID, username)
 }
 
 func (te *TwitterExtractor) extractViaSimpleTextFallback(tweetID string, username string) ([]*MediaInfo, error) {
@@ -581,34 +581,21 @@ func (te *TwitterExtractor) parseEmbedResponse(response, tweetID string) ([]*Med
 	picMatches := picPattern.FindAllStringSubmatch(rawTweetText, -1)
 	hasPhotoReferences := len(picMatches) > 0
 	
+	// Return an error if photos exist but we couldn't extract them from embed
+	// This will allow the extraction chain to try other methods (including fixupx)
 	if hasPhotoReferences {
-		// Photos exist but we couldn't download them - provide fixupx link
-		log.Printf("🖼️ Found %d pic.twitter.com references but no direct media URLs", len(picMatches))
-		
-		username, _ := te.extractUsernameFromEmbedData(embedData)
-		if username == "" {
-			username = "user"
-		}
-		fixedURL := fmt.Sprintf("https://fixupx.com/%s/status/%s", username, tweetID)
-		caption := fmt.Sprintf("%s\n\n🖼️ Photos: %s", tweetText, fixedURL)
-		
-		textMedia := &MediaInfo{
-			Type:    "text",
-			URL:     fmt.Sprintf("https://x.com/i/web/status/%s", tweetID),
-			Caption: caption,
-			Filename: "",
-		}
-		mediaInfos = append(mediaInfos, textMedia)
-	} else {
-		// Text-only tweet - just return clean text
-		textMedia := &MediaInfo{
-			Type:    "text",
-			URL:     fmt.Sprintf("https://x.com/i/web/status/%s", tweetID),
-			Caption: tweetText,
-			Filename: "",
-		}
-		mediaInfos = append(mediaInfos, textMedia)
+		log.Printf("🖼️ Found %d pic.twitter.com references but no direct media URLs in embed", len(picMatches))
+		return nil, fmt.Errorf("photos detected but not extractable from embed API")
 	}
+	
+	// Text-only tweet - just return clean text
+	textMedia := &MediaInfo{
+		Type:    "text",
+		URL:     fmt.Sprintf("https://x.com/i/web/status/%s", tweetID),
+		Caption: tweetText,
+		Filename: "",
+	}
+	mediaInfos = append(mediaInfos, textMedia)
 	
 	return mediaInfos, nil
 }
@@ -1009,6 +996,104 @@ func (te *TwitterExtractor) addCookiesToRequest(req *http.Request) {
 	}
 	
 	log.Printf("🍪 Added Twitter cookies to request")
+}
+
+func (te *TwitterExtractor) parseFixupxMetaTags(html string, tweetID string, username string) ([]*MediaInfo, error) {
+	var mediaInfos []*MediaInfo
+	
+	log.Printf("📝 Parsing fixupx meta tags for tweet %s by @%s", tweetID, username)
+	
+	// Extract tweet text from og:description meta tag
+	tweetText := ""
+	descPattern := regexp.MustCompile(`<meta[^>]*property="og:description"[^>]*content="([^"]*)"`)
+	if matches := descPattern.FindStringSubmatch(html); len(matches) > 1 {
+		tweetText = matches[1]
+		// Decode HTML entities
+		tweetText = strings.ReplaceAll(tweetText, "&amp;", "&")
+		tweetText = strings.ReplaceAll(tweetText, "&lt;", "<")
+		tweetText = strings.ReplaceAll(tweetText, "&gt;", ">")
+		tweetText = strings.ReplaceAll(tweetText, "&quot;", "\"")
+		tweetText = strings.ReplaceAll(tweetText, "&#39;", "'")
+		tweetText = strings.TrimSpace(tweetText)
+	}
+	
+	log.Printf("📝 Extracted tweet text from fixupx: %s", tweetText)
+	
+	// Extract media URLs from og:image and twitter:image meta tags
+	var mediaURLs []string
+	
+	// Look for og:image and twitter:image meta tags
+	imagePatterns := []string{
+		`<meta[^>]*property="og:image"[^>]*content="([^"]*pbs\.twimg\.com[^"]*)"`,
+		`<meta[^>]*property="twitter:image"[^>]*content="([^"]*pbs\.twimg\.com[^"]*)"`,
+		`<meta[^>]*name="twitter:image"[^>]*content="([^"]*pbs\.twimg\.com[^"]*)"`,
+	}
+	
+	for _, pattern := range imagePatterns {
+		re := regexp.MustCompile(pattern)
+		matches := re.FindAllStringSubmatch(html, -1)
+		for _, match := range matches {
+			if len(match) > 1 {
+				mediaURL := match[1]
+				// Ensure we have the large version
+				if !strings.Contains(mediaURL, "format=") && !strings.Contains(mediaURL, ".jpg") && !strings.Contains(mediaURL, ".png") {
+					if strings.Contains(mediaURL, "?") {
+						mediaURL += "&format=jpg&name=large"
+					} else {
+						mediaURL += "?format=jpg&name=large"
+					}
+				}
+				mediaURLs = append(mediaURLs, mediaURL)
+			}
+		}
+	}
+	
+	// Remove duplicates
+	seen := make(map[string]bool)
+	var uniqueURLs []string
+	for _, url := range mediaURLs {
+		if !seen[url] {
+			seen[url] = true
+			uniqueURLs = append(uniqueURLs, url)
+		}
+	}
+	
+	log.Printf("📸 Extracted %d media URLs from fixupx meta tags: %v", len(uniqueURLs), uniqueURLs)
+	
+	// Download each media item
+	for i, mediaURL := range uniqueURLs {
+		mediaInfo, err := te.downloadMedia(mediaURL, tweetID, i)
+		if err != nil {
+			log.Printf("⚠️ Failed to download media %d from fixupx: %v", i, err)
+			continue
+		}
+		
+		// Use extracted tweet text as caption
+		if tweetText != "" {
+			mediaInfo.Caption = tweetText
+		}
+		
+		mediaInfos = append(mediaInfos, mediaInfo)
+	}
+	
+	// If we found media, return it
+	if len(mediaInfos) > 0 {
+		return mediaInfos, nil
+	}
+	
+	// If no media found but we have text, return text-only
+	if tweetText != "" {
+		log.Printf("📝 No media found on fixupx, returning text content")
+		textMedia := &MediaInfo{
+			Type:    "text",
+			URL:     fmt.Sprintf("https://x.com/%s/status/%s", username, tweetID),
+			Caption: tweetText,
+			Filename: "",
+		}
+		mediaInfos = append(mediaInfos, textMedia)
+	}
+	
+	return mediaInfos, nil
 }
 
 func (te *TwitterExtractor) parseFixupxHTML(html string, tweetID string, username string) ([]*MediaInfo, error) {
