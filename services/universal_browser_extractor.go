@@ -347,11 +347,15 @@ func (ube *UniversalBrowserExtractor) extractYouTubeMedia(mediaURL string) ([]*M
 		}
 	}
 
-	// Use longer timeout for YouTube community posts as they load more content
+	// Use much longer timeout for YouTube community posts as they load heavy JavaScript
 	timeout := 6 * time.Second
 	if isYouTubePost {
-		timeout = 12 * time.Second
-		log.Printf("📺 Using extended timeout for YouTube community post")
+		timeout = 60 * time.Second
+		log.Printf("📺 Using extended 60-second timeout for YouTube community post")
+		
+		// Use specialized YouTube community post extraction
+		// Author info will be extracted inside the specialized function
+		return ube.extractYouTubeCommunityPost(mediaURL, username, "")
 	}
 
 	html, err := ube.renderPageWithBrowser(mediaURL, timeout)
@@ -687,16 +691,83 @@ func (ube *UniversalBrowserExtractor) trySimple9GAGFallback(pageURL string) (str
 	return string(bodyBytes), nil
 }
 
+func (ube *UniversalBrowserExtractor) tryRedditHTTPExtraction(pageURL string) (string, error) {
+	log.Printf("🌐 Trying Reddit HTTP extraction")
+	
+	client := &http.Client{
+		Timeout: 15 * time.Second,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return nil // Follow redirects
+		},
+	}
+	
+	req, err := http.NewRequest("GET", pageURL, nil)
+	if err != nil {
+		return "", err
+	}
+	
+	// Set headers to mimic a real browser session
+	req.Header.Set("User-Agent", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
+	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7")
+	req.Header.Set("Accept-Language", "en-US,en;q=0.9")
+	req.Header.Set("Accept-Encoding", "gzip, deflate, br")
+	req.Header.Set("Cache-Control", "no-cache")
+	req.Header.Set("Pragma", "no-cache")
+	req.Header.Set("Sec-Ch-Ua", `"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"`)
+	req.Header.Set("Sec-Ch-Ua-Mobile", "?0")
+	req.Header.Set("Sec-Ch-Ua-Platform", `"Linux"`)
+	req.Header.Set("Sec-Fetch-Dest", "document")
+	req.Header.Set("Sec-Fetch-Mode", "navigate")
+	req.Header.Set("Sec-Fetch-Site", "none")
+	req.Header.Set("Sec-Fetch-User", "?1")
+	req.Header.Set("Upgrade-Insecure-Requests", "1")
+	req.Header.Set("Referer", "https://www.reddit.com/")
+	
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	
+	if resp.StatusCode != 200 {
+		return "", fmt.Errorf("HTTP %d: %s", resp.StatusCode, resp.Status)
+	}
+	
+	var reader io.Reader = resp.Body
+	if resp.Header.Get("Content-Encoding") == "gzip" {
+		gzipReader, err := gzip.NewReader(resp.Body)
+		if err != nil {
+			return "", err
+		}
+		defer gzipReader.Close()
+		reader = gzipReader
+	}
+	
+	bodyBytes, err := io.ReadAll(reader)
+	if err != nil {
+		return "", err
+	}
+	
+	return string(bodyBytes), nil
+}
+
 func (ube *UniversalBrowserExtractor) extractRedditMedia(mediaURL string) ([]*MediaInfo, error) {
-	log.Printf("🟧 Extracting Reddit media with headless browser (extended timeout)")
+	log.Printf("🟧 Extracting Reddit media with HTTP fallback first")
 
 	// Extract username from URL
 	username := ExtractRedditUsername(mediaURL)
 
-	// Use longer timeout for Reddit due to slow loading
-	html, err := ube.renderPageWithBrowserTimeout(mediaURL, 8*time.Second, 60*time.Second)
+	// Try simple HTTP request first for text posts (faster and more reliable)
+	html, err := ube.tryRedditHTTPExtraction(mediaURL)
 	if err != nil {
-		return nil, err
+		log.Printf("❌ Reddit HTTP extraction failed: %v, trying browser with reduced timeout", err)
+		// Fallback to browser extraction with reduced timeout for text posts
+		log.Printf("🟧 Trying headless browser as fallback (reduced timeout for text posts)")
+		html, err = ube.renderPageWithBrowserTimeout(mediaURL, 5*time.Second, 30*time.Second)
+		if err != nil {
+			log.Printf("❌ Browser extraction also failed: %v", err)
+			return nil, err
+		}
 	}
 
 	// Extract Reddit author info from HTML
@@ -753,6 +824,23 @@ func (ube *UniversalBrowserExtractor) extractRedditMedia(mediaURL string) ([]*Me
 				URL:      mediaURL,
 				Caption:  FormatAuthorCaption("reddit", displayName, username, originalCaption),
 				Filename: filename,
+			}
+			mediaInfos = append(mediaInfos, mediaInfo)
+		}
+	}
+
+	// If no media found, check if this is a text post
+	if len(mediaInfos) == 0 {
+		textContent := ube.extractRedditTextPost(html)
+		if textContent != "" {
+			log.Printf("📝 Found Reddit text post content")
+			
+			// Create a text-only MediaInfo for Reddit text post
+			mediaInfo := &MediaInfo{
+				Type:     "text",
+				URL:      mediaURL,
+				Caption:  FormatAuthorCaption("reddit", displayName, username, textContent),
+				Filename: "", // No file for text posts
 			}
 			mediaInfos = append(mediaInfos, mediaInfo)
 		}
@@ -1285,6 +1373,93 @@ func (ube *UniversalBrowserExtractor) extractRedditCaption(html string) string {
 			caption := strings.TrimSpace(match[1])
 			if caption != "" && !strings.Contains(caption, "reddit") && !strings.Contains(caption, "Reddit") {
 				return caption
+			}
+		}
+	}
+
+	return ""
+}
+
+func (ube *UniversalBrowserExtractor) extractRedditTextPost(html string) string {
+	// Extract Reddit text post content from various HTML structures
+	patterns := []string{
+		// Full content extraction with multiple paragraphs (most specific first)
+		`<div[^>]*class="md text-14-scalable"[^>]*style="--emote-size: 20px">(.+?)</div>`,
+		`<div[^>]*class="md text-14-scalable"[^>]*>(.+?)</div>`,
+		`<div[^>]*data-post-click-location="text-body"[^>]*>(.+?)</div>`,
+		
+		// Modern Reddit patterns
+		`<div[^>]*data-testid="post-content"[^>]*>(.+?)</div>`,
+		`<div[^>]*class="[^"]*usertext-body[^"]*"[^>]*>(.+?)</div>`,
+		`<div[^>]*class="[^"]*RichTextJSON-root[^"]*"[^>]*>(.+?)</div>`,
+		
+		// Old Reddit patterns
+		`<div[^>]*class="[^"]*md[^"]*"[^>]*>(.+?)</div>`,
+		
+		// Meta tag patterns (for HTTP simple responses)
+		`<meta[^>]*property="og:description"[^>]*content="([^"]+)"[^>]*>`,
+		`<meta[^>]*name="twitter:description"[^>]*content="([^"]+)"[^>]*>`,
+		`<meta[^>]*property="og:title"[^>]*content="([^"]+)"[^>]*>`,
+		
+		// JSON structured data
+		`"selftext":\s*"([^"]+)"`,
+		`"text":\s*"([^"]+)"`,
+		
+		// Fallback: post title from title tag
+		`<title>([^<]+)</title>`,
+	}
+
+	for _, pattern := range patterns {
+		re := regexp.MustCompile(pattern)
+		matches := re.FindStringSubmatch(html)
+		if len(matches) > 1 {
+			content := strings.TrimSpace(matches[1])
+			
+			// Clean up content - extract text from paragraph tags
+			if strings.Contains(content, "<p") {
+				// Extract text from all paragraph tags and join with line breaks
+				pRe := regexp.MustCompile(`<p[^>]*>(.*?)</p>`)
+				pMatches := pRe.FindAllStringSubmatch(content, -1)
+				var paragraphs []string
+				for _, pMatch := range pMatches {
+					if len(pMatch) > 1 {
+						paragraph := strings.TrimSpace(pMatch[1])
+						// Remove any remaining HTML tags
+						paragraph = regexp.MustCompile(`<[^>]+>`).ReplaceAllString(paragraph, "")
+						if paragraph != "" {
+							paragraphs = append(paragraphs, paragraph)
+						}
+					}
+				}
+				if len(paragraphs) > 0 {
+					content = strings.Join(paragraphs, "\n\n")
+				}
+			} else {
+				// Remove any HTML tags if no paragraphs found
+				content = regexp.MustCompile(`<[^>]+>`).ReplaceAllString(content, "")
+			}
+			
+			// Basic text cleanup
+			content = strings.ReplaceAll(content, "\\n", "\n")
+			content = strings.ReplaceAll(content, "\\r", "\r") 
+			content = strings.ReplaceAll(content, "\\t", "\t")
+			content = strings.ReplaceAll(content, "\\/", "/")
+			content = strings.ReplaceAll(content, "&amp;", "&")
+			content = strings.ReplaceAll(content, "&lt;", "<")
+			content = strings.ReplaceAll(content, "&gt;", ">")
+			content = strings.ReplaceAll(content, "&quot;", "\"")
+			
+			// Filter out common non-content matches
+			contentLower := strings.ToLower(content)
+			if content != "" &&
+				!strings.Contains(contentLower, "reddit") &&
+				!strings.Contains(contentLower, "comments") &&
+				!strings.Contains(contentLower, "upvotes") &&
+				!strings.Contains(contentLower, "posted by") &&
+				!strings.Contains(contentLower, "r/") &&
+				!strings.HasPrefix(contentLower, "u/") &&
+				len(content) > 15 { // Ensure it's substantial content
+				return content
 			}
 		}
 	}
@@ -2167,4 +2342,312 @@ func (ube *UniversalBrowserExtractor) extract9GAGAuthorInfo(html string) (displa
 	}
 	
 	return "", ""
+}
+
+// extractYouTubeCommunityPost handles YouTube community posts with specialized browser extraction
+func (ube *UniversalBrowserExtractor) extractYouTubeCommunityPost(mediaURL, username, displayName string) ([]*MediaInfo, error) {
+	log.Printf("📺 Starting specialized YouTube community post extraction")
+	
+	// Try enhanced browser extraction first
+	mediaInfos, err := ube.extractYouTubeCommunityPostWithBrowser(mediaURL, username, displayName)
+	if err == nil && len(mediaInfos) > 0 {
+		log.Printf("✅ Enhanced browser extraction succeeded with %d items", len(mediaInfos))
+		return mediaInfos, nil
+	}
+	
+	log.Printf("⚠️ Enhanced browser extraction failed: %v", err)
+	log.Printf("🔄 Trying fallback browser extraction...")
+	
+	// Try fallback browser extraction
+	mediaInfos, err = ube.extractYouTubeCommunityPostFallback(mediaURL, username, displayName)
+	if err == nil && len(mediaInfos) > 0 {
+		log.Printf("✅ Fallback browser extraction succeeded with %d items", len(mediaInfos))
+		return mediaInfos, nil
+	}
+	
+	log.Printf("⚠️ Fallback browser extraction failed: %v", err)
+	log.Printf("🔄 Trying API fallback...")
+	
+	// Try third-party API as last resort
+	mediaInfos, err = ube.extractYouTubeCommunityPostViaAPI(mediaURL, username, displayName)
+	if err == nil && len(mediaInfos) > 0 {
+		log.Printf("✅ API fallback succeeded with %d items", len(mediaInfos))
+		return mediaInfos, nil
+	}
+	
+	log.Printf("❌ All YouTube community post extraction methods failed")
+	return nil, fmt.Errorf("all extraction methods failed for YouTube community post")
+}
+
+// extractYouTubeCommunityPostWithBrowser uses enhanced Chrome with anti-bot evasion for YouTube community posts
+func (ube *UniversalBrowserExtractor) extractYouTubeCommunityPostWithBrowser(mediaURL, username, displayName string) ([]*MediaInfo, error) {
+	log.Printf("📺 Starting enhanced browser extraction for YouTube community post")
+	
+	// Create context with extended timeout
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	
+	// Enhanced Chrome options for YouTube community posts
+	opts := append(chromedp.DefaultExecAllocatorOptions[:],
+		chromedp.Flag("headless", "new"), // Use new headless mode
+		chromedp.Flag("no-sandbox", true),
+		chromedp.Flag("disable-gpu", true),
+		chromedp.Flag("disable-dev-shm-usage", true),
+		chromedp.Flag("disable-extensions", true),
+		chromedp.Flag("no-first-run", true),
+		chromedp.Flag("disable-default-apps", true),
+		chromedp.Flag("disable-blink-features", "AutomationControlled"), // Hide automation
+		chromedp.Flag("virtual-time-budget", "45000"), // 45 seconds for full page load
+		chromedp.Flag("run-all-compositor-stages-before-draw", true),
+		chromedp.Flag("enable-automation", false),
+		chromedp.Flag("disable-background-timer-throttling", true),
+		chromedp.Flag("disable-backgrounding-occluded-windows", true),
+		chromedp.Flag("disable-renderer-backgrounding", true),
+		chromedp.Flag("disable-features", "TranslateUI"),
+		chromedp.WindowSize(1920, 1080),
+		chromedp.UserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"),
+	)
+	
+	// Add YouTube cookies if available
+	youtubeCookiesPath := filepath.Join(ube.workingDir, "youtube_cookies.txt")
+	if _, err := os.Stat(youtubeCookiesPath); err == nil {
+		opts = append(opts, chromedp.Flag("cookie-file", youtubeCookiesPath))
+		log.Printf("🍪 Using YouTube cookies: %s", youtubeCookiesPath)
+	}
+	
+	allocCtx, cancel2 := chromedp.NewExecAllocator(ctx, opts...)
+	defer cancel2()
+	
+	taskCtx, cancel3 := chromedp.NewContext(allocCtx)
+	defer cancel3()
+	
+	var html string
+	err := chromedp.Run(taskCtx,
+		chromedp.Navigate(mediaURL),
+		chromedp.WaitVisible("body", chromedp.ByQuery),
+		chromedp.Sleep(3*time.Second), // Let JavaScript load
+		chromedp.OuterHTML("html", &html),
+	)
+	
+	if err != nil {
+		return nil, fmt.Errorf("enhanced browser navigation failed: %v", err)
+	}
+	
+	log.Printf("📺 Enhanced browser rendered %d bytes of HTML", len(html))
+	
+	// Extract images and text from rendered HTML
+	return ube.parseYouTubeCommunityPostHTML(html, mediaURL, username, displayName)
+}
+
+// extractYouTubeCommunityPostFallback uses simpler browser setup as fallback
+func (ube *UniversalBrowserExtractor) extractYouTubeCommunityPostFallback(mediaURL, username, displayName string) ([]*MediaInfo, error) {
+	log.Printf("📺 Starting fallback browser extraction for YouTube community post")
+	
+	// Use the existing renderPageWithBrowser method with extended timeout
+	html, err := ube.renderPageWithBrowserTimeout(mediaURL, 45*time.Second, 45*time.Second)
+	if err != nil {
+		return nil, fmt.Errorf("fallback browser extraction failed: %v", err)
+	}
+	
+	log.Printf("📺 Fallback browser rendered %d bytes of HTML", len(html))
+	
+	// Extract images and text from rendered HTML
+	return ube.parseYouTubeCommunityPostHTML(html, mediaURL, username, displayName)
+}
+
+// extractYouTubeCommunityPostViaAPI uses third-party API as last resort
+func (ube *UniversalBrowserExtractor) extractYouTubeCommunityPostViaAPI(mediaURL, username, displayName string) ([]*MediaInfo, error) {
+	log.Printf("📺 Starting API fallback for YouTube community post")
+	
+	// Extract post ID from URL
+	postID := ""
+	if strings.Contains(mediaURL, "/post/") {
+		parts := strings.Split(mediaURL, "/post/")
+		if len(parts) > 1 {
+			postID = strings.Split(parts[1], "?")[0] // Remove query parameters
+		}
+	}
+	
+	if postID == "" {
+		return nil, fmt.Errorf("could not extract post ID from URL: %s", mediaURL)
+	}
+	
+	log.Printf("📺 Extracted post ID: %s", postID)
+	
+	// Try YouTube operational API
+	apiURL := fmt.Sprintf("https://yt.lemnoslife.com/community?part=snippet,contentDetails&id=%s", postID)
+	log.Printf("📺 Calling API: %s", apiURL)
+	
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Get(apiURL)
+	if err != nil {
+		return nil, fmt.Errorf("API request failed: %v", err)
+	}
+	defer resp.Body.Close()
+	
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("API returned HTTP %d", resp.StatusCode)
+	}
+	
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read API response: %v", err)
+	}
+	
+	log.Printf("📺 API response: %d bytes", len(body))
+	
+	// For now, return a text-only result indicating API was called
+	// TODO: Parse the JSON response to extract actual content
+	mediaInfo := &MediaInfo{
+		Type:    "text",
+		URL:     mediaURL,
+		Caption: FormatAuthorCaption("youtube", displayName, username, "YouTube Community Post (via API)"),
+	}
+	
+	return []*MediaInfo{mediaInfo}, nil
+}
+
+// parseYouTubeCommunityPostHTML extracts images and text from YouTube community post HTML
+func (ube *UniversalBrowserExtractor) parseYouTubeCommunityPostHTML(html, mediaURL, username, displayName string) ([]*MediaInfo, error) {
+	log.Printf("📺 Parsing YouTube community post HTML (%d bytes)", len(html))
+	
+	var mediaInfos []*MediaInfo
+	
+	// Enhanced YouTube community post image patterns
+	imagePatterns := []string{
+		// High-quality community post images
+		`<meta[^>]*property="og:image"[^>]*content="(https://yt[0-9]\.ggpht\.com/[^"]*)"`,
+		`<meta[^>]*property="og:image"[^>]*content="(https://i\.ytimg\.com/[^"]*)"`,
+		`<meta[^>]*property="og:image"[^>]*content="(https://lh[0-9]\.googleusercontent\.com/[^"]*)"`,
+		`<meta[^>]*name="twitter:image"[^>]*content="(https://yt[0-9]\.ggpht\.com/[^"]*)"`,
+		`<meta[^>]*name="twitter:image"[^>]*content="(https://i\.ytimg\.com/[^"]*)"`,
+		`<meta[^>]*name="twitter:image"[^>]*content="(https://lh[0-9]\.googleusercontent\.com/[^"]*)"`,
+		// JSON embedded images
+		`"url":"(https://yt[0-9]\.ggpht\.com/[^"]*)"`,
+		`"url":"(https://i\.ytimg\.com/[^"]*\.(jpg|jpeg|png|webp)[^"]*)"`,
+		`"url":"(https://lh[0-9]\.googleusercontent\.com/[^"]*)"`,
+		`"thumbnail":"(https://yt[0-9]\.ggpht\.com/[^"]*)"`,
+		`"image":"(https://yt[0-9]\.ggpht\.com/[^"]*)"`,
+		// IMG tags in rendered HTML
+		`<img[^>]*src="(https://yt[0-9]\.ggpht\.com/[^"]*)"`,
+		`<img[^>]*src="(https://i\.ytimg\.com/[^"]*\.(jpg|jpeg|png|webp)[^"]*)"`,
+		`<img[^>]*src="(https://lh[0-9]\.googleusercontent\.com/[^"]*)"`,
+		// Background images
+		`background-image:\s*url\("(https://yt[0-9]\.ggpht\.com/[^"]*)"`,
+		`background-image:\s*url\("(https://i\.ytimg\.com/[^"]*\.(jpg|jpeg|png|webp)[^"]*)"`,
+	}
+	
+	imageURLs := ube.extractURLsWithPatterns(html, imagePatterns)
+	log.Printf("📺 Found %d potential YouTube community post images", len(imageURLs))
+	
+	// Upgrade image quality and remove duplicates
+	uniqueImages := ube.upgradeYouTubeImageQuality(imageURLs)
+	log.Printf("📺 Found %d unique high-quality images", len(uniqueImages))
+	
+	// Extract community post text content
+	postText := ube.extractYouTubeCommunityPostText(html)
+	log.Printf("📺 Extracted post text: %.200s", postText)
+	
+	// Download images
+	for i, imageURL := range uniqueImages {
+		filename, err := ube.downloadMediaFile(imageURL, "youtube", "photo", i)
+		if err != nil {
+			log.Printf("⚠️ Failed to download YouTube community post image %d: %v", i, err)
+			continue
+		}
+		
+		mediaInfo := &MediaInfo{
+			Type:     "photo",
+			URL:      mediaURL,
+			Caption:  FormatAuthorCaption("youtube", displayName, username, postText),
+			Filename: filename,
+		}
+		mediaInfos = append(mediaInfos, mediaInfo)
+	}
+	
+	// If no images found, create text-only post
+	if len(mediaInfos) == 0 && postText != "" {
+		mediaInfo := &MediaInfo{
+			Type:    "text",
+			URL:     mediaURL,
+			Caption: FormatAuthorCaption("youtube", displayName, username, postText),
+		}
+		mediaInfos = append(mediaInfos, mediaInfo)
+	}
+	
+	log.Printf("📺 Successfully extracted %d media items from YouTube community post", len(mediaInfos))
+	return mediaInfos, nil
+}
+
+// extractYouTubeCommunityPostText extracts text content from YouTube community post HTML
+func (ube *UniversalBrowserExtractor) extractYouTubeCommunityPostText(html string) string {
+	// YouTube community post text patterns
+	textPatterns := []string{
+		// Meta description
+		`<meta[^>]*name="description"[^>]*content="([^"]*)"`,
+		`<meta[^>]*property="og:description"[^>]*content="([^"]*)"`,
+		`<meta[^>]*name="twitter:description"[^>]*content="([^"]*)"`,
+		// JSON-LD content
+		`"text":\s*"([^"]*)"`,
+		`"content":\s*"([^"]*)"`,
+		// Community post content
+		`class="[^"]*content-text[^"]*"[^>]*>([^<]*)</`,
+		`class="[^"]*post-content[^"]*"[^>]*>([^<]*)</`,
+	}
+	
+	for _, pattern := range textPatterns {
+		re := regexp.MustCompile(pattern)
+		matches := re.FindStringSubmatch(html)
+		
+		if len(matches) >= 2 {
+			text := strings.TrimSpace(matches[1])
+			// Decode HTML entities
+			text = strings.ReplaceAll(text, "&amp;", "&")
+			text = strings.ReplaceAll(text, "&lt;", "<")
+			text = strings.ReplaceAll(text, "&gt;", ">")
+			text = strings.ReplaceAll(text, "&quot;", `"`)
+			text = strings.ReplaceAll(text, "&#39;", "'")
+			text = strings.ReplaceAll(text, `\"`, `"`)
+			text = strings.ReplaceAll(text, `\\n`, "\n")
+			
+			if text != "" && len(text) > 10 { // Avoid very short matches
+				return text
+			}
+		}
+	}
+	
+	return ""
+}
+
+// upgradeYouTubeImageQuality upgrades YouTube image URLs to higher quality and removes duplicates
+func (ube *UniversalBrowserExtractor) upgradeYouTubeImageQuality(imageURLs []string) []string {
+	seen := make(map[string]bool)
+	var uniqueImages []string
+	
+	for _, imageURL := range imageURLs {
+		// Upgrade quality parameters
+		upgradedURL := imageURL
+		
+		// Upgrade small thumbnails to larger sizes
+		upgradedURL = regexp.MustCompile(`=s[0-9]+`).ReplaceAllString(upgradedURL, "=s800")
+		upgradedURL = regexp.MustCompile(`=w[0-9]+-h[0-9]+`).ReplaceAllString(upgradedURL, "=w800-h600")
+		
+		// Upgrade YouTube thumbnails to higher quality
+		if strings.Contains(upgradedURL, "i.ytimg.com") {
+			upgradedURL = strings.ReplaceAll(upgradedURL, "default.jpg", "maxresdefault.jpg")
+			upgradedURL = strings.ReplaceAll(upgradedURL, "hqdefault.jpg", "maxresdefault.jpg")
+			upgradedURL = strings.ReplaceAll(upgradedURL, "mqdefault.jpg", "maxresdefault.jpg")
+		}
+		
+		// Remove duplicates based on base URL (ignore quality parameters)
+		baseURL := regexp.MustCompile(`[?&].*$`).ReplaceAllString(upgradedURL, "")
+		baseURL = regexp.MustCompile(`=s[0-9]+.*$`).ReplaceAllString(baseURL, "")
+		
+		if !seen[baseURL] {
+			seen[baseURL] = true
+			uniqueImages = append(uniqueImages, upgradedURL)
+		}
+	}
+	
+	return uniqueImages
 }

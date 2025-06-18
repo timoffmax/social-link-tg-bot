@@ -84,6 +84,28 @@ func extractInstagramUsernameFromURL(url string) string {
 	return ""
 }
 
+// extractRedditUsernameFromURL extracts username from Reddit URL if present
+func extractRedditUsernameFromURL(url string) string {
+	// Reddit URL patterns with usernames: https://www.reddit.com/user/username/... or https://www.reddit.com/u/username/...
+	re := regexp.MustCompile(`reddit\.com/u(?:ser)?/([^/]+)`)
+	matches := re.FindStringSubmatch(url)
+	if len(matches) > 1 {
+		return matches[1]
+	}
+	return ""
+}
+
+// extractRedditSubredditFromURL extracts subreddit from Reddit URL
+func extractRedditSubredditFromURL(url string) string {
+	// Reddit URL patterns: https://www.reddit.com/r/subreddit/... 
+	re := regexp.MustCompile(`reddit\.com/r/([^/]+)`)
+	matches := re.FindStringSubmatch(url)
+	if len(matches) > 1 {
+		return matches[1]
+	}
+	return ""
+}
+
 // getFilePath resolves file paths relative to the working directory
 func (yd *YtDlpDownloader) getFilePath(filename string) string {
 	if filepath.IsAbs(filename) {
@@ -269,6 +291,13 @@ func (yd *YtDlpDownloader) attemptDownload(url string, outputTemplate string, pr
 			log.Printf("Download succeeded but ffmpeg post-processing failed (non-critical)")
 			downloadSuccess = true
 		} else {
+			// For Reddit photo posts, try to extract direct image URLs from yt-dlp output before failing
+			if strings.Contains(url, "reddit.com") {
+				if imageURLs := yd.extractRedditImageURLsFromOutput(outputStr); len(imageURLs) > 0 {
+					log.Printf("🖼️ Found %d Reddit image URLs in yt-dlp output, downloading directly", len(imageURLs))
+					return yd.downloadRedditImagesDirectly(imageURLs, url, timestamp)
+				}
+			}
 			return nil, fmt.Errorf("download failed: %v\nOutput: %s", err, outputStr)
 		}
 	} else {
@@ -345,18 +374,24 @@ func (yd *YtDlpDownloader) attemptDownload(url string, outputTemplate string, pr
 		
 		mediaType := yd.detectMediaType(filePath)
 		
-		// If we have a video file, skip all thumbnails
-		if hasVideo && mediaType == "photo" {
-			filename := filepath.Base(filePath)
-			// Check if this is a thumbnail file (contains .orig, .large, .medium, .small, .thumb)
-			isThumbnail := strings.Contains(filename, ".orig.jpg") || 
-						   strings.Contains(filename, ".large.jpg") || 
-						   strings.Contains(filename, ".medium.jpg") || 
-						   strings.Contains(filename, ".small.jpg") || 
-						   strings.Contains(filename, ".thumb.jpg")
-			
-			if isThumbnail {
-				log.Printf("Skipping thumbnail %s because video is present", filePath)
+		// If we have a video file, skip all thumbnails and standalone audio files
+		if hasVideo {
+			if mediaType == "photo" {
+				filename := filepath.Base(filePath)
+				// Check if this is a thumbnail file (contains .orig, .large, .medium, .small, .thumb)
+				isThumbnail := strings.Contains(filename, ".orig.jpg") || 
+							   strings.Contains(filename, ".large.jpg") || 
+							   strings.Contains(filename, ".medium.jpg") || 
+							   strings.Contains(filename, ".small.jpg") || 
+							   strings.Contains(filename, ".thumb.jpg")
+				
+				if isThumbnail {
+					log.Printf("Skipping thumbnail %s because video is present", filePath)
+					continue
+				}
+			} else if mediaType == "audio" {
+				// Skip standalone audio files when video is present (they're usually separate DASH streams)
+				log.Printf("Skipping audio file %s because video is present", filePath)
 				continue
 			}
 		}
@@ -527,6 +562,34 @@ func (yd *YtDlpDownloader) attemptDownload(url string, outputTemplate string, pr
 				}
 			}
 			caption = FormatAuthorCaption("facebook", displayName, "", description) // Empty username for Facebook
+		} else if strings.Contains(url, "reddit.com") {
+			// Reddit platform - extract subreddit, username (if available), and post title
+			subreddit := extractRedditSubredditFromURL(url)
+			username := extractRedditUsernameFromURL(url) // Often empty for most Reddit post URLs
+			
+			// Try to get post title/description from metadata
+			postTitle := ""
+			if metadataInfo != nil {
+				// Reddit metadata often has the post title in various fields
+				if title, ok := metadataInfo["title"].(string); ok && title != "" {
+					postTitle = title
+				} else if desc, ok := metadataInfo["description"].(string); ok && desc != "" {
+					postTitle = desc
+				} else if fulltitle, ok := metadataInfo["fulltitle"].(string); ok && fulltitle != "" {
+					postTitle = fulltitle
+				}
+				
+				// Also try to get the author from metadata if not found in URL
+				if username == "" {
+					if uploader, ok := metadataInfo["uploader"].(string); ok && uploader != "" {
+						username = strings.TrimPrefix(uploader, "u/") // Remove u/ prefix if present
+					} else if creator, ok := metadataInfo["creator"].(string); ok && creator != "" {
+						username = strings.TrimPrefix(creator, "u/")
+					}
+				}
+			}
+			
+			caption = FormatAuthorCaption("reddit", subreddit, username, postTitle)
 		}
 		
 		mediaInfo := &MediaInfo{
@@ -654,7 +717,14 @@ func (yd *YtDlpDownloader) DownloadTwitterMedia(url string) ([]*MediaInfo, error
 }
 
 func (yd *YtDlpDownloader) DownloadYouTubeMedia(url string) ([]*MediaInfo, error) {
-	// For YouTube, try yt-dlp first then fallback to headless browser for thumbnails
+	// Check if this is a YouTube community post (requires special handling)
+	if strings.Contains(url, "/post/") {
+		log.Printf("📺 Detected YouTube community post, using specialized extractor")
+		cliBrowser := NewCliBrowserExtractor(yd.WorkingDir, yd.TempDir)
+		return cliBrowser.ExtractYouTubeCommunityPost(url)
+	}
+	
+	// For regular YouTube videos, try yt-dlp first then fallback to headless browser for thumbnails
 	
 	// Strategy 1: Try normal yt-dlp download first 
 	mediaInfos, err := yd.DownloadMedia(url)
@@ -1083,13 +1153,32 @@ func (yd *YtDlpDownloader) buildDownloadArgs(url string, outputTemplate string) 
 		
 		baseArgs = append(baseArgs, youtubeArgs...)
 	} else if strings.Contains(url, "reddit.com") {
-		// Reddit-specific args with enhanced cookie support
+		// Reddit-specific args with enhanced cookie support and DASH format handling
 		redditArgs := []string{
 			"--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
 			"--referer", "https://www.reddit.com/",
 			"--add-header", "Accept-Language:en-US,en;q=0.9",
 			"--add-header", "Accept:text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
 		}
+		
+		// Reddit needs special format handling for DASH videos
+		// Remove the default format from baseArgs since Reddit videos need special format selectors
+		var newBaseArgs []string
+		i := 0
+		for i < len(baseArgs) {
+			if baseArgs[i] == "--format" && i+1 < len(baseArgs) {
+				// Skip both --format and its value
+				i += 2
+			} else {
+				newBaseArgs = append(newBaseArgs, baseArgs[i])
+				i++
+			}
+		}
+		baseArgs = newBaseArgs
+		
+		// Add Reddit-specific format selector that avoids problematic HLS fragments
+		// Priority: fallback (single file) > DASH combinations > avoid HLS+DASH that gets 403 errors
+		redditArgs = append(redditArgs, "--format", "fallback/dash-4+dash-7/dash-3+dash-7/dash-2+dash-7/best[filesize<50M]/best")
 		
 		// Check for Reddit-specific cookies file
 		redditCookiesPath := yd.getFilePath("reddit_cookies.txt")
@@ -1148,6 +1237,8 @@ func (yd *YtDlpDownloader) detectMediaType(filePath string) string {
 		// WebM files will be converted to MP4 if ffmpeg is available
 		// Otherwise sent as documents
 		return "video"
+	case ".m4a", ".mp3", ".aac", ".ogg", ".wav":
+		return "audio"
 	default:
 		return "document"
 	}
@@ -1232,4 +1323,105 @@ func (yd *YtDlpDownloader) resolveRedirectURL(shortURL string) (string, error) {
 	}
 	
 	return "", fmt.Errorf("no redirect found for %s", shortURL)
+}
+
+// extractRedditImageURLsFromOutput parses yt-dlp output to extract direct Reddit image URLs
+func (yd *YtDlpDownloader) extractRedditImageURLsFromOutput(output string) []string {
+	var imageURLs []string
+	
+	// Look for lines that contain Reddit image URLs
+	// Pattern: [generic] Extracting URL: https://i.redd.it/...
+	lines := strings.Split(output, "\n")
+	for _, line := range lines {
+		if strings.Contains(line, "Extracting URL:") && (strings.Contains(line, "i.redd.it") || strings.Contains(line, "preview.redd.it")) {
+			// Extract URL using regex - only match direct Reddit image URLs, not media proxy URLs
+			re := regexp.MustCompile(`https://(?:i\.redd\.it|preview\.redd\.it)/[^\s]+\.(?:jpg|jpeg|png|gif|webp)`)
+			matches := re.FindAllString(line, -1)
+			for _, match := range matches {
+				// Skip if it's a media proxy URL
+				if strings.Contains(match, "/media?url=") {
+					continue
+				}
+				imageURLs = append(imageURLs, match)
+				log.Printf("🖼️ Extracted Reddit image URL: %s", match)
+			}
+		}
+	}
+	
+	return imageURLs
+}
+
+// downloadRedditImagesDirectly downloads Reddit images directly using HTTP
+func (yd *YtDlpDownloader) downloadRedditImagesDirectly(imageURLs []string, originalURL string, timestamp int64) ([]*MediaInfo, error) {
+	var mediaInfos []*MediaInfo
+	
+	// Extract subreddit and post info for captions
+	subreddit := extractRedditSubredditFromURL(originalURL)
+	username := extractRedditUsernameFromURL(originalURL)
+	
+	for i, imageURL := range imageURLs {
+		// Download the image
+		resp, err := http.Get(imageURL)
+		if err != nil {
+			log.Printf("❌ Failed to download image %s: %v", imageURL, err)
+			continue
+		}
+		
+		if resp.StatusCode != 200 {
+			log.Printf("❌ HTTP error downloading image %s: %d", imageURL, resp.StatusCode)
+			resp.Body.Close()
+			continue
+		}
+		
+		// Determine file extension from URL
+		ext := "jpg" // default
+		if strings.Contains(imageURL, ".png") {
+			ext = "png"
+		} else if strings.Contains(imageURL, ".gif") {
+			ext = "gif"
+		} else if strings.Contains(imageURL, ".webp") {
+			ext = "webp"
+		}
+		
+		// Create filename
+		filename := filepath.Join(yd.TempDir, fmt.Sprintf("%d_reddit_image_%d.%s", timestamp, i+1, ext))
+		
+		// Create file
+		file, err := os.Create(filename)
+		if err != nil {
+			log.Printf("❌ Failed to create file %s: %v", filename, err)
+			resp.Body.Close()
+			continue
+		}
+		
+		// Copy image data directly from response to file
+		_, err = file.ReadFrom(resp.Body)
+		resp.Body.Close()
+		file.Close()
+		
+		if err != nil {
+			log.Printf("❌ Failed to write image data to %s: %v", filename, err)
+			continue
+		}
+		
+		log.Printf("✅ Downloaded Reddit image: %s", filename)
+		
+		// Create caption with Reddit info
+		caption := FormatAuthorCaption("reddit", subreddit, username, "")
+		
+		mediaInfo := &MediaInfo{
+			Type:     "photo",
+			URL:      originalURL,
+			Caption:  caption,
+			Filename: filename,
+		}
+		
+		mediaInfos = append(mediaInfos, mediaInfo)
+	}
+	
+	if len(mediaInfos) == 0 {
+		return nil, fmt.Errorf("failed to download any Reddit images")
+	}
+	
+	return mediaInfos, nil
 }

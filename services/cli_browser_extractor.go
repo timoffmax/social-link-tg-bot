@@ -3,9 +3,11 @@ package services
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io/ioutil"
 	"log"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -698,6 +700,510 @@ func (cbe *CliBrowserExtractor) RenderPageForTwitterThread(twitterURL string) (s
 func extractTweetID(twitterURL string) string {
 	re := regexp.MustCompile(`/status/(\d+)`)
 	matches := re.FindStringSubmatch(twitterURL)
+	if len(matches) >= 2 {
+		return matches[1]
+	}
+	return ""
+}
+
+// ExtractYouTubeCommunityPost uses enhanced browser automation for YouTube community posts
+func (cbe *CliBrowserExtractor) ExtractYouTubeCommunityPost(youtubePostURL string) ([]*MediaInfo, error) {
+	log.Printf("📺 Extracting YouTube community post with enhanced CLI Chrome")
+
+	// Find Chrome executable
+	chromePaths := []string{
+		"/usr/bin/google-chrome",
+		"/usr/bin/google-chrome-stable", 
+		"/usr/bin/chromium-browser",
+		"/usr/bin/chromium",
+		"/opt/google/chrome/chrome",
+		"/snap/bin/chromium",
+	}
+
+	chromePath := ""
+	for _, path := range chromePaths {
+		if _, err := os.Stat(path); err == nil {
+			chromePath = path
+			break
+		}
+	}
+
+	if chromePath == "" {
+		return nil, fmt.Errorf("no Chrome/Chromium executable found")
+	}
+
+	// Create temporary file for HTML output
+	tempFile := filepath.Join(cbe.tempDir, fmt.Sprintf("youtube_community_%d.html", time.Now().Unix()))
+	defer os.Remove(tempFile)
+
+	// Enhanced Chrome arguments for YouTube community posts
+	chromeArgs := []string{
+		"--headless=new",                               // Use new headless mode
+		"--no-sandbox",
+		"--disable-gpu",
+		"--disable-dev-shm-usage",
+		"--disable-extensions",
+		"--no-first-run",
+		"--disable-default-apps",
+		"--virtual-time-budget=45000",                  // Extended time for YouTube loading
+		"--run-all-compositor-stages-before-draw",
+		"--enable-automation",
+		"--disable-background-timer-throttling",
+		"--disable-backgrounding-occluded-windows", 
+		"--disable-renderer-backgrounding",
+		"--disable-features=TranslateUI,VizDisplayCompositor",
+		"--user-data-dir=" + os.TempDir(),
+		"--window-size=1920,1080",
+		"--disable-web-security",                       // Allow cross-origin requests
+		"--disable-features=VizDisplayCompositor",
+		"--disable-blink-features=AutomationControlled", // Hide automation
+		"--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+	}
+	
+	// Add YouTube cookies if available for better access
+	youtubeCookiesPath := filepath.Join(cbe.workingDir, "youtube_cookies.txt")
+	if _, err := os.Stat(youtubeCookiesPath); err == nil {
+		chromeArgs = append(chromeArgs, "--cookie-file="+youtubeCookiesPath)
+		log.Printf("🍪 Using YouTube cookies: %s", youtubeCookiesPath)
+	} else {
+		log.Printf("⚠️ YouTube cookies not found at %s", youtubeCookiesPath)
+	}
+	
+	chromeArgs = append(chromeArgs, "--dump-dom", youtubePostURL)
+
+	log.Printf("🌐 Executing enhanced Chrome for YouTube community post: %s %v", chromePath, chromeArgs)
+
+	// Set up command with extended timeout for YouTube
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, chromePath, chromeArgs...)
+	
+	// Capture both stdout and stderr
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	// Execute command
+	err := cmd.Run()
+	if err != nil {
+		log.Printf("❌ Enhanced Chrome execution failed: %v", err)
+		log.Printf("❌ Chrome stderr: %s", stderr.String())
+		
+		// Try fallback approach without virtual-time-budget
+		log.Printf("🔄 Trying fallback approach without virtual-time-budget")
+		return cbe.extractYouTubeCommunityPostFallback(youtubePostURL, chromePath)
+	}
+
+	html := stdout.String()
+	log.Printf("✅ Enhanced Chrome rendered %d bytes of HTML for YouTube community post", len(html))
+
+	// Save HTML for debugging if needed
+	if err := os.WriteFile(tempFile, []byte(html), 0644); err == nil {
+		log.Printf("🔍 HTML saved to %s for debugging", tempFile)
+	}
+
+	// Extract content from rendered HTML
+	mediaInfos, err := cbe.extractYouTubeCommunityPostFromHTML(html, youtubePostURL)
+	
+	// If browser extraction failed, try third-party API fallback
+	if err != nil || len(mediaInfos) == 0 {
+		log.Printf("🔄 Browser extraction failed/empty, trying YouTube operational API fallback")
+		return cbe.extractYouTubeCommunityPostFromAPI(youtubePostURL)
+	}
+	
+	return mediaInfos, err
+}
+
+// extractYouTubeCommunityPostFallback tries a simpler approach without virtual-time-budget
+func (cbe *CliBrowserExtractor) extractYouTubeCommunityPostFallback(youtubePostURL, chromePath string) ([]*MediaInfo, error) {
+	log.Printf("🔄 Trying YouTube community post fallback extraction")
+
+	// Simpler Chrome arguments for fallback
+	chromeArgsFallback := []string{
+		"--headless=new",
+		"--no-sandbox",
+		"--disable-gpu",
+		"--disable-dev-shm-usage",
+		"--no-first-run",
+		"--disable-blink-features=AutomationControlled",
+		"--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+		"--timeout=30",
+		"--dump-dom",
+		youtubePostURL,
+	}
+
+	// Add cookies if available
+	youtubeCookiesPath := filepath.Join(cbe.workingDir, "youtube_cookies.txt")
+	if _, err := os.Stat(youtubeCookiesPath); err == nil {
+		chromeArgsFallback = append(chromeArgsFallback[:len(chromeArgsFallback)-2], "--cookie-file="+youtubeCookiesPath, "--dump-dom", youtubePostURL)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, chromePath, chromeArgsFallback...)
+	output, err := cmd.Output()
+	
+	if err != nil {
+		return nil, fmt.Errorf("fallback Chrome execution failed: %v", err)
+	}
+
+	html := string(output)
+	log.Printf("✅ Fallback Chrome rendered %d bytes of HTML", len(html))
+
+	mediaInfos, err := cbe.extractYouTubeCommunityPostFromHTML(html, youtubePostURL)
+	
+	// If fallback browser extraction also failed, try third-party API
+	if err != nil || len(mediaInfos) == 0 {
+		log.Printf("🔄 Fallback browser extraction failed/empty, trying YouTube operational API")
+		return cbe.extractYouTubeCommunityPostFromAPI(youtubePostURL)
+	}
+	
+	return mediaInfos, err
+}
+
+// extractYouTubeCommunityPostFromHTML extracts content from YouTube community post HTML
+func (cbe *CliBrowserExtractor) extractYouTubeCommunityPostFromHTML(html, youtubePostURL string) ([]*MediaInfo, error) {
+	var mediaInfos []*MediaInfo
+
+	// Extract community post images with multiple patterns for YouTube's structure
+	imagePatterns := []string{
+		// YouTube community post image patterns (2025 structure)
+		`<img[^>]*src="(https://yt3\.ggpht\.com/[^"]*)"[^>]*class="[^"]*community[^"]*"`,
+		`<img[^>]*class="[^"]*community[^"]*"[^>]*src="(https://yt3\.ggpht\.com/[^"]*)"`,
+		// YouTube thumbnail patterns in community posts
+		`<img[^>]*src="(https://i\.ytimg\.com/vi/[^"]*)"[^>]*community`,
+		`<img[^>]*src="(https://lh3\.googleusercontent\.com/[^"]*)"[^>]*>`,
+		// Generic YouTube image hosting patterns
+		`<img[^>]*src="(https://yt[0-9]*\.ggpht\.com/[^"]*)"[^>]*>`,
+		`<img[^>]*src="(https://lh[0-9]*\.googleusercontent\.com/[^"]*)"[^>]*>`,
+		// Open Graph and meta tags
+		`<meta[^>]*property="og:image"[^>]*content="(https://[^"]*yt[^"]*\.com/[^"]*)"`,
+		`<meta[^>]*name="twitter:image"[^>]*content="(https://[^"]*yt[^"]*\.com/[^"]*)"`,
+	}
+
+	var imageURLs []string
+	for _, pattern := range imagePatterns {
+		re := regexp.MustCompile(pattern)
+		matches := re.FindAllStringSubmatch(html, -1)
+		for _, match := range matches {
+			if len(match) > 1 {
+				imageURLs = append(imageURLs, match[1])
+			}
+		}
+	}
+
+	// Filter and clean image URLs
+	var communityImages []string
+	seen := make(map[string]bool)
+	for _, url := range imageURLs {
+		// Skip profile pictures and channel avatars
+		if !strings.Contains(url, "s48-") && !strings.Contains(url, "s88-") && 
+		   !strings.Contains(url, "default") && !strings.Contains(url, "avatar") {
+			// Clean URL (remove HTML entities)
+			cleanURL := strings.ReplaceAll(url, "&amp;", "&")
+			// Upgrade to higher quality if possible
+			cleanURL = cbe.upgradeYouTubeImageURL(cleanURL)
+			
+			if !seen[cleanURL] {
+				communityImages = append(communityImages, cleanURL)
+				seen[cleanURL] = true
+			}
+		}
+	}
+
+	log.Printf("🖼️ Found %d YouTube community post images (from %d total URLs)", len(communityImages), len(imageURLs))
+
+	// Extract text content from community post
+	caption := cbe.extractYouTubeCommunityCaption(html)
+
+	// If no images found, try alternative extraction methods
+	if len(communityImages) == 0 {
+		log.Printf("🔍 No images found with standard patterns, trying alternative extraction")
+		
+		// Look for any YouTube-hosted images in the HTML
+		alternativePatterns := []string{
+			`src="(https://[^"]*\.ytimg\.com/[^"]*)"`,
+			`src="(https://[^"]*\.ggpht\.com/[^"]*)"`,
+			`src="(https://[^"]*\.googleusercontent\.com/[^"]*)"`,
+		}
+		
+		for _, pattern := range alternativePatterns {
+			re := regexp.MustCompile(pattern)
+			matches := re.FindAllStringSubmatch(html, -1)
+			for _, match := range matches {
+				if len(match) > 1 && !seen[match[1]] {
+					// Skip very small images (likely icons or thumbnails)
+					if !strings.Contains(match[1], "s16-") && !strings.Contains(match[1], "s24-") {
+						communityImages = append(communityImages, match[1])
+						seen[match[1]] = true
+					}
+				}
+			}
+		}
+		
+		log.Printf("🔍 Alternative extraction found %d additional images", len(communityImages))
+	}
+
+	// Download each image
+	for i, imageURL := range communityImages {
+		filename, err := cbe.downloadMediaFile(imageURL, "youtube", "photo", i)
+		if err != nil {
+			log.Printf("❌ Failed to download YouTube community image %d: %v", i+1, err)
+			continue
+		}
+
+		mediaInfo := &MediaInfo{
+			Type:     "photo",
+			URL:      youtubePostURL,
+			Caption:  caption,
+			Filename: filename,
+		}
+		mediaInfos = append(mediaInfos, mediaInfo)
+	}
+
+	// If no images were successfully downloaded but we have text, return text-only
+	if len(mediaInfos) == 0 && caption != "" {
+		log.Printf("📝 No images downloaded, returning text-only content")
+		textMediaInfo := &MediaInfo{
+			Type:    "text",
+			URL:     youtubePostURL,
+			Caption: caption,
+		}
+		mediaInfos = append(mediaInfos, textMediaInfo)
+	}
+
+	if len(mediaInfos) == 0 {
+		return nil, fmt.Errorf("no YouTube community post content found in rendered HTML")
+	}
+
+	return mediaInfos, nil
+}
+
+// upgradeYouTubeImageURL upgrades YouTube image URLs to higher quality
+func (cbe *CliBrowserExtractor) upgradeYouTubeImageURL(url string) string {
+	// Upgrade YouTube image quality parameters
+	url = strings.ReplaceAll(url, "=s48", "=s800")  // Small to large
+	url = strings.ReplaceAll(url, "=s88", "=s800")  // Medium to large
+	url = strings.ReplaceAll(url, "=s176", "=s800") // Larger to max
+	url = strings.ReplaceAll(url, "=w48", "=w800")  // Width small to large
+	url = strings.ReplaceAll(url, "=w88", "=w800")  // Width medium to large
+	url = strings.ReplaceAll(url, "=h48", "=h800")  // Height small to large
+	url = strings.ReplaceAll(url, "=h88", "=h800")  // Height medium to large
+	
+	// For ytimg.com URLs, try to get max resolution
+	if strings.Contains(url, "ytimg.com") {
+		if !strings.Contains(url, "maxresdefault") && !strings.Contains(url, "hqdefault") {
+			// Try to upgrade thumbnail quality
+			url = strings.ReplaceAll(url, "default.jpg", "maxresdefault.jpg")
+			url = strings.ReplaceAll(url, "mqdefault.jpg", "maxresdefault.jpg")
+			url = strings.ReplaceAll(url, "sddefault.jpg", "maxresdefault.jpg")
+		}
+	}
+	
+	return url
+}
+
+// extractYouTubeCommunityCaption extracts text content from YouTube community post
+func (cbe *CliBrowserExtractor) extractYouTubeCommunityCaption(html string) string {
+	// Try to extract community post text using multiple patterns
+	patterns := []string{
+		// YouTube community post content patterns (2025)
+		`<div[^>]*id="content-text"[^>]*>(.*?)</div>`,
+		`<div[^>]*class="[^"]*post-content[^"]*"[^>]*>(.*?)</div>`,
+		`<span[^>]*class="[^"]*community-post-text[^"]*"[^>]*>(.*?)</span>`,
+		// Meta tag patterns for community posts
+		`<meta[^>]*property="og:description"[^>]*content="([^"]*)"`,
+		`<meta[^>]*name="description"[^>]*content="([^"]*)"`,
+		`<meta[^>]*property="twitter:description"[^>]*content="([^"]*)"`,
+		// Title patterns
+		`<title[^>]*>([^<]+?) - YouTube</title>`,
+		// JSON-LD patterns
+		`"description"\s*:\s*"([^"]*)"`,
+		`"text"\s*:\s*"([^"]*)"`,
+		// Generic content patterns
+		`<p[^>]*class="[^"]*content[^"]*"[^>]*>(.*?)</p>`,
+		`<div[^>]*data-content[^>]*>(.*?)</div>`,
+	}
+
+	for _, pattern := range patterns {
+		re := regexp.MustCompile(`(?s)` + pattern) // (?s) makes . match newlines
+		if match := re.FindStringSubmatch(html); len(match) > 1 {
+			caption := strings.TrimSpace(match[1])
+			if caption != "" && caption != "null" && len(caption) > 5 {
+				// Skip generic YouTube text
+				if !strings.Contains(strings.ToLower(caption), "youtube") ||
+				   !strings.Contains(strings.ToLower(caption), "sign in") ||
+				   len(caption) > 50 {
+					// Clean and decode the caption
+					caption = cbe.cleanYouTubeText(caption)
+					if len(caption) > 5 {
+						return caption
+					}
+				}
+			}
+		}
+	}
+
+	return ""
+}
+
+// cleanYouTubeText cleans and decodes YouTube community post text
+func (cbe *CliBrowserExtractor) cleanYouTubeText(rawText string) string {
+	text := rawText
+	
+	// Remove HTML tags
+	text = regexp.MustCompile(`<[^>]*>`).ReplaceAllString(text, "")
+	
+	// Decode HTML entities
+	text = strings.ReplaceAll(text, "&amp;", "&")
+	text = strings.ReplaceAll(text, "&lt;", "<")
+	text = strings.ReplaceAll(text, "&gt;", ">")
+	text = strings.ReplaceAll(text, "&quot;", "\"")
+	text = strings.ReplaceAll(text, "&#39;", "'")
+	text = strings.ReplaceAll(text, "&#34;", "\"")
+	text = strings.ReplaceAll(text, "&nbsp;", " ")
+	
+	// Decode JSON escape sequences
+	text = strings.ReplaceAll(text, `\"`, `"`)
+	text = strings.ReplaceAll(text, `\\n`, "\n")
+	text = strings.ReplaceAll(text, `\\t`, "\t")
+	text = strings.ReplaceAll(text, `\\r`, "\r")
+	
+	// Clean up multiple spaces and newlines
+	text = regexp.MustCompile(`\s+`).ReplaceAllString(text, " ")
+	text = strings.TrimSpace(text)
+	
+	return text
+}
+
+// YouTubeOperationalAPIResponse represents the response from YouTube operational API
+type YouTubeOperationalAPIResponse struct {
+	Items []struct {
+		ID      string `json:"id"`
+		Snippet struct {
+			Text            string `json:"text"`
+			AuthorDisplayName string `json:"authorDisplayName"`
+			AuthorChannelURL  string `json:"authorChannelUrl"`
+			PublishedAt       string `json:"publishedAt"`
+		} `json:"snippet"`
+		ContentDetails struct {
+			Images []struct {
+				URL    string `json:"url"`
+				Width  int    `json:"width"`
+				Height int    `json:"height"`
+			} `json:"images"`
+		} `json:"contentDetails"`
+	} `json:"items"`
+}
+
+// extractYouTubeCommunityPostFromAPI uses YouTube operational API as fallback
+func (cbe *CliBrowserExtractor) extractYouTubeCommunityPostFromAPI(youtubePostURL string) ([]*MediaInfo, error) {
+	log.Printf("🌐 Using YouTube operational API for community post extraction")
+	
+	// Extract post ID from URL
+	postID := extractYouTubePostID(youtubePostURL)
+	if postID == "" {
+		return nil, fmt.Errorf("unable to extract post ID from URL: %s", youtubePostURL)
+	}
+	
+	// Call YouTube operational API
+	apiURL := fmt.Sprintf("https://yt.lemnoslife.com/community?part=snippet,contentDetails&id=%s", postID)
+	
+	client := &http.Client{Timeout: 30 * time.Second}
+	req, err := http.NewRequest("GET", apiURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create API request: %v", err)
+	}
+	
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+	
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("API request failed: %v", err)
+	}
+	defer resp.Body.Close()
+	
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("API returned status %d", resp.StatusCode)
+	}
+	
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read API response: %v", err)
+	}
+	
+	var apiResponse YouTubeOperationalAPIResponse
+	if err := json.Unmarshal(body, &apiResponse); err != nil {
+		return nil, fmt.Errorf("failed to parse API response: %v", err)
+	}
+	
+	if len(apiResponse.Items) == 0 {
+		return nil, fmt.Errorf("no community post data found in API response")
+	}
+	
+	var mediaInfos []*MediaInfo
+	item := apiResponse.Items[0]
+	
+	// Format caption with author information
+	caption := ""
+	if item.Snippet.AuthorDisplayName != "" {
+		caption = fmt.Sprintf("📺 %s\n\n%s", item.Snippet.AuthorDisplayName, item.Snippet.Text)
+	} else {
+		caption = item.Snippet.Text
+	}
+	
+	// Download images if available
+	if len(item.ContentDetails.Images) > 0 {
+		log.Printf("🖼️ API found %d images in community post", len(item.ContentDetails.Images))
+		
+		for i, image := range item.ContentDetails.Images {
+			// Skip very small images (likely thumbnails)
+			if image.Width < 100 || image.Height < 100 {
+				continue
+			}
+			
+			filename, err := cbe.downloadMediaFile(image.URL, "youtube", "photo", i)
+			if err != nil {
+				log.Printf("❌ Failed to download YouTube API image %d: %v", i+1, err)
+				continue
+			}
+			
+			mediaInfo := &MediaInfo{
+				Type:     "photo",
+				URL:      youtubePostURL,
+				Caption:  caption,
+				Filename: filename,
+			}
+			mediaInfos = append(mediaInfos, mediaInfo)
+		}
+	}
+	
+	// If no images were downloaded but we have text, return text-only
+	if len(mediaInfos) == 0 && caption != "" {
+		log.Printf("📝 API: No images downloaded, returning text-only content")
+		textMediaInfo := &MediaInfo{
+			Type:    "text",
+			URL:     youtubePostURL,
+			Caption: caption,
+		}
+		mediaInfos = append(mediaInfos, textMediaInfo)
+	}
+	
+	if len(mediaInfos) == 0 {
+		return nil, fmt.Errorf("no content extracted from YouTube operational API")
+	}
+	
+	log.Printf("✅ YouTube operational API extracted %d media items", len(mediaInfos))
+	return mediaInfos, nil
+}
+
+// extractYouTubePostID extracts post ID from YouTube community post URL
+func extractYouTubePostID(url string) string {
+	// YouTube community post URL pattern: https://youtube.com/post/UgkxRCmy0DZJ20UO8n8jRJDBa9RE6NJRu9Ip
+	re := regexp.MustCompile(`/post/([A-Za-z0-9_-]+)`)
+	matches := re.FindStringSubmatch(url)
 	if len(matches) >= 2 {
 		return matches[1]
 	}

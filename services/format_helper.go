@@ -29,15 +29,29 @@ func FormatAuthorCaption(platform, displayName, username, originalCaption string
 		emoji = "🐦"
 	}
 	
-	if displayName != "" && username != "" {
-		// Both name and username available
-		caption = fmt.Sprintf("%s %s (@%s)\n\n", emoji, displayName, username)
-	} else if username != "" {
-		// Only username available
-		caption = fmt.Sprintf("%s @%s\n\n", emoji, username)
-	} else if displayName != "" {
-		// Only name available
-		caption = fmt.Sprintf("%s %s\n\n", emoji, displayName)
+	// Special handling for Reddit where displayName = subreddit, username = author
+	if strings.ToLower(platform) == "reddit" {
+		if displayName != "" && username != "" {
+			// Both subreddit and author available
+			caption = fmt.Sprintf("%s r/%s • u/%s\n\n", emoji, displayName, username)
+		} else if displayName != "" {
+			// Only subreddit available
+			caption = fmt.Sprintf("%s r/%s\n\n", emoji, displayName)
+		} else if username != "" {
+			// Only author available (rare case)
+			caption = fmt.Sprintf("%s u/%s\n\n", emoji, username)
+		}
+	} else {
+		if displayName != "" && username != "" {
+			// Both name and username available
+			caption = fmt.Sprintf("%s %s (@%s)\n\n", emoji, displayName, username)
+		} else if username != "" {
+			// Only username available
+			caption = fmt.Sprintf("%s @%s\n\n", emoji, username)
+		} else if displayName != "" {
+			// Only name available
+			caption = fmt.Sprintf("%s %s\n\n", emoji, displayName)
+		}
 	}
 	
 	// Add original caption/text
