@@ -145,9 +145,72 @@ func (ube *UniversalBrowserExtractor) extractInstagramMedia(mediaURL string) ([]
 }
 
 func (ube *UniversalBrowserExtractor) extractTwitterMedia(mediaURL string) ([]*MediaInfo, error) {
-	log.Printf("🐦 Extracting Twitter media with custom Twitter extractor (includes quote resolution)")
-
-	// Use the custom Twitter extractor which has sophisticated quote resolution
+	log.Printf("🐦 Extracting Twitter media with headless browser (true browser extraction)")
+	
+	// First try actual browser extraction for images
+	html, err := ube.renderPageWithBrowser(mediaURL, 10*time.Second)
+	if err != nil {
+		log.Printf("❌ Browser rendering failed, falling back to custom extractor: %v", err)
+		// Fall back to custom Twitter extractor
+		twitterExtractor := NewTwitterExtractor(ube.workingDir, ube.tempDir)
+		return twitterExtractor.ExtractTweet(mediaURL)
+	}
+	
+	// Extract images from rendered HTML
+	imagePatterns := []string{
+		// Twitter image patterns with css-9pa8cd class (2025 structure)
+		`<img[^>]*alt="Image"[^>]*src="(https://pbs\.twimg\.com/media/[^"]*)"[^>]*class="css-9pa8cd"`,
+		`<img[^>]*class="css-9pa8cd"[^>]*alt="Image"[^>]*src="(https://pbs\.twimg\.com/media/[^"]*)"`,
+		// More generic patterns
+		`<img[^>]*src="(https://pbs\.twimg\.com/media/[^"?]+\?format=jpg[^"]*)"`,
+		`<img[^>]*src="(https://pbs\.twimg\.com/media/[^"]+)"[^>]*alt="Image"`,
+	}
+	
+	imageURLs := ube.extractURLsWithPatterns(html, imagePatterns)
+	
+	// Filter out profile images and other non-tweet images
+	var tweetImages []string
+	for _, url := range imageURLs {
+		if !strings.Contains(url, "profile_images") && !strings.Contains(url, "_normal") {
+			// Clean up the URL - upgrade to higher quality
+			cleanURL := ube.cleanTwitterURL(url)
+			tweetImages = append(tweetImages, cleanURL)
+		}
+	}
+	
+	log.Printf("🖼️ Found %d Twitter images via browser", len(tweetImages))
+	
+	// If we found images, download them
+	if len(tweetImages) > 0 {
+		var mediaInfos []*MediaInfo
+		
+		// Extract caption
+		caption := ube.extractTwitterCaption(html)
+		
+		// Download each image
+		for i, imageURL := range tweetImages {
+			filename, err := ube.downloadMediaFile(imageURL, "twitter", "photo", i)
+			if err != nil {
+				log.Printf("❌ Failed to download Twitter image %d: %v", i+1, err)
+				continue
+			}
+			
+			mediaInfo := &MediaInfo{
+				Type:     "photo",
+				URL:      mediaURL,
+				Caption:  caption,
+				Filename: filename,
+			}
+			mediaInfos = append(mediaInfos, mediaInfo)
+		}
+		
+		if len(mediaInfos) > 0 {
+			return mediaInfos, nil
+		}
+	}
+	
+	// If browser extraction didn't find images, fall back to custom extractor
+	log.Printf("📋 No images found via browser, falling back to custom Twitter extractor")
 	twitterExtractor := NewTwitterExtractor(ube.workingDir, ube.tempDir)
 	return twitterExtractor.ExtractTweet(mediaURL)
 }
@@ -616,6 +679,7 @@ func (ube *UniversalBrowserExtractor) renderPageWithBrowser(pageURL string, wait
 		chromedp.NoSandbox,
 		chromedp.Headless,
 		chromedp.UserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"),
+		chromedp.Flag("virtual-time-budget", "10000"),
 		chromedp.Flag("disable-web-security", true),
 		chromedp.Flag("disable-extensions", true),
 		chromedp.Flag("disable-plugins", true),

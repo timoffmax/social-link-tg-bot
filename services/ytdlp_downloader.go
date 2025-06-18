@@ -384,18 +384,42 @@ func (yd *YtDlpDownloader) DownloadTwitterMedia(url string) ([]*MediaInfo, error
 		return mediaInfos, nil
 	}
 	
-	// Strategy 3: Use custom Twitter extractor as fallback
-	log.Printf("yt-dlp failed completely, trying custom Twitter extractor")
+	// Strategy 3: Hybrid approach - get text from Twitter extractor, try images from CLI browser
+	log.Printf("yt-dlp failed, trying hybrid approach: text + individual images")
+	
+	// First, get the text/caption from Twitter extractor (reliable)
 	twitterExtractor := NewTwitterExtractor(yd.WorkingDir, yd.TempDir)
-	mediaInfos, err = twitterExtractor.ExtractTweet(url)
-	if err == nil && len(mediaInfos) > 0 {
-		return mediaInfos, nil
+	textResult, textErr := twitterExtractor.ExtractTweet(url)
+	var tweetText string
+	if textErr == nil && len(textResult) > 0 && textResult[0].Caption != "" {
+		tweetText = textResult[0].Caption
+		log.Printf("✅ Got tweet text from Twitter extractor: %.100s...", tweetText)
 	}
 	
-	// Strategy 4: Universal headless browser fallback
-	log.Printf("Custom extractor failed, trying universal headless browser for Twitter")
-	browserExtractor := NewUniversalBrowserExtractor(yd.WorkingDir, yd.TempDir)
-	return browserExtractor.ExtractMedia(url)
+	// Then, try to get individual images from CLI browser
+	cliBrowser := NewCliBrowserExtractor(yd.WorkingDir, yd.TempDir)
+	imageResult, imageErr := cliBrowser.ExtractTwitterImages(url)
+	if imageErr == nil && len(imageResult) > 0 {
+		log.Printf("✅ CLI browser got %d individual images", len(imageResult))
+		// Update image results with the proper tweet text
+		for _, media := range imageResult {
+			if tweetText != "" {
+				media.Caption = tweetText
+			}
+		}
+		return imageResult, nil
+	}
+	log.Printf("⚠️ CLI browser failed: %v", imageErr)
+	
+	// Strategy 4: If CLI browser failed but we have text, return text result (mosaic from fixupx)
+	if textErr == nil && len(textResult) > 0 {
+		log.Printf("📋 Using Twitter extractor result with text and mosaic image")
+		return textResult, nil
+	}
+	
+	// Strategy 5: Complete fallback
+	log.Printf("❌ Both approaches failed")
+	return nil, fmt.Errorf("all Twitter extraction methods failed")
 }
 
 func (yd *YtDlpDownloader) DownloadYouTubeMedia(url string) ([]*MediaInfo, error) {
