@@ -292,8 +292,8 @@ func (yd *YtDlpDownloader) attemptDownload(url string, outputTemplate string, pr
 			}
 		}
 		
-		// Use tweet text as caption if available, otherwise use default
-		caption := "Downloaded from " + yd.getPlatformName(url)
+		// Use tweet text as caption if available, otherwise use empty caption
+		caption := ""
 		if tweetDescription != "" && (strings.Contains(url, "twitter.com") || strings.Contains(url, "x.com")) {
 			caption = tweetDescription
 		}
@@ -438,18 +438,10 @@ func (yd *YtDlpDownloader) DownloadYouTubeMedia(url string) ([]*MediaInfo, error
 }
 
 func (yd *YtDlpDownloader) Download9GAGMedia(url string) ([]*MediaInfo, error) {
-	// For 9GAG, try yt-dlp first then fallback to headless browser
-	
-	// Strategy 1: Try normal yt-dlp download first (may work for some 9GAG content)
-	mediaInfos, err := yd.DownloadMedia(url)
-	if err == nil && len(mediaInfos) > 0 {
-		return mediaInfos, nil
-	}
-	
-	// Strategy 2: Universal headless browser fallback (primary method for 9GAG)
-	log.Printf("yt-dlp failed, trying universal headless browser for 9GAG")
-	browserExtractor := NewUniversalBrowserExtractor(yd.WorkingDir, yd.TempDir)
-	return browserExtractor.ExtractMedia(url)
+	// For 9GAG, skip yt-dlp entirely (always fails with 403) and use CLI browser directly
+	log.Printf("🚀 Using CLI browser directly for 9GAG (yt-dlp always fails with 403)")
+	cliBrowser := NewCliBrowserExtractor(yd.WorkingDir, yd.TempDir)
+	return cliBrowser.Extract9GAGContent(url)
 }
 
 // downloadThumbnailsOnly tries to download only thumbnails and metadata for posts
@@ -601,8 +593,8 @@ func (yd *YtDlpDownloader) downloadThumbnailsOnly(url string, platform string) (
 		
 		mediaType := yd.detectMediaType(filePath)
 		
-		// Use description text as caption if available
-		caption := fmt.Sprintf("Downloaded from %s", platform)
+		// Use description text as caption if available, otherwise empty
+		caption := ""
 		if tweetDescription != "" {
 			caption = tweetDescription
 		}

@@ -63,7 +63,7 @@ func (md *MediaDownloader) DownloadInstagramMedia(url string) ([]*MediaInfo, err
 	mediaInfo := &MediaInfo{
 		Type:        md.getMediaType(mediaType),
 		URL:         mediaURL,
-		Caption:     "Downloaded from Instagram",
+		Caption:     "",
 		Filename:    filePath,
 		ContentType: mediaType,
 	}

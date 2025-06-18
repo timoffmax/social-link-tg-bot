@@ -3,9 +3,12 @@ package services
 import (
 	"compress/gzip"
 	"context"
+	"crypto/md5"
+	"encoding/binary"
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -895,7 +898,7 @@ func (ube *UniversalBrowserExtractor) extractInstagramCaption(html string) strin
 		}
 	}
 
-	return "Downloaded from Instagram"
+	return ""
 }
 
 func (ube *UniversalBrowserExtractor) extractTwitterCaption(html string) string {
@@ -941,7 +944,7 @@ func (ube *UniversalBrowserExtractor) extractTwitterCaption(html string) string 
 		return bestCaption
 	}
 
-	return "Downloaded from Twitter/X"
+	return ""
 }
 
 func (ube *UniversalBrowserExtractor) extractTikTokCaption(html string) string {
@@ -961,7 +964,7 @@ func (ube *UniversalBrowserExtractor) extractTikTokCaption(html string) string {
 		}
 	}
 
-	return "Downloaded from TikTok"
+	return ""
 }
 
 func (ube *UniversalBrowserExtractor) extractYouTubeCaption(html string) string {
@@ -981,7 +984,7 @@ func (ube *UniversalBrowserExtractor) extractYouTubeCaption(html string) string 
 		}
 	}
 
-	return "Downloaded from YouTube"
+	return ""
 }
 
 func (ube *UniversalBrowserExtractor) extract9GAGCaption(html string) string {
@@ -1002,7 +1005,7 @@ func (ube *UniversalBrowserExtractor) extract9GAGCaption(html string) string {
 		}
 	}
 
-	return "Downloaded from 9GAG"
+	return ""
 }
 
 func (ube *UniversalBrowserExtractor) extractGenericCaption(html string) string {
@@ -1022,7 +1025,7 @@ func (ube *UniversalBrowserExtractor) extractGenericCaption(html string) string 
 		}
 	}
 
-	return "Downloaded from social media"
+	return ""
 }
 
 // Download utility
@@ -1179,7 +1182,7 @@ func (ube *UniversalBrowserExtractor) addInstagramCookiesFromFile(req *http.Requ
 // Specialized 9GAG browser functions for age-restricted content
 func (ube *UniversalBrowserExtractor) renderPageWithBrowserFor9GAG(pageURL string, waitTime time.Duration) (string, error) {
 	// Give 9GAG more time to resolve - it might just be slow
-	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 	
 	log.Printf("🌐 Starting 9GAG extraction for: %s", pageURL)
@@ -1205,13 +1208,14 @@ func (ube *UniversalBrowserExtractor) renderPageWithBrowserFor9GAG(pageURL strin
 		}
 	}
 
-	// Enhanced Chrome options for 9GAG with cookie and proxy support
+	// Enhanced Chrome options for 9GAG with stealth and cookie support
 	opts := append(chromedp.DefaultExecAllocatorOptions[:],
 		chromedp.DisableGPU,
 		chromedp.NoSandbox,
 		chromedp.Headless,
-		// Use adult user agent that signals 18+ content capability
-		chromedp.UserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"),
+		// Use recent user agent that signals 18+ content capability - rotate between different ones
+		chromedp.UserAgent(ube.getRandomUserAgent()),
+		chromedp.WindowSize(1920, 1080), // Set realistic window size
 		chromedp.Flag("disable-web-security", true),
 		chromedp.Flag("disable-extensions", true),
 		chromedp.Flag("disable-plugins", true),
@@ -1227,6 +1231,12 @@ func (ube *UniversalBrowserExtractor) renderPageWithBrowserFor9GAG(pageURL strin
 		chromedp.Flag("disable-renderer-backgrounding", true),
 		chromedp.Flag("disable-backgrounding-occluded-windows", true),
 		chromedp.Flag("disable-ipc-flooding-protection", true),
+		// Enhanced stealth options to avoid detection
+		chromedp.Flag("disable-blink-features", "AutomationControlled"),
+		chromedp.Flag("disable-dev-shm-usage", true),
+		chromedp.Flag("no-zygote", true),
+		chromedp.Flag("disable-component-extensions-with-background-pages", true),
+		chromedp.Flag("disable-features", "VizDisplayCompositor,TranslateUI"),
 		chromedp.Flag("log-level", "3"),
 		chromedp.Flag("silent", true),
 		chromedp.Flag("disable-logging", true),
@@ -1250,9 +1260,23 @@ func (ube *UniversalBrowserExtractor) renderPageWithBrowserFor9GAG(pageURL strin
 		log.Printf("🌐 Using proxy server for 9GAG: %s", proxyServer)
 		opts = append(opts, chromedp.ProxyServer(proxyServer))
 	} else {
-		// Try some common free proxy services for 9GAG (optional)
-		// You can uncomment and configure these if needed
-		// opts = append(opts, chromedp.ProxyServer("proxy-server.com:port"))
+		// Try Tor if it's running on default port
+		if ube.isTorRunning() {
+			log.Printf("🧅 Using Tor proxy for 9GAG: 127.0.0.1:9050")
+			opts = append(opts, chromedp.ProxyServer("socks5://127.0.0.1:9050"))
+		} else {
+			// Fallback: try rotating through some public proxies for 9GAG
+			freeProxies := []string{
+				// You can add working free proxies here
+				// "proxy1.example.com:8080",
+				// "proxy2.example.com:3128",
+			}
+			if len(freeProxies) > 0 {
+				// Use first available proxy as fallback
+				log.Printf("🌐 Trying fallback proxy for 9GAG: %s", freeProxies[0])
+				// opts = append(opts, chromedp.ProxyServer(freeProxies[0]))
+			}
+		}
 	}
 
 	if execPath != "" {
@@ -1273,12 +1297,16 @@ func (ube *UniversalBrowserExtractor) renderPageWithBrowserFor9GAG(pageURL strin
 		// Navigate to 9GAG domain first to set cookies
 		chromedp.Navigate("https://9gag.com"),
 		chromedp.Sleep(2*time.Second),
+		// Inject stealth scripts to avoid detection
+		ube.injectStealthScripts(),
 		// Set cookies for age verification
 		ube.set9GAGCookies(),
 		chromedp.Sleep(1*time.Second),
 		// Now navigate to the actual page
 		chromedp.Navigate(pageURL),
-		chromedp.Sleep(8*time.Second), // Give it more time to load
+		chromedp.Sleep(12*time.Second), // Give it even more time to load
+		// Inject stealth scripts again on target page
+		ube.injectStealthScripts(),
 		// Try to handle age confirmation popup if present
 		ube.handle9GAGAgeConfirmation(),
 	)
@@ -1511,4 +1539,79 @@ func (ube *UniversalBrowserExtractor) handle9GAGAgeConfirmation() chromedp.Actio
 
 		return nil
 	})
+}
+
+// injectStealthScripts injects JavaScript to make the browser less detectable
+func (ube *UniversalBrowserExtractor) injectStealthScripts() chromedp.Action {
+	stealthScript := `
+		// Override webdriver detection
+		Object.defineProperty(navigator, 'webdriver', {
+			get: () => undefined,
+		});
+
+		// Override chrome detection
+		window.chrome = {
+			runtime: {},
+		};
+
+		// Override permission API
+		const originalQuery = window.navigator.permissions.query;
+		window.navigator.permissions.query = (parameters) => (
+			parameters.name === 'notifications' ?
+				Promise.resolve({ state: Notification.permission }) :
+				originalQuery(parameters)
+		);
+
+		// Override plugins
+		Object.defineProperty(navigator, 'plugins', {
+			get: () => [1, 2, 3, 4, 5],
+		});
+
+		// Override languages
+		Object.defineProperty(navigator, 'languages', {
+			get: () => ['en-US', 'en'],
+		});
+
+		// Mock connection
+		Object.defineProperty(navigator, 'connection', {
+			get: () => ({ effectiveType: '4g', rtt: 100, downlink: 2 }),
+		});
+
+		// Override automation indicators
+		delete window.navigator.__proto__.webdriver;
+		console.log('🕵️ Stealth scripts injected successfully');
+	`
+	
+	return chromedp.Evaluate(stealthScript, nil)
+}
+
+// getRandomUserAgent returns a random user agent to avoid detection
+func (ube *UniversalBrowserExtractor) getRandomUserAgent() string {
+	userAgents := []string{
+		"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+		"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+		"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+		"Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:122.0) Gecko/20100101 Firefox/122.0",
+		"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2.1 Safari/605.1.15",
+		"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+	}
+	
+	// Use URL hash as seed for consistent randomness per URL
+	
+	hasher := md5.New()
+	hasher.Write([]byte("9gag"))
+	hash := hasher.Sum(nil)
+	seed := binary.BigEndian.Uint64(hash[:8])
+	
+	return userAgents[seed % uint64(len(userAgents))]
+}
+
+// isTorRunning checks if Tor is running on the default SOCKS port
+func (ube *UniversalBrowserExtractor) isTorRunning() bool {
+	conn, err := net.DialTimeout("tcp", "127.0.0.1:9050", 2*time.Second)
+	if err != nil {
+		return false
+	}
+	conn.Close()
+	return true
 }

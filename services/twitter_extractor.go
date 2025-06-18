@@ -1281,7 +1281,7 @@ func (te *TwitterExtractor) downloadMedia(mediaURL, tweetID string, index int) (
 	return &MediaInfo{
 		Type:     mediaType,
 		URL:      fmt.Sprintf("https://x.com/i/web/status/%s", tweetID),
-		Caption:  fmt.Sprintf("Downloaded from Twitter"),
+		Caption:  "",
 		Filename: filename,
 	}, nil
 }

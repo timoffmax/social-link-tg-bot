@@ -3,8 +3,10 @@ package services
 import (
 	"fmt"
 	"log"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -58,6 +60,7 @@ func (sd *SmartDownloader) DownloadMedia(url string) ([]*MediaInfo, error) {
 			if err == nil && len(mediaInfos) > 0 {
 				log.Printf("✅ yt-dlp extraction succeeded with %d items", len(mediaInfos))
 				LogExtraction(strategy.Platform, url, "yt-dlp", true, len(mediaInfos), time.Since(startTime))
+				appendOriginalURL(mediaInfos, url)
 				return mediaInfos, nil
 			}
 			lastErr = err
@@ -72,6 +75,7 @@ func (sd *SmartDownloader) DownloadMedia(url string) ([]*MediaInfo, error) {
 			if err == nil && len(mediaInfos) > 0 {
 				log.Printf("✅ Browser extraction succeeded with %d items", len(mediaInfos))
 				LogExtraction(strategy.Platform, url, "browser", true, len(mediaInfos), time.Since(startTime))
+				appendOriginalURL(mediaInfos, url)
 				return mediaInfos, nil
 			}
 			lastErr = err
@@ -129,4 +133,86 @@ func (sd *SmartDownloader) IsAvailable() bool {
 // CleanupFile removes a temporary file
 func (sd *SmartDownloader) CleanupFile(filename string) {
 	sd.ytdlp.CleanupFile(filename)
+}
+
+// appendOriginalURL adds the original URL to caption while respecting Telegram limits
+func appendOriginalURL(mediaInfos []*MediaInfo, originalURL string) {
+	const maxCaptionLength = 1024 // Telegram limit for photo/video/document captions
+	cleanURL := cleanURLParams(originalURL)
+	urlSuffix := fmt.Sprintf("\n\n🔗 %s", cleanURL)
+	
+	for _, mediaInfo := range mediaInfos {
+		// Skip text-only media (fixed links)
+		if mediaInfo.Type == "text" || mediaInfo.Filename == "" {
+			continue
+		}
+		
+		currentCaption := mediaInfo.Caption
+		
+		// Calculate available space
+		availableSpace := maxCaptionLength - len(urlSuffix)
+		
+		if len(currentCaption) <= availableSpace {
+			// Caption fits with URL
+			mediaInfo.Caption = currentCaption + urlSuffix
+		} else if len(currentCaption) > 0 {
+			// Truncate caption to fit with URL
+			truncated := currentCaption[:availableSpace-3] + "..."
+			mediaInfo.Caption = truncated + urlSuffix
+		} else {
+			// No caption, just add URL (remove leading newlines)
+			mediaInfo.Caption = strings.TrimPrefix(urlSuffix, "\n\n")
+		}
+	}
+}
+
+// cleanURLParams removes tracking parameters and UTM tags from URLs
+func cleanURLParams(originalURL string) string {
+	parsedURL, err := url.Parse(originalURL)
+	if err != nil {
+		// If parsing fails, return original URL
+		return originalURL
+	}
+
+	// List of common tracking parameters to remove
+	trackingParams := map[string]bool{
+		// UTM parameters
+		"utm_source":    true,
+		"utm_medium":    true,
+		"utm_campaign":  true,
+		"utm_term":      true,
+		"utm_content":   true,
+		"utm_id":        true,
+		
+		// Social media tracking
+		"t":             true, // Twitter sharing parameter
+		"s":             true, // Twitter sharing parameter
+		"fbclid":        true, // Facebook click ID
+		"gclid":         true, // Google click ID
+		"msclkid":       true, // Microsoft click ID
+		"igshid":        true, // Instagram share ID
+		
+		// General tracking
+		"ref":           true,
+		"ref_src":       true,
+		"source":        true,
+		"campaign":      true,
+		"_hsenc":        true, // HubSpot
+		"_hsmi":         true, // HubSpot
+		"mc_cid":        true, // MailChimp
+		"mc_eid":        true, // MailChimp
+	}
+
+	// Get query parameters
+	values := parsedURL.Query()
+	
+	// Remove tracking parameters
+	for param := range trackingParams {
+		values.Del(param)
+	}
+	
+	// Set cleaned query parameters
+	parsedURL.RawQuery = values.Encode()
+	
+	return parsedURL.String()
 }

@@ -105,12 +105,13 @@ func GetExtractionStrategy(url string) *ExtractionStrategy {
 		}
 	}
 	
-	// 9GAG: browser only (yt-dlp never works for 9GAG, no fixed link service)
+	// 9GAG: temporarily disabled due to aggressive IP/Tor blocking by Cloudflare
+	// To re-enable: uncomment MethodBrowser and ensure working proxy/VPN
 	if strings.Contains(url, "9gag.com") {
 		return &ExtractionStrategy{
 			Platform: "9gag",
 			Methods: []ExtractionMethod{
-				MethodBrowser,
+				// MethodBrowser, // Disabled - requires residential proxy or unblocked IP
 			},
 			HasFixedLink: false,
 		}

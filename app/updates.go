@@ -211,7 +211,14 @@ func processMediaDownload(url string, origChat *response.TgChat, origMessage *re
 	if err != nil {
 		log.Printf("Failed to download media from %s: %v", url, err)
 		
-		// Send error message
+		// Skip error notifications for 9GAG (silently fail)
+		if strings.Contains(url, "9gag.com") {
+			log.Printf("🤐 Skipping error notification for 9GAG link")
+			services.LogTelegramMessage(origChat.Id, "error-skipped", false, "")
+			return
+		}
+		
+		// Send error message for other platforms
 		errorMsg := payload.TgPlSendMessage{
 			ChatId:              origChat.Id,
 			Text:                getErrorMessage(url),

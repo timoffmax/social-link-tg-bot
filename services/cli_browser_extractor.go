@@ -1,6 +1,7 @@
 package services
 
 import (
+	"context"
 	"fmt"
 	"io/ioutil"
 	"log"
@@ -143,7 +144,7 @@ func (cbe *CliBrowserExtractor) extractTwitterImagesFromHTML(html, twitterURL st
 	caption := cbe.extractTwitterCaption(html)
 	
 	// If caption extraction failed, fall back to Twitter extractor for text
-	if caption == "Downloaded from Twitter" {
+	if caption == "" {
 		log.Printf("🔍 CLI browser caption extraction failed, trying Twitter extractor for text")
 		twitterExtractor := NewTwitterExtractor(cbe.workingDir, cbe.tempDir)
 		if textResult, err := twitterExtractor.ExtractTweet(twitterURL); err == nil && len(textResult) > 0 {
@@ -228,7 +229,7 @@ func (cbe *CliBrowserExtractor) extractTwitterCaption(html string) string {
 		}
 	}
 
-	return "Downloaded from Twitter"
+	return ""
 }
 
 func (cbe *CliBrowserExtractor) cleanTweetText(rawText string) string {
@@ -289,4 +290,303 @@ func (cbe *CliBrowserExtractor) downloadMediaFile(mediaURL, platform, mediaType 
 	}
 
 	return filename, nil
+}
+
+// Extract9GAGContent uses command-line Chrome with virtual-time-budget for 9GAG
+func (cbe *CliBrowserExtractor) Extract9GAGContent(ninegagURL string) ([]*MediaInfo, error) {
+	log.Printf("😂 Extracting 9GAG content with CLI Chrome + virtual-time-budget")
+
+	// Find Chrome executable
+	chromePaths := []string{
+		"/usr/bin/google-chrome",
+		"/usr/bin/google-chrome-stable",
+		"/usr/bin/chromium-browser",
+		"/usr/bin/chromium",
+		"/opt/google/chrome/chrome",
+		"/snap/bin/chromium",
+	}
+
+	chromePath := ""
+	for _, path := range chromePaths {
+		if _, err := os.Stat(path); err == nil {
+			chromePath = path
+			break
+		}
+	}
+
+	if chromePath == "" {
+		return nil, fmt.Errorf("no Chrome/Chromium executable found")
+	}
+
+	// Create temporary file for HTML output
+	tempFile := filepath.Join(cbe.tempDir, fmt.Sprintf("9gag_chrome_%d.html", time.Now().Unix()))
+	defer os.Remove(tempFile)
+
+	// Build Chrome arguments - try with JS enabled first for 9GAG
+	chromeArgs := []string{
+		"--headless",
+		"--disable-gpu",
+		"--no-sandbox",
+		"--virtual-time-budget=8000", // Shorter timeout for first attempt
+		"--dump-dom",
+		"--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+		"--disable-web-security",
+		"--disable-features=VizDisplayCompositor",
+		"--disable-extensions",
+		"--disable-plugins",
+		"--disable-images", // Speed up loading
+		"--disable-dev-shm-usage", // Prevent shared memory issues
+		"--no-first-run",
+		"--timeout=25", // 25 second timeout
+	}
+	
+	// Add 9GAG cookies if available
+	ninegagCookiesPath := filepath.Join(cbe.workingDir, "9gag_cookies.txt")
+	if _, err := os.Stat(ninegagCookiesPath); err == nil {
+		chromeArgs = append(chromeArgs, "--cookie-file="+ninegagCookiesPath)
+		log.Printf("🍪 Using 9GAG cookies: %s", ninegagCookiesPath)
+	} else {
+		log.Printf("⚠️ 9GAG cookies not found at %s", ninegagCookiesPath)
+	}
+	
+	chromeArgs = append(chromeArgs, ninegagURL)
+	cmd := exec.Command(chromePath, chromeArgs...)
+
+	// Set command timeout
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	cmd = exec.CommandContext(ctx, cmd.Args[0], cmd.Args[1:]...)
+
+	// Capture output
+	output, err := cmd.Output()
+	if err != nil {
+		// If it failed, try without virtual-time-budget (simpler approach)
+		log.Printf("⚠️ Chrome with virtual-time-budget failed, trying without virtual-time-budget")
+		
+		// Build simpler Chrome arguments without virtual-time-budget
+		chromeArgsSimple := []string{
+			"--headless",
+			"--disable-gpu", 
+			"--no-sandbox",
+			"--dump-dom",
+			"--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+			"--disable-web-security",
+			"--disable-dev-shm-usage",
+			"--no-first-run",
+			"--timeout=15",
+		}
+		
+		// Add 9GAG cookies if available
+		if _, err := os.Stat(ninegagCookiesPath); err == nil {
+			chromeArgsSimple = append(chromeArgsSimple, "--cookie-file="+ninegagCookiesPath)
+		}
+		
+		chromeArgsSimple = append(chromeArgsSimple, ninegagURL)
+		cmdSimple := exec.Command(chromePath, chromeArgsSimple...)
+		
+		ctxSimple, cancelSimple := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancelSimple()
+		cmdSimple = exec.CommandContext(ctxSimple, cmdSimple.Args[0], cmdSimple.Args[1:]...)
+		
+		output, err = cmdSimple.Output()
+		
+		if err != nil {
+			// As last resort, try simple HTTP request with user agent
+			log.Printf("⚠️ Chrome with JS also failed, trying simple HTTP request")
+			return cbe.trySimple9GAGHttp(ninegagURL)
+		}
+	}
+
+	html := string(output)
+	log.Printf("📄 Chrome rendered 9GAG HTML: %d bytes", len(html))
+	
+	// Debug: log first 200 chars of HTML if it's small
+	if len(html) < 500 {
+		log.Printf("🔍 HTML content preview: %s", html)
+	}
+
+	// Extract content from rendered HTML
+	return cbe.extract9GAGFromHTML(html, ninegagURL)
+}
+
+func (cbe *CliBrowserExtractor) extract9GAGFromHTML(html, ninegagURL string) ([]*MediaInfo, error) {
+	var mediaInfos []*MediaInfo
+
+	// Extract 9GAG images - updated patterns for 2025
+	imagePatterns := []string{
+		// Main post images
+		`<img[^>]*src="(https://img-9gag-fun\.9cache\.com/[^"]*\.jpg[^"]*)"[^>]*class="[^"]*post-container[^"]*"`,
+		`<img[^>]*class="[^"]*post-container[^"]*"[^>]*src="(https://img-9gag-fun\.9cache\.com/[^"]*\.jpg[^"]*)"`,
+		// Generic 9GAG image patterns
+		`<img[^>]*src="(https://img-9gag-fun\.9cache\.com/[^"]*\.(jpg|png|webp)[^"]*)"`,
+		`<img[^>]*src="(https://miscmedia-9gag-fun\.9cache\.com/[^"]*\.(jpg|png|webp)[^"]*)"`,
+		// Meta tag patterns
+		`<meta[^>]*property="og:image"[^>]*content="(https://img-9gag-fun\.9cache\.com/[^"]*\.(jpg|png|webp)[^"]*)"`,
+		// Any 9cache image
+		`<img[^>]*src="(https://[^"]*\.9cache\.com/[^"]*\.(jpg|png|webp)[^"]*)"`,
+	}
+
+	var imageURLs []string
+	for _, pattern := range imagePatterns {
+		re := regexp.MustCompile(pattern)
+		matches := re.FindAllStringSubmatch(html, -1)
+		for _, match := range matches {
+			if len(match) > 1 {
+				imageURLs = append(imageURLs, match[1])
+			}
+		}
+	}
+
+	// Filter out small/thumbnail images
+	var mainImages []string
+	seen := make(map[string]bool)
+	for _, url := range imageURLs {
+		if !seen[url] && !strings.Contains(url, "_thumb") && !strings.Contains(url, "_small") {
+			mainImages = append(mainImages, url)
+			seen[url] = true
+		}
+	}
+
+	log.Printf("🖼️ Found %d 9GAG images (from %d total)", len(mainImages), len(imageURLs))
+
+	// Extract videos
+	videoPatterns := []string{
+		// Main video patterns
+		`<video[^>]*src="(https://img-9gag-fun\.9cache\.com/[^"]*\.mp4[^"]*)"`,
+		`<source[^>]*type="video/mp4"[^>]*src="(https://img-9gag-fun\.9cache\.com/[^"]*\.mp4[^"]*)"`,
+		`"videoUrl":"(https://[^"]*\.9cache\.com/[^"]*\.mp4[^"]*)"`,
+		`<meta[^>]*property="og:video"[^>]*content="(https://[^"]*\.9cache\.com/[^"]*\.mp4[^"]*)"`,
+		// Any 9cache video
+		`<video[^>]*src="(https://[^"]*\.9cache\.com/[^"]*\.mp4[^"]*)"`,
+		`<source[^>]*src="(https://[^"]*\.9cache\.com/[^"]*\.mp4[^"]*)"`,
+	}
+
+	var videoURLs []string
+	for _, pattern := range videoPatterns {
+		re := regexp.MustCompile(pattern)
+		matches := re.FindAllStringSubmatch(html, -1)
+		for _, match := range matches {
+			if len(match) > 1 {
+				// Clean JSON escaped URLs
+				url := strings.ReplaceAll(match[1], "\\/", "/")
+				url = strings.ReplaceAll(url, "&amp;", "&")
+				videoURLs = append(videoURLs, url)
+			}
+		}
+	}
+
+	// Filter unique videos (avoid duplicates/thumbnails)
+	var mainVideos []string
+	seenVideo := make(map[string]bool)
+	for _, url := range videoURLs {
+		if !seenVideo[url] && !strings.Contains(url, "_thumb") && !strings.Contains(url, "_preview") {
+			mainVideos = append(mainVideos, url)
+			seenVideo[url] = true
+		}
+	}
+
+	log.Printf("🎥 Found %d 9GAG videos (from %d total)", len(mainVideos), len(videoURLs))
+
+	// Extract caption
+	caption := cbe.extract9GAGCaption(html)
+
+	// Download images
+	for i, imageURL := range mainImages {
+		filename, err := cbe.downloadMediaFile(imageURL, "9gag", "photo", i)
+		if err != nil {
+			log.Printf("❌ Failed to download 9GAG image %d: %v", i+1, err)
+			continue
+		}
+
+		mediaInfo := &MediaInfo{
+			Type:     "photo",
+			URL:      ninegagURL,
+			Caption:  caption,
+			Filename: filename,
+		}
+		mediaInfos = append(mediaInfos, mediaInfo)
+	}
+
+	// Download videos
+	for i, videoURL := range mainVideos {
+		filename, err := cbe.downloadMediaFile(videoURL, "9gag", "video", i)
+		if err != nil {
+			log.Printf("❌ Failed to download 9GAG video %d: %v", i+1, err)
+			continue
+		}
+
+		mediaInfo := &MediaInfo{
+			Type:     "video", 
+			URL:      ninegagURL,
+			Caption:  caption,
+			Filename: filename,
+		}
+		mediaInfos = append(mediaInfos, mediaInfo)
+	}
+
+	if len(mediaInfos) == 0 {
+		return nil, fmt.Errorf("no 9GAG media found in rendered HTML")
+	}
+
+	return mediaInfos, nil
+}
+
+func (cbe *CliBrowserExtractor) extract9GAGCaption(html string) string {
+	patterns := []string{
+		// Try Open Graph description first
+		`<meta[^>]*property="og:description"[^>]*content="([^"]*)"`,
+		// Try meta description
+		`<meta[^>]*name="description"[^>]*content="([^"]*)"`,
+		// Try title
+		`<title[^>]*>([^<]*?) - 9GAG</title>`,
+		`<title[^>]*>([^<]*?) \| 9GAG</title>`,
+		// JSON data patterns
+		`"title":"([^"]*)"`,
+		`"description":"([^"]*)"`,
+	}
+
+	for _, pattern := range patterns {
+		re := regexp.MustCompile(pattern)
+		if match := re.FindStringSubmatch(html); len(match) > 1 {
+			caption := strings.TrimSpace(match[1])
+			if caption != "" && caption != "null" && len(caption) > 5 {
+				// Skip generic 9GAG text
+				if !strings.Contains(strings.ToLower(caption), "9gag") || len(caption) > 20 {
+					// Clean up the caption
+					caption = strings.ReplaceAll(caption, "&amp;", "&")
+					caption = strings.ReplaceAll(caption, "&lt;", "<")
+					caption = strings.ReplaceAll(caption, "&gt;", ">")
+					caption = strings.ReplaceAll(caption, "&quot;", "\"")
+					caption = strings.ReplaceAll(caption, "&#39;", "'")
+					return caption
+				}
+			}
+		}
+	}
+
+	return ""
+}
+
+// trySimple9GAGHttp attempts a simple HTTP request as last resort
+func (cbe *CliBrowserExtractor) trySimple9GAGHttp(ninegagURL string) ([]*MediaInfo, error) {
+	log.Printf("🌐 Trying simple HTTP request for 9GAG as last resort")
+	
+	// Use curl with proper headers
+	cmd := exec.Command("curl", "-s", "-L", 
+		"-H", "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+		"-H", "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+		"-H", "Accept-Language: en-US,en;q=0.5",
+		"--max-time", "30",
+		ninegagURL)
+	
+	output, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("simple HTTP request failed: %v", err)
+	}
+	
+	html := string(output)
+	log.Printf("📄 Simple HTTP got %d bytes of HTML", len(html))
+	
+	// Try to extract media from the HTML
+	return cbe.extract9GAGFromHTML(html, ninegagURL)
 }
