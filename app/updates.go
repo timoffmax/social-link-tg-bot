@@ -4,7 +4,11 @@ import (
 	"fmt"
 	"html"
 	"log"
+	"net/url"
 	"os"
+	"regexp"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -158,6 +162,30 @@ func processUpdate(upd *response.TgUpdate) {
 		return
 	}
 
+	// Check for Twitter threads before processing
+	twitterThreads := detectTwitterThreads(socialLinks)
+	if len(twitterThreads) > 0 {
+		log.Printf("🧵 [THREAD] Detected %d Twitter thread(s)", len(twitterThreads))
+		for i, thread := range twitterThreads {
+			log.Printf("🧵 [THREAD-%d] Processing thread with %d tweets", i+1, len(thread.URLs))
+			processTwitterThread(thread, &origChat, &origMessage, downloader)
+		}
+		return
+	}
+
+	// Check for automatic Twitter thread discovery from single URLs (only for 1-2 URLs to avoid overhead)
+	if len(socialLinks) <= 2 {
+		autoThreads := discoverTwitterThreads(socialLinks, downloader)
+		if len(autoThreads) > 0 {
+			log.Printf("🧵 [AUTO-THREAD] Discovered %d automatic thread(s)", len(autoThreads))
+			for i, thread := range autoThreads {
+				log.Printf("🧵 [AUTO-THREAD-%d] Processing discovered thread with %d tweets", i+1, len(thread.URLs))
+				processTwitterThread(thread, &origChat, &origMessage, downloader)
+			}
+			return
+		}
+	}
+
 	// Process social media links concurrently for better performance
 	if len(socialLinks) == 1 {
 		// Single link - process directly (no need for goroutine overhead)
@@ -232,11 +260,15 @@ func processMediaDownload(url string, origChat *response.TgChat, origMessage *re
 	
 	// Check if this is a fixed link response (text-only with no filename)
 	if len(mediaInfos) == 1 && mediaInfos[0].Type == "text" && mediaInfos[0].Filename == "" {
+		// Add clean original URL to text content
+		cleanURL := cleanURLParams(url)
+		textWithURL := mediaInfos[0].Caption + fmt.Sprintf("\n\n🔗 %s", cleanURL)
+		
 		// Send the fixed link as reply with silent notification
 		fixedLinkMsg := payload.TgPlSendMessage{
 			ChatId:              origChat.Id,
 			ParseMode:           payload.ParseModeHTML,
-			Text:                mediaInfos[0].Caption,
+			Text:                textWithURL,
 			ReplyToMessageId:    origMessage.MessageId,
 			DisableNotification: true,
 		}
@@ -682,4 +714,362 @@ func cleanupOldUpdates() {
 		
 		log.Printf("✅ Cleaned up processed update IDs")
 	}
+}
+
+// TwitterThread represents a detected Twitter thread
+type TwitterThread struct {
+	URLs     []string // Ordered list of Twitter URLs in the thread
+	Username string   // Twitter username (same for all tweets in thread)
+	TweetIDs []int64  // Ordered list of tweet IDs
+}
+
+// detectTwitterThreads analyzes a list of URLs and detects Twitter threads
+func detectTwitterThreads(urls []string) []TwitterThread {
+	// Regex to extract Twitter/X URLs and parse them
+	twitterRegex := regexp.MustCompile(`https?://(twitter|x)\.com/([^/]+)/status/(\d+)`)
+	
+	// Map to group tweets by username
+	tweetsByUser := make(map[string][]TwitterTweet)
+	
+	// Parse all Twitter URLs
+	for _, url := range urls {
+		matches := twitterRegex.FindStringSubmatch(url)
+		if len(matches) >= 4 {
+			username := matches[2]
+			tweetIDStr := matches[3]
+			tweetID, err := strconv.ParseInt(tweetIDStr, 10, 64)
+			if err != nil {
+				continue
+			}
+			
+			tweet := TwitterTweet{
+				URL:      url,
+				TweetID:  tweetID,
+				Username: username,
+			}
+			
+			tweetsByUser[username] = append(tweetsByUser[username], tweet)
+		}
+	}
+	
+	var threads []TwitterThread
+	
+	// Check each user's tweets for thread patterns
+	for username, tweets := range tweetsByUser {
+		if len(tweets) < 2 {
+			continue // Need at least 2 tweets for a thread
+		}
+		
+		// Sort tweets by ID (chronological order)
+		sort.Slice(tweets, func(i, j int) bool {
+			return tweets[i].TweetID < tweets[j].TweetID
+		})
+		
+		// Detect consecutive threads
+		thread := TwitterThread{
+			Username: username,
+			URLs:     []string{tweets[0].URL},
+			TweetIDs: []int64{tweets[0].TweetID},
+		}
+		
+		for i := 1; i < len(tweets); i++ {
+			// Check if this tweet could be part of the thread
+			// Twitter IDs are roughly sequential, allow some gap but not too much
+			idDiff := tweets[i].TweetID - tweets[i-1].TweetID
+			
+			if idDiff > 0 && idDiff < 10000000000 { // Reasonable gap for thread replies
+				// Add to current thread
+				thread.URLs = append(thread.URLs, tweets[i].URL)
+				thread.TweetIDs = append(thread.TweetIDs, tweets[i].TweetID)
+			} else {
+				// Gap too large, finish current thread and start new one
+				if len(thread.URLs) >= 2 {
+					threads = append(threads, thread)
+				}
+				
+				// Start new thread
+				thread = TwitterThread{
+					Username: username,
+					URLs:     []string{tweets[i].URL},
+					TweetIDs: []int64{tweets[i].TweetID},
+				}
+			}
+		}
+		
+		// Add final thread if it has multiple tweets
+		if len(thread.URLs) >= 2 {
+			threads = append(threads, thread)
+		}
+	}
+	
+	return threads
+}
+
+// TwitterTweet represents a single tweet in potential thread detection
+type TwitterTweet struct {
+	URL      string
+	TweetID  int64
+	Username string
+}
+
+// processTwitterThread handles a detected Twitter thread
+func processTwitterThread(thread TwitterThread, origChat *response.TgChat, origMessage *response.TgMessage, downloader *services.SmartDownloader) {
+	log.Printf("🧵 [THREAD] Processing thread from @%s with %d tweets", thread.Username, len(thread.URLs))
+	
+	// Process thread tweets sequentially to maintain order
+	for i, url := range thread.URLs {
+		log.Printf("🧵 [THREAD] Processing tweet %d/%d: %s", i+1, len(thread.URLs), url)
+		processMediaDownload(url, origChat, origMessage, downloader)
+		
+		// Small delay between thread posts to maintain order
+		if i < len(thread.URLs)-1 {
+			time.Sleep(500 * time.Millisecond)
+		}
+	}
+	
+	log.Printf("🧵 [THREAD] Completed processing thread from @%s", thread.Username)
+}
+
+// cleanURLParams removes tracking parameters and UTM tags from URLs
+func cleanURLParams(originalURL string) string {
+	parsedURL, err := url.Parse(originalURL)
+	if err != nil {
+		// If parsing fails, return original URL
+		return originalURL
+	}
+
+	// List of common tracking parameters to remove
+	trackingParams := map[string]bool{
+		// UTM parameters
+		"utm_source":    true,
+		"utm_medium":    true,
+		"utm_campaign":  true,
+		"utm_term":      true,
+		"utm_content":   true,
+		"utm_id":        true,
+		
+		// Social media tracking
+		"t":             true, // Twitter sharing parameter
+		"s":             true, // Twitter sharing parameter
+		"fbclid":        true, // Facebook click ID
+		"gclid":         true, // Google click ID
+		"msclkid":       true, // Microsoft click ID
+		"igshid":        true, // Instagram share ID
+		
+		// General tracking
+		"ref":           true,
+		"ref_src":       true,
+		"source":        true,
+		"campaign":      true,
+		"_hsenc":        true, // HubSpot
+		"_hsmi":         true, // HubSpot
+		"mc_cid":        true, // MailChimp
+		"mc_eid":        true, // MailChimp
+	}
+
+	// Get query parameters
+	values := parsedURL.Query()
+	
+	// Remove tracking parameters
+	for param := range trackingParams {
+		values.Del(param)
+	}
+	
+	// Set cleaned query parameters
+	parsedURL.RawQuery = values.Encode()
+	
+	return parsedURL.String()
+}
+
+// discoverTwitterThreads automatically finds follow-up tweets by fetching the original tweet's page
+func discoverTwitterThreads(urls []string, downloader *services.SmartDownloader) []TwitterThread {
+	// Regex to extract Twitter/X URLs
+	twitterRegex := regexp.MustCompile(`https?://(twitter|x)\.com/([^/]+)/status/(\d+)`)
+	
+	var allThreads []TwitterThread
+	
+	for _, originalURL := range urls {
+		matches := twitterRegex.FindStringSubmatch(originalURL)
+		if len(matches) < 4 {
+			continue // Not a Twitter URL
+		}
+		
+		username := matches[2]
+		originalTweetID := matches[3]
+		
+		log.Printf("🔍 [AUTO-THREAD] Checking for thread continuation from @%s (ID: %s)", username, originalTweetID)
+		
+		// Fetch the tweet page HTML using browser rendering (same as image extraction)
+		followUpURLs, err := fetchTwitterThreadWithBrowser(originalURL, username, originalTweetID, downloader)
+		if err != nil {
+			log.Printf("❌ [AUTO-THREAD] Failed to fetch thread for %s: %v", originalURL, err)
+			continue
+		}
+		
+		if len(followUpURLs) == 0 {
+			log.Printf("📄 [AUTO-THREAD] No follow-up tweets found for @%s", username)
+			continue
+		}
+		
+		// Create thread with original URL + discovered follow-ups
+		allURLs := []string{originalURL}
+		
+		// Parse original tweet ID
+		originalTweetIDInt, _ := strconv.ParseInt(originalTweetID, 10, 64)
+		
+		// Filter and sort follow-up URLs by tweet ID
+		type tweetWithID struct {
+			URL     string
+			TweetID int64
+		}
+		
+		var validFollowUps []tweetWithID
+		for _, url := range followUpURLs {
+			if urlMatches := twitterRegex.FindStringSubmatch(url); len(urlMatches) >= 4 {
+				if tweetID, err := strconv.ParseInt(urlMatches[3], 10, 64); err == nil {
+					// Only include tweets that come after the original (higher ID = newer)
+					if tweetID > originalTweetIDInt {
+						validFollowUps = append(validFollowUps, tweetWithID{URL: url, TweetID: tweetID})
+					}
+				}
+			}
+		}
+		
+		// Sort follow-ups by tweet ID (chronological order)
+		sort.Slice(validFollowUps, func(i, j int) bool {
+			return validFollowUps[i].TweetID < validFollowUps[j].TweetID
+		})
+		
+		// Add sorted follow-ups to URLs
+		for _, tweet := range validFollowUps {
+			allURLs = append(allURLs, tweet.URL)
+		}
+		
+		// Build tweet IDs array
+		var tweetIDs []int64
+		tweetIDs = append(tweetIDs, originalTweetIDInt)
+		for _, tweet := range validFollowUps {
+			tweetIDs = append(tweetIDs, tweet.TweetID)
+		}
+		
+		thread := TwitterThread{
+			URLs:     allURLs,
+			Username: username,
+			TweetIDs: tweetIDs,
+		}
+		
+		log.Printf("✅ [AUTO-THREAD] Discovered thread from @%s with %d total tweets", username, len(allURLs))
+		allThreads = append(allThreads, thread)
+	}
+	
+	return allThreads
+}
+
+// fetchTwitterThreadWithBrowser uses the existing CLI browser to render Twitter and find thread URLs
+func fetchTwitterThreadWithBrowser(tweetURL, authorUsername, originalTweetID string, downloader *services.SmartDownloader) ([]string, error) {
+	log.Printf("🌐 [AUTO-THREAD] Using browser rendering for thread discovery")
+	
+	// Use the existing CLI browser extractor that's already integrated
+	cliBrowser := services.NewCliBrowserExtractor("", "") // Using defaults like in image extraction
+	
+	// Render the page using Chrome (same approach as Twitter image extraction)
+	html, err := cliBrowser.RenderPageForTwitterThread(tweetURL)
+	if err != nil {
+		return nil, fmt.Errorf("browser rendering failed: %v", err)
+	}
+	
+	log.Printf("🔍 [AUTO-THREAD] Browser rendered HTML: %d bytes", len(html))
+	
+	// Debug: Check if HTML contains the username at all
+	usernameCount := strings.Count(html, authorUsername)
+	log.Printf("🔍 [AUTO-THREAD] HTML contains username '%s' %d times", authorUsername, usernameCount)
+	
+	// Extract follow-up tweet URLs from the same author (excluding original)
+	return parseTwitterThreadURLs(html, authorUsername, originalTweetID), nil
+}
+
+// parseTwitterThreadURLs extracts follow-up tweet URLs from Twitter HTML, excluding the original tweet
+func parseTwitterThreadURLs(html, authorUsername, originalTweetID string) []string {
+	var urls []string
+	
+	// Pattern to find tweet links from the same author in conversation
+	// Look for links like /med_goblin/status/1934423928782377439
+	linkPattern := regexp.MustCompile(fmt.Sprintf(`/(%s)/status/(\d+)`, regexp.QuoteMeta(authorUsername)))
+	
+	// Also look for full URLs in case they're absolute
+	fullURLPattern := regexp.MustCompile(fmt.Sprintf(`https?://(twitter|x)\.com/(%s)/status/(\d+)`, regexp.QuoteMeta(authorUsername)))
+	
+	// Additional pattern for href attributes
+	hrefPattern := regexp.MustCompile(fmt.Sprintf(`href="[^"]*?/(%s)/status/(\d+)[^"]*"`, regexp.QuoteMeta(authorUsername)))
+	
+	// Find all matches
+	linkMatches := linkPattern.FindAllStringSubmatch(html, -1)
+	fullURLMatches := fullURLPattern.FindAllStringSubmatch(html, -1)
+	hrefMatches := hrefPattern.FindAllStringSubmatch(html, -1)
+	
+	log.Printf("🔍 [AUTO-THREAD] Link matches: %d, Full URL matches: %d, Href matches: %d", 
+		len(linkMatches), len(fullURLMatches), len(hrefMatches))
+	
+	// Convert relative links to full URLs
+	seenTweetIDs := make(map[string]bool)
+	
+	for _, match := range linkMatches {
+		if len(match) >= 3 {
+			username := match[1]
+			tweetID := match[2]
+			
+			// Skip the original tweet and duplicates
+			if tweetID == originalTweetID || seenTweetIDs[tweetID] {
+				continue
+			}
+			seenTweetIDs[tweetID] = true
+			
+			fullURL := fmt.Sprintf("https://x.com/%s/status/%s", username, tweetID)
+			urls = append(urls, fullURL)
+		}
+	}
+	
+	// Add full URLs found in HTML
+	for _, match := range fullURLMatches {
+		if len(match) >= 4 {
+			tweetID := match[3]
+			
+			// Skip the original tweet and duplicates
+			if tweetID == originalTweetID || seenTweetIDs[tweetID] {
+				continue
+			}
+			seenTweetIDs[tweetID] = true
+			
+			fullURL := match[0]
+			urls = append(urls, fullURL)
+		}
+	}
+	
+	// Add href URLs found in HTML
+	for _, match := range hrefMatches {
+		if len(match) >= 3 {
+			username := match[1]
+			tweetID := match[2]
+			
+			// Skip the original tweet and duplicates
+			if tweetID == originalTweetID || seenTweetIDs[tweetID] {
+				continue
+			}
+			seenTweetIDs[tweetID] = true
+			
+			fullURL := fmt.Sprintf("https://x.com/%s/status/%s", username, tweetID)
+			urls = append(urls, fullURL)
+		}
+	}
+	
+	log.Printf("🔍 [AUTO-THREAD] Found %d potential follow-up URLs for @%s", len(urls), authorUsername)
+	
+	// Debug: Log first few URLs found for troubleshooting
+	for i, url := range urls {
+		if i < 3 { // Log first 3 URLs
+			log.Printf("🔍 [AUTO-THREAD] Found URL %d: %s", i+1, url)
+		}
+	}
+	
+	return urls
 }

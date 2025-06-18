@@ -1,6 +1,7 @@
 package services
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io/ioutil"
@@ -589,4 +590,81 @@ func (cbe *CliBrowserExtractor) trySimple9GAGHttp(ninegagURL string) ([]*MediaIn
 	
 	// Try to extract media from the HTML
 	return cbe.extract9GAGFromHTML(html, ninegagURL)
+}
+
+// RenderPageForTwitterThread renders a Twitter page to extract thread conversation HTML
+func (cbe *CliBrowserExtractor) RenderPageForTwitterThread(twitterURL string) (string, error) {
+	log.Printf("🌐 [AUTO-THREAD] Rendering Twitter page for thread discovery: %s", twitterURL)
+
+	// Find Chrome executable (same logic as ExtractTwitterImages)
+	chromePaths := []string{
+		"/usr/bin/google-chrome",
+		"/usr/bin/google-chrome-stable",
+		"/usr/bin/chromium-browser",
+		"/usr/bin/chromium",
+		"/opt/google/chrome/chrome",
+		"/snap/bin/chromium",
+	}
+
+	chromePath := ""
+	for _, path := range chromePaths {
+		if _, err := os.Stat(path); err == nil {
+			chromePath = path
+			break
+		}
+	}
+
+	if chromePath == "" {
+		return "", fmt.Errorf("no Chrome/Chromium executable found")
+	}
+
+	// Create temporary file for HTML output
+	tmpFile, err := os.CreateTemp("", "twitter_thread_*.html")
+	if err != nil {
+		return "", err
+	}
+	defer os.Remove(tmpFile.Name())
+	defer tmpFile.Close()
+
+	// Chrome command optimized for thread page rendering
+	args := []string{
+		"--headless=new",
+		"--no-sandbox",
+		"--disable-gpu",
+		"--disable-dev-shm-usage",
+		"--disable-extensions",
+		"--no-first-run",
+		"--disable-default-apps",
+		"--virtual-time-budget=10000", // Give more time for thread loading
+		"--run-all-compositor-stages-before-draw",
+		"--user-data-dir=" + os.TempDir(),
+		"--dump-dom",
+		twitterURL,
+	}
+
+	log.Printf("🌐 [AUTO-THREAD] Executing Chrome: %s %v", chromePath, args)
+
+	// Set up command with timeout
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, chromePath, args...)
+	
+	// Capture both stdout and stderr
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	// Execute command
+	err = cmd.Run()
+	if err != nil {
+		log.Printf("❌ [AUTO-THREAD] Chrome execution failed: %v", err)
+		log.Printf("❌ [AUTO-THREAD] Chrome stderr: %s", stderr.String())
+		return "", fmt.Errorf("chrome execution failed: %v", err)
+	}
+
+	html := stdout.String()
+	log.Printf("✅ [AUTO-THREAD] Chrome rendered %d bytes of HTML", len(html))
+
+	return html, nil
 }
