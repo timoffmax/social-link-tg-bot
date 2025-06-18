@@ -83,6 +83,12 @@ func (rlt *RealLinkTester) GetRealTestLinks() []TestLink {
 			URL:         "https://x.com/haxorus97/status/1934556201339244966",
 			ExpectedTypes: []string{"text"},
 		},
+		{
+			Platform:    "Twitter/X",
+			Description: "Tweet with long text and two images",
+			URL:         "https://twitter.com/yo_syp/status/1935083471594209314",
+			ExpectedTypes: []string{"text", "photo"},
+		},
 		
 		// YouTube tests
 		{

@@ -1287,6 +1287,22 @@ func (te *TwitterExtractor) downloadMedia(mediaURL, tweetID string, index int) (
 }
 
 func (te *TwitterExtractor) getFileExtension(url, contentType string) string {
+	// Handle mosaic.fxtwitter.com URLs specially
+	if strings.Contains(url, "mosaic.fxtwitter.com") {
+		if strings.Contains(url, "/jpeg/") {
+			return ".jpg"
+		}
+		if strings.Contains(url, "/png/") {
+			return ".png"
+		}
+		if strings.Contains(url, "/gif/") {
+			return ".gif"
+		}
+		if strings.Contains(url, "/webp/") {
+			return ".webp"
+		}
+	}
+	
 	// Try to get extension from URL
 	if ext := filepath.Ext(url); ext != "" {
 		return ext
@@ -1388,8 +1404,8 @@ func (te *TwitterExtractor) parseFixupxMetaTags(html string, tweetID string, use
 	log.Printf("📝 Extracted tweet text from fixupx: %s", tweetText)
 	
 	// Check if fixupx has the media URLs
-	if !strings.Contains(html, "pbs.twimg.com") {
-		log.Printf("❌ No pbs.twimg.com found in fixupx HTML")
+	if !strings.Contains(html, "pbs.twimg.com") && !strings.Contains(html, "mosaic.fxtwitter.com") {
+		log.Printf("❌ No pbs.twimg.com or mosaic.fxtwitter.com found in fixupx HTML")
 	}
 	
 	// Extract media URLs from og:image and twitter:image meta tags
@@ -1397,7 +1413,14 @@ func (te *TwitterExtractor) parseFixupxMetaTags(html string, tweetID string, use
 	
 	// Look for og:image and twitter:image meta tags - handle both compact and full response formats
 	imagePatterns := []string{
-		// Standard format
+		// Fixupx mosaic.fxtwitter.com patterns (2025 format)
+		`<meta[^>]*property="og:image"[^>]*content="([^"]*mosaic\.fxtwitter\.com[^"]*)"`,
+		`<meta[^>]*property="twitter:image"[^>]*content="([^"]*mosaic\.fxtwitter\.com[^"]*)"`,
+		`<meta[^>]*name="twitter:image"[^>]*content="([^"]*mosaic\.fxtwitter\.com[^"]*)"`,
+		`<meta property="og:image" content="([^"]*mosaic\.fxtwitter\.com[^"]*)"`,
+		`<meta property="twitter:image" content="([^"]*mosaic\.fxtwitter\.com[^"]*)"`,
+		`<meta name="twitter:image" content="([^"]*mosaic\.fxtwitter\.com[^"]*)"`,
+		// Standard pbs.twimg.com format
 		`<meta[^>]*property="og:image"[^>]*content="([^"]*pbs\.twimg\.com[^"]*)"`,
 		`<meta[^>]*property="twitter:image"[^>]*content="([^"]*pbs\.twimg\.com[^"]*)"`,
 		`<meta[^>]*name="twitter:image"[^>]*content="([^"]*pbs\.twimg\.com[^"]*)"`,

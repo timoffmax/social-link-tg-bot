@@ -364,9 +364,8 @@ func sendMediaFile(mediaInfo *services.MediaInfo, origChat *response.TgChat, ori
 	
 	// For Twitter/X posts, handle long text intelligently
 	if (strings.Contains(mediaInfo.URL, "twitter.com") || strings.Contains(mediaInfo.URL, "x.com")) && 
-	   len(caption) > 300 && mediaInfo.Type != "text" && 
-	   strings.Contains(caption, "\n") { // Only split if it has line breaks (structured text)
-		log.Printf("🐦 Long structured Twitter post detected (%d chars), sending text and media separately", len(caption))
+	   len(caption) > 1024 && mediaInfo.Type != "text" {
+		log.Printf("🐦 Twitter post exceeds Telegram limit (%d chars), sending text and media separately", len(caption))
 		
 		// Send text first (only if it's not a generic message) with reply and silent notification
 		if caption != "Downloaded from Twitter/X" && caption != "Downloaded from Twitter" && caption != "" {
@@ -384,8 +383,8 @@ func sendMediaFile(mediaInfo *services.MediaInfo, origChat *response.TgChat, ori
 		caption = ""
 	} else {
 		// Normal handling - limit caption length to Telegram's 1024 character limit
-		if len(caption) > 1000 {
-			caption = caption[:997] + "..."
+		if len(caption) > 1020 {
+			caption = caption[:1017] + "..."
 		}
 	}
 	
@@ -543,8 +542,8 @@ func sendPhotosAsMediaGroup(photos []*services.MediaInfo, origChat *response.TgC
 		if i == 0 && photoInfo.Caption != "" {
 			// Decode HTML entities and limit caption length to Telegram's 1024 character limit
 			caption := html.UnescapeString(photoInfo.Caption)
-			if len(caption) > 1000 {
-				caption = caption[:997] + "..."
+			if len(caption) > 1020 {
+				caption = caption[:1017] + "..."
 			}
 			mediaItem.Caption = caption
 		}
