@@ -992,23 +992,90 @@ func fetchTwitterThreadWithBrowser(tweetURL, authorUsername, originalTweetID str
 func parseTwitterThreadURLs(html, authorUsername, originalTweetID string) []string {
 	var urls []string
 	
-	// Pattern to find tweet links from the same author in conversation
-	// Look for links like /med_goblin/status/1934423928782377439
+	// Debug: Save HTML sample for pattern analysis
+	debugSample := html
+	if len(debugSample) > 2000 {
+		debugSample = debugSample[:2000] + "...[TRUNCATED]"
+	}
+	log.Printf("🔍 [AUTO-THREAD] HTML sample (first 2000 chars): %s", debugSample)
+	
+	// Multiple patterns to find tweet links from the same author in conversation
+	
+	// Pattern 1: Basic relative links like /med_goblin/status/1934423928782377439
 	linkPattern := regexp.MustCompile(fmt.Sprintf(`/(%s)/status/(\d+)`, regexp.QuoteMeta(authorUsername)))
 	
-	// Also look for full URLs in case they're absolute
+	// Pattern 2: Full URLs like https://x.com/med_goblin/status/1934423928782377439
 	fullURLPattern := regexp.MustCompile(fmt.Sprintf(`https?://(twitter|x)\.com/(%s)/status/(\d+)`, regexp.QuoteMeta(authorUsername)))
 	
-	// Additional pattern for href attributes
+	// Pattern 3: Href attributes with quotes
 	hrefPattern := regexp.MustCompile(fmt.Sprintf(`href="[^"]*?/(%s)/status/(\d+)[^"]*"`, regexp.QuoteMeta(authorUsername)))
+	
+	// Pattern 4: Data attributes that might contain URLs
+	dataPattern := regexp.MustCompile(fmt.Sprintf(`data-[^=]*="[^"]*?/(%s)/status/(\d+)[^"]*"`, regexp.QuoteMeta(authorUsername)))
+	
+	// Pattern 5: JSON-style URLs (in case of embedded data)
+	jsonPattern := regexp.MustCompile(fmt.Sprintf(`"[^"]*?/(%s)/status/(\d+)[^"]*"`, regexp.QuoteMeta(authorUsername)))
+	
+	// Pattern 6: URL with query parameters 
+	queryPattern := regexp.MustCompile(fmt.Sprintf(`https?://(twitter|x)\.com/(%s)/status/(\d+)(?:\?[^"\s>]*)?`, regexp.QuoteMeta(authorUsername)))
+	
+	log.Printf("🔍 [AUTO-THREAD] Using %d regex patterns to find thread URLs", 6)
 	
 	// Find all matches
 	linkMatches := linkPattern.FindAllStringSubmatch(html, -1)
 	fullURLMatches := fullURLPattern.FindAllStringSubmatch(html, -1)
 	hrefMatches := hrefPattern.FindAllStringSubmatch(html, -1)
+	dataMatches := dataPattern.FindAllStringSubmatch(html, -1)
+	jsonMatches := jsonPattern.FindAllStringSubmatch(html, -1)
+	queryMatches := queryPattern.FindAllStringSubmatch(html, -1)
 	
-	log.Printf("🔍 [AUTO-THREAD] Link matches: %d, Full URL matches: %d, Href matches: %d", 
-		len(linkMatches), len(fullURLMatches), len(hrefMatches))
+	log.Printf("🔍 [AUTO-THREAD] Pattern matches - Link: %d, Full URL: %d, Href: %d, Data: %d, JSON: %d, Query: %d", 
+		len(linkMatches), len(fullURLMatches), len(hrefMatches), len(dataMatches), len(jsonMatches), len(queryMatches))
+	
+	// Debug: Log raw matches found
+	log.Printf("🔍 [AUTO-THREAD] Raw link matches:")
+	for i, match := range linkMatches {
+		if i < 5 { // Log first 5 matches
+			log.Printf("   Link match %d: %v", i+1, match)
+		}
+	}
+	
+	log.Printf("🔍 [AUTO-THREAD] Raw full URL matches:")
+	for i, match := range fullURLMatches {
+		if i < 5 { // Log first 5 matches
+			log.Printf("   Full URL match %d: %v", i+1, match)
+		}
+	}
+	
+	log.Printf("🔍 [AUTO-THREAD] Raw href matches:")
+	for i, match := range hrefMatches {
+		if i < 5 { // Log first 5 matches
+			log.Printf("   Href match %d: %v", i+1, match)
+		}
+	}
+	
+	log.Printf("🔍 [AUTO-THREAD] Raw data matches:")
+	for i, match := range dataMatches {
+		if i < 5 { // Log first 5 matches
+			log.Printf("   Data match %d: %v", i+1, match)
+		}
+	}
+	
+	log.Printf("🔍 [AUTO-THREAD] Raw JSON matches:")
+	for i, match := range jsonMatches {
+		if i < 5 { // Log first 5 matches
+			log.Printf("   JSON match %d: %v", i+1, match)
+		}
+	}
+	
+	log.Printf("🔍 [AUTO-THREAD] Raw query matches:")
+	for i, match := range queryMatches {
+		if i < 5 { // Log first 5 matches
+			log.Printf("   Query match %d: %v", i+1, match)
+		}
+	}
+	
+	log.Printf("🔍 [AUTO-THREAD] Original tweet ID to exclude: %s", originalTweetID)
 	
 	// Convert relative links to full URLs
 	seenTweetIDs := make(map[string]bool)
@@ -1018,14 +1085,22 @@ func parseTwitterThreadURLs(html, authorUsername, originalTweetID string) []stri
 			username := match[1]
 			tweetID := match[2]
 			
+			log.Printf("🔍 [AUTO-THREAD] Processing link match: username=%s, tweetID=%s", username, tweetID)
+			
 			// Skip the original tweet and duplicates
-			if tweetID == originalTweetID || seenTweetIDs[tweetID] {
+			if tweetID == originalTweetID {
+				log.Printf("   ❌ Skipped: matches original tweet ID (%s)", originalTweetID)
+				continue
+			}
+			if seenTweetIDs[tweetID] {
+				log.Printf("   ❌ Skipped: duplicate tweet ID (%s)", tweetID)
 				continue
 			}
 			seenTweetIDs[tweetID] = true
 			
 			fullURL := fmt.Sprintf("https://x.com/%s/status/%s", username, tweetID)
 			urls = append(urls, fullURL)
+			log.Printf("   ✅ Added URL: %s", fullURL)
 		}
 	}
 	
@@ -1034,14 +1109,22 @@ func parseTwitterThreadURLs(html, authorUsername, originalTweetID string) []stri
 		if len(match) >= 4 {
 			tweetID := match[3]
 			
+			log.Printf("🔍 [AUTO-THREAD] Processing full URL match: tweetID=%s, fullURL=%s", tweetID, match[0])
+			
 			// Skip the original tweet and duplicates
-			if tweetID == originalTweetID || seenTweetIDs[tweetID] {
+			if tweetID == originalTweetID {
+				log.Printf("   ❌ Skipped: matches original tweet ID (%s)", originalTweetID)
+				continue
+			}
+			if seenTweetIDs[tweetID] {
+				log.Printf("   ❌ Skipped: duplicate tweet ID (%s)", tweetID)
 				continue
 			}
 			seenTweetIDs[tweetID] = true
 			
 			fullURL := match[0]
 			urls = append(urls, fullURL)
+			log.Printf("   ✅ Added URL: %s", fullURL)
 		}
 	}
 	
@@ -1051,14 +1134,96 @@ func parseTwitterThreadURLs(html, authorUsername, originalTweetID string) []stri
 			username := match[1]
 			tweetID := match[2]
 			
+			log.Printf("🔍 [AUTO-THREAD] Processing href match: username=%s, tweetID=%s", username, tweetID)
+			
 			// Skip the original tweet and duplicates
-			if tweetID == originalTweetID || seenTweetIDs[tweetID] {
+			if tweetID == originalTweetID {
+				log.Printf("   ❌ Skipped: matches original tweet ID (%s)", originalTweetID)
+				continue
+			}
+			if seenTweetIDs[tweetID] {
+				log.Printf("   ❌ Skipped: duplicate tweet ID (%s)", tweetID)
 				continue
 			}
 			seenTweetIDs[tweetID] = true
 			
 			fullURL := fmt.Sprintf("https://x.com/%s/status/%s", username, tweetID)
 			urls = append(urls, fullURL)
+			log.Printf("   ✅ Added URL: %s", fullURL)
+		}
+	}
+	
+	// Add data attribute URLs
+	for _, match := range dataMatches {
+		if len(match) >= 3 {
+			username := match[1]
+			tweetID := match[2]
+			
+			log.Printf("🔍 [AUTO-THREAD] Processing data match: username=%s, tweetID=%s", username, tweetID)
+			
+			// Skip the original tweet and duplicates
+			if tweetID == originalTweetID {
+				log.Printf("   ❌ Skipped: matches original tweet ID (%s)", originalTweetID)
+				continue
+			}
+			if seenTweetIDs[tweetID] {
+				log.Printf("   ❌ Skipped: duplicate tweet ID (%s)", tweetID)
+				continue
+			}
+			seenTweetIDs[tweetID] = true
+			
+			fullURL := fmt.Sprintf("https://x.com/%s/status/%s", username, tweetID)
+			urls = append(urls, fullURL)
+			log.Printf("   ✅ Added URL: %s", fullURL)
+		}
+	}
+	
+	// Add JSON-style URLs
+	for _, match := range jsonMatches {
+		if len(match) >= 3 {
+			username := match[1]
+			tweetID := match[2]
+			
+			log.Printf("🔍 [AUTO-THREAD] Processing JSON match: username=%s, tweetID=%s", username, tweetID)
+			
+			// Skip the original tweet and duplicates
+			if tweetID == originalTweetID {
+				log.Printf("   ❌ Skipped: matches original tweet ID (%s)", originalTweetID)
+				continue
+			}
+			if seenTweetIDs[tweetID] {
+				log.Printf("   ❌ Skipped: duplicate tweet ID (%s)", tweetID)
+				continue
+			}
+			seenTweetIDs[tweetID] = true
+			
+			fullURL := fmt.Sprintf("https://x.com/%s/status/%s", username, tweetID)
+			urls = append(urls, fullURL)
+			log.Printf("   ✅ Added URL: %s", fullURL)
+		}
+	}
+	
+	// Add query parameter URLs
+	for _, match := range queryMatches {
+		if len(match) >= 4 {
+			tweetID := match[3]
+			
+			log.Printf("🔍 [AUTO-THREAD] Processing query match: tweetID=%s, fullURL=%s", tweetID, match[0])
+			
+			// Skip the original tweet and duplicates
+			if tweetID == originalTweetID {
+				log.Printf("   ❌ Skipped: matches original tweet ID (%s)", originalTweetID)
+				continue
+			}
+			if seenTweetIDs[tweetID] {
+				log.Printf("   ❌ Skipped: duplicate tweet ID (%s)", tweetID)
+				continue
+			}
+			seenTweetIDs[tweetID] = true
+			
+			fullURL := match[0]
+			urls = append(urls, fullURL)
+			log.Printf("   ✅ Added URL: %s", fullURL)
 		}
 	}
 	
