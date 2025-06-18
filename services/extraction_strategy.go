@@ -117,6 +117,30 @@ func GetExtractionStrategy(url string) *ExtractionStrategy {
 		}
 	}
 	
+	// Reddit: yt-dlp works well for video posts, browser fallback for images
+	if strings.Contains(url, "reddit.com") {
+		return &ExtractionStrategy{
+			Platform: "reddit",
+			Methods: []ExtractionMethod{
+				MethodYtDlp,
+				MethodBrowser,
+			},
+			HasFixedLink: false,
+		}
+	}
+	
+	// Facebook: yt-dlp first (works for some video posts), then browser fallback
+	if strings.Contains(url, "facebook.com") {
+		return &ExtractionStrategy{
+			Platform: "facebook",
+			Methods: []ExtractionMethod{
+				MethodYtDlp,
+				MethodBrowser,
+			},
+			HasFixedLink: false,
+		}
+	}
+	
 	// Default: try yt-dlp then browser
 	return &ExtractionStrategy{
 		Platform: "generic",

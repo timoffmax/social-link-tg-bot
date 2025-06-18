@@ -118,6 +118,10 @@ func (sd *SmartDownloader) tryYtDlpExtraction(url string, platform string) ([]*M
 		return sd.ytdlp.DownloadTikTokMedia(url)
 	case "youtube":
 		return sd.ytdlp.DownloadYouTubeMedia(url)
+	case "reddit":
+		return sd.ytdlp.DownloadRedditMedia(url)
+	case "facebook":
+		return sd.ytdlp.DownloadFacebookMedia(url)
 	case "9gag":
 		return sd.ytdlp.Download9GAGMedia(url)
 	default:
@@ -133,6 +137,16 @@ func (sd *SmartDownloader) IsAvailable() bool {
 // CleanupFile removes a temporary file
 func (sd *SmartDownloader) CleanupFile(filename string) {
 	sd.ytdlp.CleanupFile(filename)
+}
+
+// GetWorkingDir returns the working directory
+func (sd *SmartDownloader) GetWorkingDir() string {
+	return sd.workingDir
+}
+
+// GetTempDir returns the temp directory
+func (sd *SmartDownloader) GetTempDir() string {
+	return sd.tempDir
 }
 
 // appendOriginalURL adds the original URL to caption while respecting Telegram limits

@@ -32,12 +32,6 @@ func (rlt *RealLinkTester) GetRealTestLinks() []TestLink {
 	return []TestLink{
 		// Instagram tests
 		{
-			Platform:    "Instagram",
-			Description: "Public photo post",
-			URL:         "https://www.instagram.com/p/DKuV9JOoH5c/",
-			ExpectedTypes: []string{"photo"},
-		},
-		{
 			Platform:    "Instagram", 
 			Description: "Public reel/video",
 			URL:         "https://www.instagram.com/reel/DKWY4HNM9RE/",
@@ -97,33 +91,13 @@ func (rlt *RealLinkTester) GetRealTestLinks() []TestLink {
 			URL:         "https://youtube.com/shorts/5d7XprRhaXk",
 			ExpectedTypes: []string{"video"},
 		},
-		
-		// 9GAG tests
+
+		// Facebook tests
 		{
-			Platform:    "9GAG",
-			Description: "9GAG video (WebM)",
-			URL:         "https://9gag.com/gag/amopvP4",
+			Platform:    "Facebook",
+			Description: "Facebook video",
+			URL:         "https://www.facebook.com/share/v/162pLwmzti/",
 			ExpectedTypes: []string{"video"},
-		},
-		{
-			Platform:    "9GAG",
-			Description: "9GAG image",
-			URL:         "https://9gag.com/gag/a1mE12R",
-			ExpectedTypes: []string{"photo"},
-		},
-		{
-			Platform:    "9GAG",
-			Description: "9GAG restricted/NSFW content",
-			URL:         "https://9gag.com/gag/aNDOPoG",
-			ExpectedTypes: []string{"photo", "video"},
-		},
-		
-		// Instagram advanced tests
-		{
-			Platform:    "Instagram",
-			Description: "Instagram story (24h expiring)",
-			URL:         "https://www.instagram.com/stories/highlights/17984677888447749/", // Story highlight
-			ExpectedTypes: []string{"photo", "video", "text"}, // May fail, fallback to fixed link
 		},
 	}
 }

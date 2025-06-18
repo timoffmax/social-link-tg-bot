@@ -49,6 +49,10 @@ func (ube *UniversalBrowserExtractor) ExtractMedia(mediaURL string) ([]*MediaInf
 		return ube.extractTikTokMedia(mediaURL)
 	case "youtube":
 		return ube.extractYouTubeMedia(mediaURL)
+	case "reddit":
+		return ube.extractRedditMedia(mediaURL)
+	case "facebook":
+		return ube.extractFacebookMedia(mediaURL)
 	case "9gag":
 		return ube.extract9GAGMedia(mediaURL)
 	default:
@@ -65,6 +69,10 @@ func (ube *UniversalBrowserExtractor) detectPlatform(mediaURL string) string {
 		return "tiktok"
 	} else if strings.Contains(mediaURL, "youtube.com") || strings.Contains(mediaURL, "youtu.be") {
 		return "youtube"
+	} else if strings.Contains(mediaURL, "reddit.com") {
+		return "reddit"
+	} else if strings.Contains(mediaURL, "facebook.com") {
+		return "facebook"
 	} else if strings.Contains(mediaURL, "9gag.com") {
 		return "9gag"
 	}
@@ -73,10 +81,19 @@ func (ube *UniversalBrowserExtractor) detectPlatform(mediaURL string) string {
 
 func (ube *UniversalBrowserExtractor) extractInstagramMedia(mediaURL string) ([]*MediaInfo, error) {
 	log.Printf("📸 Extracting Instagram media with headless browser")
+	
+	// Extract username from URL
+	username := ExtractInstagramUsername(mediaURL)
 
 	html, err := ube.renderPageWithBrowser(mediaURL, 8*time.Second)
 	if err != nil {
 		return nil, err
+	}
+
+	// Extract Instagram author info from HTML
+	displayName, detectedUsername := ube.extractInstagramAuthorInfo(html)
+	if detectedUsername != "" {
+		username = detectedUsername
 	}
 
 	var mediaInfos []*MediaInfo
@@ -104,10 +121,11 @@ func (ube *UniversalBrowserExtractor) extractInstagramMedia(mediaURL string) ([]
 			continue
 		}
 
+		originalCaption := ube.extractInstagramCaption(html)
 		mediaInfo := &MediaInfo{
 			Type:     "photo",
 			URL:      mediaURL,
-			Caption:  ube.extractInstagramCaption(html),
+			Caption:  FormatAuthorCaption("instagram", displayName, username, originalCaption),
 			Filename: filename,
 		}
 		mediaInfos = append(mediaInfos, mediaInfo)
@@ -131,10 +149,11 @@ func (ube *UniversalBrowserExtractor) extractInstagramMedia(mediaURL string) ([]
 			continue
 		}
 
+		originalCaption := ube.extractInstagramCaption(html)
 		mediaInfo := &MediaInfo{
 			Type:     "video",
 			URL:      mediaURL,
-			Caption:  ube.extractInstagramCaption(html),
+			Caption:  FormatAuthorCaption("instagram", displayName, username, originalCaption),
 			Filename: filename,
 		}
 		mediaInfos = append(mediaInfos, mediaInfo)
@@ -221,9 +240,18 @@ func (ube *UniversalBrowserExtractor) extractTwitterMedia(mediaURL string) ([]*M
 func (ube *UniversalBrowserExtractor) extractTikTokMedia(mediaURL string) ([]*MediaInfo, error) {
 	log.Printf("🎵 Extracting TikTok media with headless browser")
 
+	// Extract username from URL
+	username := ExtractTikTokUsername(mediaURL)
+
 	html, err := ube.renderPageWithBrowser(mediaURL, 8*time.Second)
 	if err != nil {
 		return nil, err
+	}
+
+	// Extract TikTok author info from HTML
+	displayName, detectedUsername := ube.extractTikTokAuthorInfo(html)
+	if detectedUsername != "" {
+		username = detectedUsername
 	}
 	
 	// Debug: Save HTML content for analysis (temporary)
@@ -257,10 +285,11 @@ func (ube *UniversalBrowserExtractor) extractTikTokMedia(mediaURL string) ([]*Me
 			continue
 		}
 
+		originalCaption := ube.extractTikTokCaption(html)
 		mediaInfo := &MediaInfo{
 			Type:     "photo",
 			URL:      mediaURL,
-			Caption:  ube.extractTikTokCaption(html),
+			Caption:  FormatAuthorCaption("tiktok", displayName, username, originalCaption),
 			Filename: filename,
 		}
 		mediaInfos = append(mediaInfos, mediaInfo)
@@ -284,10 +313,11 @@ func (ube *UniversalBrowserExtractor) extractTikTokMedia(mediaURL string) ([]*Me
 				continue
 			}
 
+			originalCaption := ube.extractTikTokCaption(html)
 			mediaInfo := &MediaInfo{
 				Type:     "video",
 				URL:      mediaURL,
-				Caption:  ube.extractTikTokCaption(html),
+				Caption:  FormatAuthorCaption("tiktok", displayName, username, originalCaption),
 				Filename: filename,
 			}
 			mediaInfos = append(mediaInfos, mediaInfo)
@@ -304,43 +334,87 @@ func (ube *UniversalBrowserExtractor) extractTikTokMedia(mediaURL string) ([]*Me
 func (ube *UniversalBrowserExtractor) extractYouTubeMedia(mediaURL string) ([]*MediaInfo, error) {
 	log.Printf("📺 Extracting YouTube media with headless browser")
 
+	// Extract username from URL
+	username := ExtractYouTubeChannel(mediaURL)
+
 	html, err := ube.renderPageWithBrowser(mediaURL, 6*time.Second)
 	if err != nil {
 		return nil, err
 	}
 
-	var mediaInfos []*MediaInfo
-
-	// YouTube Shorts video patterns (usually streamed, harder to extract directly)
-	// For now, focus on thumbnails and metadata
-	thumbnailPatterns := []string{
-		`<meta[^>]*property="og:image"[^>]*content="(https://i\.ytimg\.com/vi/[^"]*\.jpg)"`,
-		`<link[^>]*rel="image_src"[^>]*href="(https://i\.ytimg\.com/vi/[^"]*\.jpg)"`,
+	// Extract YouTube author info from HTML
+	displayName, detectedUsername := ube.extractYouTubeAuthorInfo(html)
+	if detectedUsername != "" {
+		username = detectedUsername
 	}
 
-	thumbnailURLs := ube.extractURLsWithPatterns(html, thumbnailPatterns)
-	log.Printf("🖼️ Found %d YouTube thumbnails", len(thumbnailURLs))
+	var mediaInfos []*MediaInfo
 
-	// Download thumbnails as a fallback
-	for i, thumbnailURL := range thumbnailURLs {
-		// Upgrade to maxresdefault if possible
-		highResURL := strings.Replace(thumbnailURL, "hqdefault.jpg", "maxresdefault.jpg", 1)
-		highResURL = strings.Replace(highResURL, "mqdefault.jpg", "maxresdefault.jpg", 1)
+	// Check if this is a YouTube post vs Shorts
+	isYouTubePost := strings.Contains(mediaURL, "/post/")
+	
+	var mediaPatterns []string
+	if isYouTubePost {
+		// YouTube Community Post patterns (images, polls, text)
+		mediaPatterns = []string{
+			// Community post images
+			`<meta[^>]*property="og:image"[^>]*content="(https://yt[0-9]\.ggpht\.com/[^"]*)"`,
+			`<meta[^>]*property="og:image"[^>]*content="(https://i\.ytimg\.com/[^"]*)"`,
+			// Attached images in community posts
+			`"url":"(https://yt[0-9]\.ggpht\.com/[^"]*)"`,
+			`"url":"(https://i\.ytimg\.com/[^"]*\.jpg[^"]*)"`,
+			// Community post photo content
+			`<img[^>]*src="(https://yt[0-9]\.ggpht\.com/[^"]*)"`,
+			`<img[^>]*src="(https://i\.ytimg\.com/[^"]*\.jpg[^"]*)"`,
+		}
+		log.Printf("📺 Detected YouTube Community Post")
+	} else {
+		// YouTube Shorts/Video patterns (usually streamed, harder to extract directly)
+		// For now, focus on thumbnails and metadata
+		mediaPatterns = []string{
+			`<meta[^>]*property="og:image"[^>]*content="(https://i\.ytimg\.com/vi/[^"]*\.jpg)"`,
+			`<link[^>]*rel="image_src"[^>]*href="(https://i\.ytimg\.com/vi/[^"]*\.jpg)"`,
+		}
+		log.Printf("📺 Detected YouTube Shorts/Video")
+	}
+
+	mediaURLs := ube.extractURLsWithPatterns(html, mediaPatterns)
+	if isYouTubePost {
+		log.Printf("🖼️ Found %d YouTube post media items", len(mediaURLs))
+	} else {
+		log.Printf("🖼️ Found %d YouTube thumbnails", len(mediaURLs))
+	}
+
+	// Download media (thumbnails or community post images)
+	for i, mediaItemURL := range mediaURLs {
+		var filename string
+		var err error
 		
-		filename, err := ube.downloadMediaFile(highResURL, "youtube", "photo", i)
-		if err != nil {
-			// Fallback to original quality
-			filename, err = ube.downloadMediaFile(thumbnailURL, "youtube", "photo", i)
+		if isYouTubePost {
+			// For community posts, download directly
+			filename, err = ube.downloadMediaFile(mediaItemURL, "youtube", "photo", i)
+		} else {
+			// For Shorts/Videos, try to upgrade thumbnail quality
+			highResURL := strings.Replace(mediaItemURL, "hqdefault.jpg", "maxresdefault.jpg", 1)
+			highResURL = strings.Replace(highResURL, "mqdefault.jpg", "maxresdefault.jpg", 1)
+			
+			filename, err = ube.downloadMediaFile(highResURL, "youtube", "photo", i)
 			if err != nil {
-				log.Printf("❌ Failed to download YouTube thumbnail %d: %v", i+1, err)
-				continue
+				// Fallback to original quality
+				filename, err = ube.downloadMediaFile(mediaItemURL, "youtube", "photo", i)
 			}
 		}
+		
+		if err != nil {
+			log.Printf("❌ Failed to download YouTube media %d: %v", i+1, err)
+			continue
+		}
 
+		originalCaption := ube.extractYouTubeCaption(html)
 		mediaInfo := &MediaInfo{
 			Type:     "photo",
 			URL:      mediaURL,
-			Caption:  ube.extractYouTubeCaption(html),
+			Caption:  FormatAuthorCaption("youtube", displayName, username, originalCaption),
 			Filename: filename,
 		}
 		mediaInfos = append(mediaInfos, mediaInfo)
@@ -352,7 +426,7 @@ func (ube *UniversalBrowserExtractor) extractYouTubeMedia(mediaURL string) ([]*M
 			mediaInfo := &MediaInfo{
 				Type:     "text",
 				URL:      mediaURL,
-				Caption:  description,
+				Caption:  FormatAuthorCaption("youtube", displayName, username, description),
 				Filename: "",
 			}
 			mediaInfos = append(mediaInfos, mediaInfo)
@@ -368,6 +442,9 @@ func (ube *UniversalBrowserExtractor) extractYouTubeMedia(mediaURL string) ([]*M
 
 func (ube *UniversalBrowserExtractor) extract9GAGMedia(mediaURL string) ([]*MediaInfo, error) {
 	log.Printf("😂 Extracting 9GAG media with headless browser")
+
+	// Extract username from URL
+	username := Extract9GAGUsername(mediaURL)
 
 	// Try the simple HTTP approach first since it used to work
 	html, err := ube.tryImproved9GAGFallback(mediaURL)
@@ -394,6 +471,12 @@ func (ube *UniversalBrowserExtractor) extract9GAGMedia(mediaURL string) ([]*Medi
 		}
 	}
 
+	// Extract 9GAG author info from HTML
+	displayName, detectedUsername := ube.extract9GAGAuthorInfo(html)
+	if detectedUsername != "" {
+		username = detectedUsername
+	}
+
 	var mediaInfos []*MediaInfo
 
 	// 9GAG image patterns
@@ -415,10 +498,11 @@ func (ube *UniversalBrowserExtractor) extract9GAGMedia(mediaURL string) ([]*Medi
 			continue
 		}
 
+		originalCaption := ube.extract9GAGCaption(html)
 		mediaInfo := &MediaInfo{
 			Type:     "photo",
 			URL:      mediaURL,
-			Caption:  ube.extract9GAGCaption(html),
+			Caption:  FormatAuthorCaption("9gag", displayName, username, originalCaption),
 			Filename: filename,
 		}
 		mediaInfos = append(mediaInfos, mediaInfo)
@@ -453,10 +537,11 @@ func (ube *UniversalBrowserExtractor) extract9GAGMedia(mediaURL string) ([]*Medi
 			continue
 		}
 
+		originalCaption := ube.extract9GAGCaption(html)
 		mediaInfo := &MediaInfo{
 			Type:     "video",
 			URL:      mediaURL,
-			Caption:  ube.extract9GAGCaption(html),
+			Caption:  FormatAuthorCaption("9gag", displayName, username, originalCaption),
 			Filename: filename,
 		}
 		mediaInfos = append(mediaInfos, mediaInfo)
@@ -579,6 +664,156 @@ func (ube *UniversalBrowserExtractor) trySimple9GAGFallback(pageURL string) (str
 	return string(bodyBytes), nil
 }
 
+func (ube *UniversalBrowserExtractor) extractRedditMedia(mediaURL string) ([]*MediaInfo, error) {
+	log.Printf("🟧 Extracting Reddit media with headless browser (extended timeout)")
+
+	// Extract username from URL
+	username := ExtractRedditUsername(mediaURL)
+
+	// Use longer timeout for Reddit due to slow loading
+	html, err := ube.renderPageWithBrowserTimeout(mediaURL, 8*time.Second, 60*time.Second)
+	if err != nil {
+		return nil, err
+	}
+
+	// Extract Reddit author info from HTML
+	displayName, detectedUsername := ube.extractRedditAuthorInfo(html)
+	if detectedUsername != "" {
+		username = detectedUsername
+	}
+
+	var mediaInfos []*MediaInfo
+
+	// Reddit-specific patterns for images and videos
+	imagePatterns := []string{
+		`<meta[^>]*property="og:image"[^>]*content="([^"]*\.(jpg|jpeg|png|webp|gif)[^"]*)"`,
+		`<meta[^>]*name="twitter:image"[^>]*content="([^"]*\.(jpg|jpeg|png|webp|gif)[^"]*)"`,
+		`"url":"([^"]*i\.redd\.it[^"]*\.(jpg|jpeg|png|webp|gif)[^"]*)"`,
+		`"preview":.*?"url":"([^"]*preview\.redd\.it[^"]*\.(jpg|jpeg|png|webp|gif)[^"]*)"`,
+	}
+
+	videoPatterns := []string{
+		`<meta[^>]*property="og:video"[^>]*content="([^"]*\.(mp4|webm|mov)[^"]*)"`,
+		`"fallback_url":"([^"]*v\.redd\.it[^"]*)"`,
+		`"dash_url":"([^"]*)"`,
+	}
+
+	// Extract images
+	imageURLs := ube.extractURLsWithPatterns(html, imagePatterns)
+	log.Printf("🖼️ Found %d Reddit images", len(imageURLs))
+
+	for i, imageURL := range imageURLs {
+		// Clean up Reddit URLs
+		cleanURL := strings.ReplaceAll(imageURL, "&amp;", "&")
+		if filename, err := ube.downloadMediaFile(cleanURL, "reddit", "photo", i); err == nil {
+			originalCaption := ube.extractRedditCaption(html)
+			mediaInfo := &MediaInfo{
+				Type:     "photo",
+				URL:      mediaURL,
+				Caption:  FormatAuthorCaption("reddit", displayName, username, originalCaption),
+				Filename: filename,
+			}
+			mediaInfos = append(mediaInfos, mediaInfo)
+		}
+	}
+
+	// Extract videos  
+	videoURLs := ube.extractURLsWithPatterns(html, videoPatterns)
+	log.Printf("🎬 Found %d Reddit videos", len(videoURLs))
+
+	for i, videoURL := range videoURLs {
+		cleanURL := strings.ReplaceAll(videoURL, "&amp;", "&")
+		if filename, err := ube.downloadMediaFile(cleanURL, "reddit", "video", i); err == nil {
+			originalCaption := ube.extractRedditCaption(html)
+			mediaInfo := &MediaInfo{
+				Type:     "video",
+				URL:      mediaURL,
+				Caption:  FormatAuthorCaption("reddit", displayName, username, originalCaption),
+				Filename: filename,
+			}
+			mediaInfos = append(mediaInfos, mediaInfo)
+		}
+	}
+
+	log.Printf("✅ Reddit extraction completed: %d media items", len(mediaInfos))
+	return mediaInfos, nil
+}
+
+func (ube *UniversalBrowserExtractor) extractFacebookMedia(mediaURL string) ([]*MediaInfo, error) {
+	log.Printf("📘 Extracting Facebook media with headless browser (extended timeout)")
+
+	// Extract username from URL
+	username := ExtractFacebookUsername(mediaURL)
+
+	// Use longer timeout for Facebook due to heavy JavaScript loading
+	html, err := ube.renderPageWithBrowserTimeout(mediaURL, 10*time.Second, 60*time.Second)
+	if err != nil {
+		return nil, err
+	}
+
+	// Extract Facebook author info from HTML
+	displayName, detectedUsername := ube.extractFacebookAuthorInfo(html)
+	if detectedUsername != "" {
+		username = detectedUsername
+	}
+
+	var mediaInfos []*MediaInfo
+
+	// Facebook-specific patterns for images and videos
+	imagePatterns := []string{
+		`<meta[^>]*property="og:image"[^>]*content="([^"]*\.(jpg|jpeg|png|webp)[^"]*)"`,
+		`<meta[^>]*name="twitter:image"[^>]*content="([^"]*\.(jpg|jpeg|png|webp)[^"]*)"`,
+		`"image":.*?"uri":"([^"]*scontent[^"]*\.(jpg|jpeg|png|webp)[^"]*)"`,
+		`"photo_image":.*?"uri":"([^"]*)"`,
+	}
+
+	videoPatterns := []string{
+		`<meta[^>]*property="og:video"[^>]*content="([^"]*\.(mp4|webm)[^"]*)"`,
+		`"video_url":"([^"]*)"`,
+		`"src":"([^"]*video[^"]*\.(mp4|webm)[^"]*)"`,
+	}
+
+	// Extract images
+	imageURLs := ube.extractURLsWithPatterns(html, imagePatterns)
+	log.Printf("🖼️ Found %d Facebook images", len(imageURLs))
+
+	for i, imageURL := range imageURLs {
+		// Clean up Facebook URLs
+		cleanURL := strings.ReplaceAll(imageURL, "&amp;", "&")
+		if filename, err := ube.downloadMediaFile(cleanURL, "facebook", "photo", i); err == nil {
+			originalCaption := ube.extractFacebookCaption(html)
+			mediaInfo := &MediaInfo{
+				Type:     "photo",
+				URL:      mediaURL,
+				Caption:  FormatAuthorCaption("facebook", displayName, username, originalCaption),
+				Filename: filename,
+			}
+			mediaInfos = append(mediaInfos, mediaInfo)
+		}
+	}
+
+	// Extract videos
+	videoURLs := ube.extractURLsWithPatterns(html, videoPatterns)
+	log.Printf("🎬 Found %d Facebook videos", len(videoURLs))
+
+	for i, videoURL := range videoURLs {
+		cleanURL := strings.ReplaceAll(videoURL, "&amp;", "&")
+		if filename, err := ube.downloadMediaFile(cleanURL, "facebook", "video", i); err == nil {
+			originalCaption := ube.extractFacebookCaption(html)
+			mediaInfo := &MediaInfo{
+				Type:     "video",
+				URL:      mediaURL,
+				Caption:  FormatAuthorCaption("facebook", displayName, username, originalCaption),
+				Filename: filename,
+			}
+			mediaInfos = append(mediaInfos, mediaInfo)
+		}
+	}
+
+	log.Printf("✅ Facebook extraction completed: %d media items", len(mediaInfos))
+	return mediaInfos, nil
+}
+
 func (ube *UniversalBrowserExtractor) extractGenericMedia(mediaURL string) ([]*MediaInfo, error) {
 	log.Printf("🌐 Extracting generic media with headless browser")
 
@@ -652,7 +887,12 @@ func (ube *UniversalBrowserExtractor) extractGenericMedia(mediaURL string) ([]*M
 
 // Browser rendering utility
 func (ube *UniversalBrowserExtractor) renderPageWithBrowser(pageURL string, waitTime time.Duration) (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	return ube.renderPageWithBrowserTimeout(pageURL, waitTime, 30*time.Second)
+}
+
+// Browser rendering utility with custom timeout
+func (ube *UniversalBrowserExtractor) renderPageWithBrowserTimeout(pageURL string, waitTime time.Duration, timeout time.Duration) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
 	// Find Chrome executable (similar to TikTok extractor)
@@ -1000,6 +1240,48 @@ func (ube *UniversalBrowserExtractor) extract9GAGCaption(html string) string {
 		if match := re.FindStringSubmatch(html); len(match) > 1 {
 			caption := strings.TrimSpace(match[1])
 			if caption != "" && !strings.Contains(caption, "9GAG") {
+				return caption
+			}
+		}
+	}
+
+	return ""
+}
+
+func (ube *UniversalBrowserExtractor) extractRedditCaption(html string) string {
+	patterns := []string{
+		`<meta[^>]*property="og:title"[^>]*content="([^"]*)"`,
+		`<meta[^>]*property="og:description"[^>]*content="([^"]*)"`,
+		`<h1[^>]*>([^<]*)</h1>`,
+		`<title>([^<]*)</title>`,
+	}
+
+	for _, pattern := range patterns {
+		re := regexp.MustCompile(pattern)
+		if match := re.FindStringSubmatch(html); len(match) > 1 {
+			caption := strings.TrimSpace(match[1])
+			if caption != "" && !strings.Contains(caption, "reddit") && !strings.Contains(caption, "Reddit") {
+				return caption
+			}
+		}
+	}
+
+	return ""
+}
+
+func (ube *UniversalBrowserExtractor) extractFacebookCaption(html string) string {
+	patterns := []string{
+		`<meta[^>]*property="og:title"[^>]*content="([^"]*)"`,
+		`<meta[^>]*property="og:description"[^>]*content="([^"]*)"`,
+		`<h1[^>]*>([^<]*)</h1>`,
+		`<title>([^<]*)</title>`,
+	}
+
+	for _, pattern := range patterns {
+		re := regexp.MustCompile(pattern)
+		if match := re.FindStringSubmatch(html); len(match) > 1 {
+			caption := strings.TrimSpace(match[1])
+			if caption != "" && !strings.Contains(caption, "facebook") && !strings.Contains(caption, "Facebook") {
 				return caption
 			}
 		}
@@ -1614,4 +1896,206 @@ func (ube *UniversalBrowserExtractor) isTorRunning() bool {
 	}
 	conn.Close()
 	return true
+}
+
+// extractInstagramAuthorInfo extracts author display name and username from Instagram HTML
+func (ube *UniversalBrowserExtractor) extractInstagramAuthorInfo(html string) (displayName, username string) {
+	// Instagram author patterns
+	patterns := []string{
+		// Meta tag patterns
+		`<meta[^>]*property="og:title"[^>]*content="([^"]+) \(@([^)]+)\)`,
+		`<meta[^>]*name="twitter:title"[^>]*content="([^"]+) \(@([^)]+)\)`,
+		// JSON-LD patterns
+		`"author":\s*{\s*"@type":\s*"Person",\s*"name":\s*"([^"]+)",\s*"alternateName":\s*"@?([^"]+)"`,
+		// Profile link patterns
+		`href="/([^/]+)/"[^>]*>([^<]+)</a>.*?Verified`,
+	}
+	
+	for _, pattern := range patterns {
+		re := regexp.MustCompile(pattern)
+		matches := re.FindStringSubmatch(html)
+		
+		if len(matches) >= 3 {
+			if strings.Contains(pattern, "og:title") || strings.Contains(pattern, "twitter:title") {
+				displayName = strings.TrimSpace(matches[1])
+				username = strings.TrimSpace(matches[2])
+			} else if strings.Contains(pattern, "author") {
+				displayName = strings.TrimSpace(matches[1])
+				username = strings.TrimSpace(matches[2])
+			} else {
+				username = strings.TrimSpace(matches[1])
+				displayName = strings.TrimSpace(matches[2])
+			}
+			
+			if displayName != "" || username != "" {
+				log.Printf("✅ Extracted Instagram author: %s (@%s)", displayName, username)
+				return displayName, username
+			}
+		}
+	}
+	
+	return "", ""
+}
+
+// extractTikTokAuthorInfo extracts author display name and username from TikTok HTML
+func (ube *UniversalBrowserExtractor) extractTikTokAuthorInfo(html string) (displayName, username string) {
+	// TikTok author patterns
+	patterns := []string{
+		// Meta tag patterns
+		`<meta[^>]*property="og:title"[^>]*content="([^"]+) \(@([^)]+)\)`,
+		`<meta[^>]*name="twitter:title"[^>]*content="([^"]+) \(@([^)]+)\)`,
+		// JSON data patterns
+		`"uniqueId":"([^"]+)".*?"nickname":"([^"]+)"`,
+		`"author":\s*{\s*"uniqueId":\s*"([^"]+)",\s*"nickname":\s*"([^"]+)"`,
+	}
+	
+	for _, pattern := range patterns {
+		re := regexp.MustCompile(pattern)
+		matches := re.FindStringSubmatch(html)
+		
+		if len(matches) >= 3 {
+			if strings.Contains(pattern, "uniqueId.*nickname") {
+				username = strings.TrimSpace(matches[1])
+				displayName = strings.TrimSpace(matches[2])
+			} else {
+				displayName = strings.TrimSpace(matches[1])
+				username = strings.TrimSpace(matches[2])
+			}
+			
+			if displayName != "" || username != "" {
+				log.Printf("✅ Extracted TikTok author: %s (@%s)", displayName, username)
+				return displayName, username
+			}
+		}
+	}
+	
+	return "", ""
+}
+
+// extractYouTubeAuthorInfo extracts channel name from YouTube HTML
+func (ube *UniversalBrowserExtractor) extractYouTubeAuthorInfo(html string) (displayName, username string) {
+	// YouTube channel patterns
+	patterns := []string{
+		// Meta tag patterns
+		`<meta[^>]*name="twitter:title"[^>]*content="([^"]+)"`,
+		`<meta[^>]*property="og:title"[^>]*content="([^"]+)"`,
+		// Channel link patterns
+		`"ownerChannelName":"([^"]+)"`,
+		`"author":"([^"]+)"`,
+	}
+	
+	for _, pattern := range patterns {
+		re := regexp.MustCompile(pattern)
+		matches := re.FindStringSubmatch(html)
+		
+		if len(matches) >= 2 {
+			channelName := strings.TrimSpace(matches[1])
+			
+			// Skip generic titles
+			if !strings.Contains(channelName, "YouTube") && len(channelName) > 2 {
+				log.Printf("✅ Extracted YouTube channel: %s", channelName)
+				return channelName, ""
+			}
+		}
+	}
+	
+	return "", ""
+}
+
+// extractRedditAuthorInfo extracts author/subreddit info from Reddit HTML
+func (ube *UniversalBrowserExtractor) extractRedditAuthorInfo(html string) (displayName, username string) {
+	// Reddit author patterns
+	patterns := []string{
+		// Post author patterns
+		`"author":"([^"]+)"`,
+		`data-author="([^"]+)"`,
+		// Subreddit patterns
+		`"subreddit":"([^"]+)"`,
+		`/r/([^/"]+)`,
+	}
+	
+	for _, pattern := range patterns {
+		re := regexp.MustCompile(pattern)
+		matches := re.FindStringSubmatch(html)
+		
+		if len(matches) >= 2 {
+			author := strings.TrimSpace(matches[1])
+			
+			if author != "" && author != "null" {
+				if strings.Contains(pattern, "subreddit") || strings.Contains(pattern, "/r/") {
+					log.Printf("✅ Extracted Reddit subreddit: r/%s", author)
+					return "r/" + author, ""
+				} else {
+					log.Printf("✅ Extracted Reddit author: u/%s", author)
+					return "", "u/" + author
+				}
+			}
+		}
+	}
+	
+	return "", ""
+}
+
+// extractFacebookAuthorInfo extracts author info from Facebook HTML
+func (ube *UniversalBrowserExtractor) extractFacebookAuthorInfo(html string) (displayName, username string) {
+	// Facebook author patterns
+	patterns := []string{
+		// Meta tag patterns
+		`<meta[^>]*property="og:title"[^>]*content="([^"]+)"`,
+		`<meta[^>]*name="twitter:title"[^>]*content="([^"]+)"`,
+		// Profile patterns
+		`"name":"([^"]+)".*?"username":"([^"]+)"`,
+	}
+	
+	for _, pattern := range patterns {
+		re := regexp.MustCompile(pattern)
+		matches := re.FindStringSubmatch(html)
+		
+		if len(matches) >= 2 {
+			if len(matches) >= 3 && strings.Contains(pattern, "username") {
+				displayName = strings.TrimSpace(matches[1])
+				username = strings.TrimSpace(matches[2])
+			} else {
+				displayName = strings.TrimSpace(matches[1])
+			}
+			
+			if displayName != "" && !strings.Contains(displayName, "Facebook") {
+				log.Printf("✅ Extracted Facebook author: %s (@%s)", displayName, username)
+				return displayName, username
+			}
+		}
+	}
+	
+	return "", ""
+}
+
+// extract9GAGAuthorInfo extracts author info from 9GAG HTML
+func (ube *UniversalBrowserExtractor) extract9GAGAuthorInfo(html string) (displayName, username string) {
+	// 9GAG author patterns
+	patterns := []string{
+		// User patterns
+		`"displayName":"([^"]+)".*?"username":"([^"]+)"`,
+		`data-username="([^"]+)"`,
+	}
+	
+	for _, pattern := range patterns {
+		re := regexp.MustCompile(pattern)
+		matches := re.FindStringSubmatch(html)
+		
+		if len(matches) >= 2 {
+			if len(matches) >= 3 {
+				displayName = strings.TrimSpace(matches[1])
+				username = strings.TrimSpace(matches[2])
+			} else {
+				username = strings.TrimSpace(matches[1])
+			}
+			
+			if displayName != "" || username != "" {
+				log.Printf("✅ Extracted 9GAG author: %s (@%s)", displayName, username)
+				return displayName, username
+			}
+		}
+	}
+	
+	return "", ""
 }

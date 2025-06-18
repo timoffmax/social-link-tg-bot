@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 	
@@ -31,6 +32,56 @@ type YtDlpDownloader struct {
 	TempDir    string
 	BinaryPath string
 	WorkingDir string
+}
+
+// extractTwitterUsernameFromURL extracts username from Twitter/X URL
+func extractTwitterUsernameFromURL(url string) string {
+	// Twitter/X URL patterns: https://twitter.com/username/status/... or https://x.com/username/status/...
+	re := regexp.MustCompile(`(?:twitter|x)\.com/([^/]+)/status/`)
+	matches := re.FindStringSubmatch(url)
+	if len(matches) > 1 {
+		return matches[1]
+	}
+	return ""
+}
+
+// extractTikTokUsernameFromURL extracts username from TikTok URL
+func extractTikTokUsernameFromURL(url string) string {
+	// TikTok URL patterns: https://www.tiktok.com/@username/video/... or https://vm.tiktok.com/... (no username)
+	re := regexp.MustCompile(`tiktok\.com/@([^/]+)`)
+	matches := re.FindStringSubmatch(url)
+	if len(matches) > 1 {
+		return matches[1]
+	}
+	// For vm.tiktok.com short URLs, we can't extract username from URL
+	return ""
+}
+
+// extractYouTubeUsernameFromURL extracts username/channel from YouTube URL
+func extractYouTubeUsernameFromURL(url string) string {
+	// YouTube URL patterns: https://www.youtube.com/@channelname/... or https://youtube.com/shorts/... (no username)
+	re := regexp.MustCompile(`youtube\.com/@([^/]+)`)
+	matches := re.FindStringSubmatch(url)
+	if len(matches) > 1 {
+		return matches[1]
+	}
+	// For direct /shorts/ URLs, we can't extract username from URL
+	return ""
+}
+
+// extractInstagramUsernameFromURL extracts username from Instagram URL
+func extractInstagramUsernameFromURL(url string) string {
+	// Instagram URL patterns: https://www.instagram.com/username/... or https://www.instagram.com/reel/... (no username)
+	re := regexp.MustCompile(`instagram\.com/([^/]+)`)
+	matches := re.FindStringSubmatch(url)
+	if len(matches) > 1 {
+		username := matches[1]
+		// Skip special paths
+		if username != "p" && username != "reel" && username != "tv" && username != "stories" {
+			return username
+		}
+	}
+	return ""
 }
 
 // getFilePath resolves file paths relative to the working directory
@@ -239,9 +290,10 @@ func (yd *YtDlpDownloader) attemptDownload(url string, outputTemplate string, pr
 	
 	log.Printf("Found %d downloaded files: %v", len(downloadedFiles), downloadedFiles)
 	
-	// Convert to MediaInfo with enhanced handling for Twitter content
+	// Convert to MediaInfo with enhanced handling for all platforms
 	var mediaInfos []*MediaInfo
 	var tweetDescription string
+	var metadataInfo map[string]interface{}
 	
 	// Look for description file for Twitter posts
 	if strings.Contains(url, "twitter.com") || strings.Contains(url, "x.com") {
@@ -251,6 +303,17 @@ func (yd *YtDlpDownloader) attemptDownload(url string, outputTemplate string, pr
 					tweetDescription = strings.TrimSpace(string(content))
 				}
 				break
+			}
+		}
+	}
+	
+	// Look for metadata info file for all platforms
+	for _, filePath := range downloadedFiles {
+		if strings.HasSuffix(filePath, ".info.json") {
+			if content, err := os.ReadFile(filePath); err == nil {
+				if err := json.Unmarshal(content, &metadataInfo); err == nil {
+					break
+				}
 			}
 		}
 	}
@@ -292,10 +355,116 @@ func (yd *YtDlpDownloader) attemptDownload(url string, outputTemplate string, pr
 			}
 		}
 		
-		// Use tweet text as caption if available, otherwise use empty caption
+		// Extract author info and format caption based on platform
 		caption := ""
-		if tweetDescription != "" && (strings.Contains(url, "twitter.com") || strings.Contains(url, "x.com")) {
-			caption = tweetDescription
+		if strings.Contains(url, "twitter.com") || strings.Contains(url, "x.com") {
+			// Twitter/X platform
+			username := extractTwitterUsernameFromURL(url)
+			displayName := ""
+			
+			// Try to get display name from metadata
+			if metadataInfo != nil {
+				if uploader, ok := metadataInfo["uploader"].(string); ok {
+					displayName = uploader
+				} else if creator, ok := metadataInfo["creator"].(string); ok {
+					displayName = creator
+				}
+			}
+			
+			if tweetDescription != "" {
+				caption = FormatAuthorCaption("twitter", displayName, username, tweetDescription)
+			} else {
+				caption = FormatAuthorCaption("twitter", displayName, username, "")
+			}
+		} else if strings.Contains(url, "tiktok.com") {
+			// TikTok platform
+			username := extractTikTokUsernameFromURL(url)
+			displayName := ""
+			
+			// Try to get username and display name from metadata if not found in URL
+			if metadataInfo != nil {
+				if uploader, ok := metadataInfo["uploader"].(string); ok {
+					if username == "" {
+						username = uploader
+					} else {
+						displayName = uploader // If we have username from URL, uploader might be display name
+					}
+				}
+				if creator, ok := metadataInfo["creator"].(string); ok && displayName == "" {
+					displayName = creator
+				}
+			}
+			
+			// Try to get description from metadata
+			description := ""
+			if metadataInfo != nil {
+				if desc, ok := metadataInfo["description"].(string); ok {
+					description = desc
+				}
+			}
+			caption = FormatAuthorCaption("tiktok", displayName, username, description)
+		} else if strings.Contains(url, "youtube.com") || strings.Contains(url, "youtu.be") {
+			// YouTube platform
+			username := extractYouTubeUsernameFromURL(url)
+			displayName := ""
+			
+			// Try to get channel name and display name from metadata
+			if metadataInfo != nil {
+				if channel, ok := metadataInfo["channel"].(string); ok {
+					if username == "" {
+						username = channel
+					} else {
+						displayName = channel // If we have username from URL, channel might be display name
+					}
+				}
+				if uploader, ok := metadataInfo["uploader"].(string); ok {
+					if username == "" {
+						username = uploader
+					} else if displayName == "" {
+						displayName = uploader
+					}
+				}
+			}
+			
+			// Try to get description from metadata
+			description := ""
+			if metadataInfo != nil {
+				if desc, ok := metadataInfo["description"].(string); ok {
+					description = desc
+				} else if title, ok := metadataInfo["title"].(string); ok {
+					description = title
+				}
+			}
+			caption = FormatAuthorCaption("youtube", displayName, username, description)
+		} else if strings.Contains(url, "instagram.com") {
+			// Instagram platform
+			username := extractInstagramUsernameFromURL(url)
+			displayName := ""
+			
+			// Try to get username and display name from metadata
+			if metadataInfo != nil {
+				if uploader, ok := metadataInfo["uploader"].(string); ok {
+					if username == "" {
+						username = uploader
+					} else {
+						displayName = uploader // If we have username from URL, uploader might be display name
+					}
+				}
+				if creator, ok := metadataInfo["creator"].(string); ok && displayName == "" {
+					displayName = creator
+				}
+			}
+			
+			// Try to get description from metadata
+			description := ""
+			if metadataInfo != nil {
+				if desc, ok := metadataInfo["description"].(string); ok {
+					description = desc
+				} else if title, ok := metadataInfo["title"].(string); ok {
+					description = title
+				}
+			}
+			caption = FormatAuthorCaption("instagram", displayName, username, description)
 		}
 		
 		mediaInfo := &MediaInfo{
@@ -437,6 +606,43 @@ func (yd *YtDlpDownloader) DownloadYouTubeMedia(url string) ([]*MediaInfo, error
 	return browserExtractor.ExtractMedia(url)
 }
 
+func (yd *YtDlpDownloader) DownloadRedditMedia(url string) ([]*MediaInfo, error) {
+	// For Reddit, try yt-dlp first (works well for video posts) then browser fallback
+	
+	// Strategy 1: Try normal yt-dlp download first 
+	mediaInfos, err := yd.DownloadMedia(url)
+	if err == nil && len(mediaInfos) > 0 {
+		return mediaInfos, nil
+	}
+	
+	// Strategy 2: Try thumbnails-only approach for image posts
+	log.Printf("Normal download failed, trying thumbnails-only approach for Reddit")
+	mediaInfos, err = yd.downloadThumbnailsOnly(url, "Reddit")
+	if err == nil && len(mediaInfos) > 0 {
+		return mediaInfos, nil
+	}
+	
+	// Strategy 3: Universal headless browser fallback for images and galleries
+	log.Printf("yt-dlp failed completely, trying universal headless browser for Reddit")
+	browserExtractor := NewUniversalBrowserExtractor(yd.WorkingDir, yd.TempDir)
+	return browserExtractor.ExtractMedia(url)
+}
+
+func (yd *YtDlpDownloader) DownloadFacebookMedia(url string) ([]*MediaInfo, error) {
+	// For Facebook, try yt-dlp first (works for some video posts) then browser fallback
+	
+	// Strategy 1: Try normal yt-dlp download first 
+	mediaInfos, err := yd.DownloadMedia(url)
+	if err == nil && len(mediaInfos) > 0 {
+		return mediaInfos, nil
+	}
+	
+	// Strategy 2: Universal headless browser fallback for photos and other content
+	log.Printf("yt-dlp failed, trying universal headless browser for Facebook")
+	browserExtractor := NewUniversalBrowserExtractor(yd.WorkingDir, yd.TempDir)
+	return browserExtractor.ExtractMedia(url)
+}
+
 func (yd *YtDlpDownloader) Download9GAGMedia(url string) ([]*MediaInfo, error) {
 	// For 9GAG, skip yt-dlp entirely (always fails with 403) and use CLI browser directly
 	log.Printf("🚀 Using CLI browser directly for 9GAG (yt-dlp always fails with 403)")
@@ -491,6 +697,13 @@ func (yd *YtDlpDownloader) downloadThumbnailsOnly(url string, platform string) (
 		if _, err := os.Stat(cookiesPath); err == nil {
 			args = append(args, "--cookies", cookiesPath)
 			log.Printf("Using Instagram cookies for thumbnails download: %s", cookiesPath)
+		}
+	} else if strings.Contains(url, "reddit.com") {
+		// Check for Reddit-specific cookies file
+		redditCookiesPath := yd.getFilePath("reddit_cookies.txt")
+		if _, err := os.Stat(redditCookiesPath); err == nil {
+			args = append(args, "--cookies", redditCookiesPath)
+			log.Printf("Using Reddit cookies for thumbnails download: %s", redditCookiesPath)
 		}
 	}
 	
@@ -807,6 +1020,45 @@ func (yd *YtDlpDownloader) buildDownloadArgs(url string, outputTemplate string) 
 		}
 		
 		baseArgs = append(baseArgs, youtubeArgs...)
+	} else if strings.Contains(url, "reddit.com") {
+		// Reddit-specific args with enhanced cookie support
+		redditArgs := []string{
+			"--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+			"--referer", "https://www.reddit.com/",
+			"--add-header", "Accept-Language:en-US,en;q=0.9",
+			"--add-header", "Accept:text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+		}
+		
+		// Check for Reddit-specific cookies file
+		redditCookiesPath := yd.getFilePath("reddit_cookies.txt")
+		if _, err := os.Stat(redditCookiesPath); err == nil {
+			redditArgs = append(redditArgs, "--cookies", redditCookiesPath)
+			log.Printf("Using Reddit cookies for authentication: %s", redditCookiesPath)
+		} else {
+			log.Printf("⚠️ Reddit cookies not found at %s. Reddit downloads may be limited.", redditCookiesPath)
+		}
+		
+		baseArgs = append(baseArgs, redditArgs...)
+	} else if strings.Contains(url, "facebook.com") {
+		// Facebook-specific args with enhanced anti-blocking
+		facebookArgs := []string{
+			"--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+			"--referer", "https://www.facebook.com/",
+			"--add-header", "Accept-Language:en-US,en;q=0.9",
+			"--add-header", "Accept:text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+			"--extractor-retries", "3",        // Extra retries for Facebook's blocking
+		}
+		
+		// Check for Facebook-specific cookies file
+		facebookCookiesPath := yd.getFilePath("facebook_cookies.txt")
+		if _, err := os.Stat(facebookCookiesPath); err == nil {
+			facebookArgs = append(facebookArgs, "--cookies", facebookCookiesPath)
+			log.Printf("Using Facebook cookies for authentication: %s", facebookCookiesPath)
+		} else {
+			log.Printf("⚠️ Facebook cookies not found at %s. Facebook downloads may be limited.", facebookCookiesPath)
+		}
+		
+		baseArgs = append(baseArgs, facebookArgs...)
 	}
 	
 	// Don't add proxy here, it's handled by buildDownloadArgsWithProxy
@@ -848,6 +1100,10 @@ func (yd *YtDlpDownloader) getPlatformName(url string) string {
 		return "Twitter"
 	} else if strings.Contains(url, "youtube.com") || strings.Contains(url, "youtu.be") {
 		return "YouTube"
+	} else if strings.Contains(url, "reddit.com") {
+		return "Reddit"
+	} else if strings.Contains(url, "facebook.com") {
+		return "Facebook"
 	}
 	return "social media"
 }

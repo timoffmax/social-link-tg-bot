@@ -626,7 +626,7 @@ func (cbe *CliBrowserExtractor) RenderPageForTwitterThread(twitterURL string) (s
 	defer os.Remove(tmpFile.Name())
 	defer tmpFile.Close()
 
-	// Chrome command optimized for thread page rendering
+	// Chrome command optimized for thread page rendering with enhanced settings
 	args := []string{
 		"--headless=new",
 		"--no-sandbox",
@@ -635,12 +635,37 @@ func (cbe *CliBrowserExtractor) RenderPageForTwitterThread(twitterURL string) (s
 		"--disable-extensions",
 		"--no-first-run",
 		"--disable-default-apps",
-		"--virtual-time-budget=10000", // Give more time for thread loading
+		"--virtual-time-budget=20000", // Even more time for full thread loading
 		"--run-all-compositor-stages-before-draw",
+		"--enable-automation",
+		"--disable-background-timer-throttling",
+		"--disable-backgrounding-occluded-windows",
+		"--disable-renderer-backgrounding",
+		"--disable-features=TranslateUI",
 		"--user-data-dir=" + os.TempDir(),
-		"--dump-dom",
-		twitterURL,
+		"--window-size=1920,1080",
+		"--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
 	}
+	
+	// Add Twitter cookies if available for better authentication and thread loading
+	twitterCookiesPath := filepath.Join(cbe.workingDir, "twitter_cookies.txt")
+	if _, err := os.Stat(twitterCookiesPath); err == nil {
+		args = append(args, "--cookie-file="+twitterCookiesPath)
+		log.Printf("🍪 [AUTO-THREAD] Using Twitter cookies: %s", twitterCookiesPath)
+	} else {
+		log.Printf("⚠️ [AUTO-THREAD] Twitter cookies not found at %s", twitterCookiesPath)
+	}
+	
+	// Try to modify URL to get better thread loading
+	// Sometimes adding specific parameters helps load the full conversation
+	enhancedURL := twitterURL
+	if !strings.Contains(twitterURL, "?") {
+		enhancedURL += "?conversation_id=" + extractTweetID(twitterURL)
+	}
+	
+	log.Printf("🔍 [AUTO-THREAD] Using enhanced URL for thread loading: %s", enhancedURL)
+	
+	args = append(args, "--dump-dom", enhancedURL)
 
 	log.Printf("🌐 [AUTO-THREAD] Executing Chrome: %s %v", chromePath, args)
 
@@ -667,4 +692,14 @@ func (cbe *CliBrowserExtractor) RenderPageForTwitterThread(twitterURL string) (s
 	log.Printf("✅ [AUTO-THREAD] Chrome rendered %d bytes of HTML", len(html))
 
 	return html, nil
+}
+
+// extractTweetID extracts tweet ID from Twitter URL
+func extractTweetID(twitterURL string) string {
+	re := regexp.MustCompile(`/status/(\d+)`)
+	matches := re.FindStringSubmatch(twitterURL)
+	if len(matches) >= 2 {
+		return matches[1]
+	}
+	return ""
 }

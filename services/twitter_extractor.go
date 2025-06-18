@@ -220,8 +220,14 @@ func (te *TwitterExtractor) extractViaWebInterface(tweetID string, username stri
 		log.Printf("📝 Found tweetText references in HTML")
 	}
 	
-	// Parse HTML and extract media URLs
-	return te.parseHTMLForMedia(bodyStr, tweetID)
+	// Extract author info from HTML
+	displayName, extractedUsername := te.extractAuthorInfoFromHTML(bodyStr)
+	if extractedUsername != "" {
+		username = extractedUsername // Update username if we found a better one
+	}
+	
+	// Parse HTML and extract media URLs with author info
+	return te.parseHTMLForMediaWithAuthor(bodyStr, tweetID, username, displayName)
 }
 
 func (te *TwitterExtractor) extractViaEmbedAPI(tweetID string, username string) ([]*MediaInfo, error) {
@@ -277,6 +283,87 @@ func (te *TwitterExtractor) extractUsernameFromEmbedData(embedData map[string]in
 	return "", fmt.Errorf("no username found in embed data")
 }
 
+// formatTweetCaption formats tweet caption with author info at the top
+func (te *TwitterExtractor) formatTweetCaption(authorName, authorUsername, tweetText string) string {
+	// Start with author info
+	caption := ""
+	
+	if authorName != "" && authorUsername != "" {
+		// Both name and username available
+		caption = fmt.Sprintf("👤 %s (@%s)\n\n", authorName, authorUsername)
+	} else if authorUsername != "" {
+		// Only username available
+		caption = fmt.Sprintf("👤 @%s\n\n", authorUsername)
+	} else if authorName != "" {
+		// Only name available
+		caption = fmt.Sprintf("👤 %s\n\n", authorName)
+	}
+	
+	// Add tweet text
+	caption += tweetText
+	
+	return caption
+}
+
+// extractAuthorInfoFromHTML extracts author display name and username from Twitter HTML
+func (te *TwitterExtractor) extractAuthorInfoFromHTML(html string) (displayName, username string) {
+	// Pattern to extract display name from Twitter's HTML structure
+	// Looking for patterns like: <span...>Display Name</span>
+	displayNamePatterns := []string{
+		// Modern Twitter/X structure
+		`<a href="/([^"]+)"[^>]*>.*?<span[^>]*>([^<]+)</span>`,
+		// Alternative structure with nested spans
+		`<a href="/([^"]+)"[^>]*>.*?<span[^>]*><span[^>]*>([^<]+)</span></span>`,
+		// Profile header pattern
+		`"screen_name":"([^"]+)".*?"name":"([^"]+)"`,
+		// Meta tag patterns
+		`<meta[^>]*name="twitter:title"[^>]*content="([^"]+) \(@([^)]+)\)`,
+		`<meta[^>]*property="og:title"[^>]*content="([^"]+) on X"`,
+	}
+	
+	// Try each pattern
+	for _, pattern := range displayNamePatterns {
+		re := regexp.MustCompile(pattern)
+		matches := re.FindStringSubmatch(html)
+		
+		if len(matches) >= 3 {
+			// Extract based on pattern match
+			if strings.Contains(pattern, "screen_name") {
+				// JSON pattern: matches[1] is username, matches[2] is display name
+				username = matches[1]
+				displayName = matches[2]
+			} else if strings.Contains(pattern, "twitter:title") {
+				// Meta tag pattern: matches[1] is display name, matches[2] is username
+				displayName = matches[1]
+				username = matches[2]
+			} else {
+				// Link pattern: matches[1] is username, matches[2] is display name
+				username = matches[1]
+				displayName = matches[2]
+			}
+			
+			// Clean up the display name
+			displayName = strings.TrimSpace(displayName)
+			username = strings.TrimSpace(username)
+			
+			// Skip if we got HTML entities or too short
+			if len(displayName) > 1 && !strings.Contains(displayName, "&") {
+				log.Printf("✅ Extracted author info from HTML: %s (@%s)", displayName, username)
+				return displayName, username
+			}
+		}
+	}
+	
+	// Fallback: try to extract just the username from profile links
+	usernamePattern := regexp.MustCompile(`href="/([^"/]+)"`)
+	if matches := usernamePattern.FindStringSubmatch(html); len(matches) > 1 {
+		username = matches[1]
+		log.Printf("⚠️ Only found username from HTML: @%s", username)
+	}
+	
+	return displayName, username
+}
+
 func (te *TwitterExtractor) extractViaSyndicationAPI(tweetID string, username string) ([]*MediaInfo, error) {
 	log.Printf("🔄 Trying syndication API extraction for tweet %s by @%s", tweetID, username)
 	
@@ -322,6 +409,30 @@ func (te *TwitterExtractor) extractViaSyndicationAPI(tweetID string, username st
 		log.Printf("📝 Got tweet text from syndication: %s", tweetText)
 	}
 	
+	// Extract author information from syndication data
+	authorName := ""
+	authorUsername := username // Use passed username as default
+	
+	// Try to get user info from syndication data
+	if user, ok := synData["user"].(map[string]interface{}); ok {
+		if name, ok := user["name"].(string); ok {
+			authorName = name
+			log.Printf("📝 Got display name from syndication: %s", authorName)
+		}
+		if screenName, ok := user["screen_name"].(string); ok {
+			authorUsername = screenName
+			log.Printf("📝 Got username from syndication: @%s", authorUsername)
+		}
+	}
+	
+	// Alternative: Check for user_name field (sometimes present)
+	if authorName == "" {
+		if userName, ok := synData["user_name"].(string); ok {
+			authorName = userName
+			log.Printf("📝 Got display name from user_name field: %s", authorName)
+		}
+	}
+	
 	// Extract photos
 	if photos, ok := synData["photos"].([]interface{}); ok {
 		log.Printf("📸 Found %d photos in syndication data", len(photos))
@@ -333,6 +444,8 @@ func (te *TwitterExtractor) extractViaSyndicationAPI(tweetID string, username st
 						log.Printf("⚠️ Failed to download photo %d: %v", i, err)
 						continue
 					}
+					// Format caption with author info
+					mediaInfo.Caption = te.formatTweetCaption(authorName, authorUsername, tweetText)
 					mediaInfos = append(mediaInfos, mediaInfo)
 				}
 			}
@@ -350,7 +463,7 @@ func (te *TwitterExtractor) extractViaSyndicationAPI(tweetID string, username st
 		textMedia := &MediaInfo{
 			Type:    "text",
 			URL:     fmt.Sprintf("https://x.com/i/web/status/%s", tweetID),
-			Caption: tweetText,
+			Caption: te.formatTweetCaption(authorName, authorUsername, tweetText),
 			Filename: "",
 		}
 		mediaInfos = append(mediaInfos, textMedia)
@@ -402,7 +515,15 @@ func (te *TwitterExtractor) extractViaDirectScraping(tweetID string, username st
 		return nil, fmt.Errorf("failed to read mobile response: %v", err)
 	}
 	
-	return te.parseHTMLForMedia(string(body), tweetID)
+	bodyStr := string(body)
+	
+	// Extract author info from mobile HTML
+	displayName, extractedUsername := te.extractAuthorInfoFromHTML(bodyStr)
+	if extractedUsername != "" {
+		username = extractedUsername
+	}
+	
+	return te.parseHTMLForMediaWithAuthor(bodyStr, tweetID, username, displayName)
 }
 
 func (te *TwitterExtractor) extractViaNitterProxy(tweetID string, username string) ([]*MediaInfo, error) {
@@ -445,7 +566,14 @@ func (te *TwitterExtractor) extractViaNitterProxy(tweetID string, username strin
 		bodyStr := string(body)
 		if len(bodyStr) > 100 {
 			log.Printf("✅ Got response from %s, parsing...", url)
-			result, err := te.parseHTMLForMedia(bodyStr, tweetID)
+			
+			// Extract author info from alternative interface HTML
+			displayName, extractedUsername := te.extractAuthorInfoFromHTML(bodyStr)
+			if extractedUsername != "" {
+				username = extractedUsername
+			}
+			
+			result, err := te.parseHTMLForMediaWithAuthor(bodyStr, tweetID, username, displayName)
 			if err == nil && len(result) > 0 {
 				return result, nil
 			}
@@ -502,8 +630,22 @@ func (te *TwitterExtractor) extractViaFixupxProxy(tweetID string, username strin
 	bodyStr := string(body)
 	log.Printf("🔍 Fixupx response length: %d bytes", len(bodyStr))
 	
+	// Extract author info from fixupx HTML (they often include it in meta tags)
+	displayName := ""
+	
+	// Try to extract display name from meta tags
+	titlePattern := regexp.MustCompile(`<meta[^>]*property="og:title"[^>]*content="([^"]+)"`)
+	if matches := titlePattern.FindStringSubmatch(bodyStr); len(matches) > 1 {
+		// Fixupx format is often "Display Name (@username): tweet text"
+		title := matches[1]
+		if idx := strings.Index(title, " (@"); idx > 0 {
+			displayName = title[:idx]
+			log.Printf("📝 Extracted display name from fixupx title: %s", displayName)
+		}
+	}
+	
 	// Parse fixupx HTML for direct media URLs from meta tags (more reliable)
-	return te.parseFixupxMetaTags(bodyStr, tweetID, username)
+	return te.parseFixupxMetaTagsWithAuthor(bodyStr, tweetID, username, displayName)
 }
 
 func (te *TwitterExtractor) extractViaSimpleTextFallback(tweetID string, username string) ([]*MediaInfo, error) {
@@ -522,7 +664,11 @@ func (te *TwitterExtractor) extractViaSimpleTextFallback(tweetID string, usernam
 	return []*MediaInfo{textMediaInfo}, nil
 }
 
-func (te *TwitterExtractor) parseHTMLForMedia(html, tweetID string) ([]*MediaInfo, error) {
+func (te *TwitterExtractor) parseHTMLForMedia(html, tweetID, username string) ([]*MediaInfo, error) {
+	return te.parseHTMLForMediaWithAuthor(html, tweetID, username, "")
+}
+
+func (te *TwitterExtractor) parseHTMLForMediaWithAuthor(html, tweetID, username, displayName string) ([]*MediaInfo, error) {
 	var mediaInfos []*MediaInfo
 	
 	// Extract tweet text
@@ -542,6 +688,8 @@ func (te *TwitterExtractor) parseHTMLForMedia(html, tweetID string) ([]*MediaInf
 			log.Printf("⚠️ Failed to download media %d: %v", i, err)
 			continue
 		}
+		// Format caption with author info
+		mediaInfo.Caption = te.formatTweetCaption(displayName, username, tweetText)
 		mediaInfos = append(mediaInfos, mediaInfo)
 	}
 	
@@ -551,7 +699,7 @@ func (te *TwitterExtractor) parseHTMLForMedia(html, tweetID string) ([]*MediaInf
 		textMedia := &MediaInfo{
 			Type:    "text",
 			URL:     fmt.Sprintf("https://x.com/i/web/status/%s", tweetID),
-			Caption: tweetText,
+			Caption: te.formatTweetCaption(displayName, username, tweetText),
 			Filename: "",
 		}
 		mediaInfos = append(mediaInfos, textMedia)
@@ -571,6 +719,16 @@ func (te *TwitterExtractor) parseEmbedResponse(response, tweetID string) ([]*Med
 	html, ok := embedData["html"].(string)
 	if !ok {
 		return nil, fmt.Errorf("no HTML in embed response")
+	}
+	
+	// Extract author information
+	authorName := ""
+	authorUsername := ""
+	if name, ok := embedData["author_name"].(string); ok {
+		authorName = name
+	}
+	if username, err := te.extractUsernameFromEmbedData(embedData); err == nil {
+		authorUsername = username
 	}
 	
 	// Extract tweet text from the HTML
@@ -613,10 +771,8 @@ func (te *TwitterExtractor) parseEmbedResponse(response, tweetID string) ([]*Med
 			continue
 		}
 		
-		// Use tweet text as caption
-		if tweetText != "" {
-			mediaInfo.Caption = tweetText
-		}
+		// Format caption with author info
+		mediaInfo.Caption = te.formatTweetCaption(authorName, authorUsername, tweetText)
 		
 		mediaInfos = append(mediaInfos, mediaInfo)
 	}
@@ -643,11 +799,11 @@ func (te *TwitterExtractor) parseEmbedResponse(response, tweetID string) ([]*Med
 		return nil, fmt.Errorf("photos detected but not extractable from embed API")
 	}
 	
-	// Text-only tweet - just return clean text
+	// Text-only tweet - return formatted text with author info
 	textMedia := &MediaInfo{
 		Type:    "text",
 		URL:     fmt.Sprintf("https://x.com/i/web/status/%s", tweetID),
-		Caption: tweetText,
+		Caption: te.formatTweetCaption(authorName, authorUsername, tweetText),
 		Filename: "",
 	}
 	mediaInfos = append(mediaInfos, textMedia)
@@ -1380,6 +1536,10 @@ func (te *TwitterExtractor) addCookiesToRequest(req *http.Request) {
 }
 
 func (te *TwitterExtractor) parseFixupxMetaTags(html string, tweetID string, username string) ([]*MediaInfo, error) {
+	return te.parseFixupxMetaTagsWithAuthor(html, tweetID, username, "")
+}
+
+func (te *TwitterExtractor) parseFixupxMetaTagsWithAuthor(html string, tweetID string, username string, displayName string) ([]*MediaInfo, error) {
 	var mediaInfos []*MediaInfo
 	
 	log.Printf("📝 Parsing fixupx meta tags for tweet %s by @%s", tweetID, username)
@@ -1472,10 +1632,8 @@ func (te *TwitterExtractor) parseFixupxMetaTags(html string, tweetID string, use
 			continue
 		}
 		
-		// Use extracted tweet text as caption
-		if tweetText != "" {
-			mediaInfo.Caption = tweetText
-		}
+		// Format caption with author info
+		mediaInfo.Caption = te.formatTweetCaption(displayName, username, tweetText)
 		
 		mediaInfos = append(mediaInfos, mediaInfo)
 	}
@@ -1491,7 +1649,7 @@ func (te *TwitterExtractor) parseFixupxMetaTags(html string, tweetID string, use
 		textMedia := &MediaInfo{
 			Type:    "text",
 			URL:     fmt.Sprintf("https://x.com/%s/status/%s", username, tweetID),
-			Caption: tweetText,
+			Caption: te.formatTweetCaption(displayName, username, tweetText),
 			Filename: "",
 		}
 		mediaInfos = append(mediaInfos, textMedia)
@@ -1501,6 +1659,20 @@ func (te *TwitterExtractor) parseFixupxMetaTags(html string, tweetID string, use
 }
 
 func (te *TwitterExtractor) parseFixupxHTML(html string, tweetID string, username string) ([]*MediaInfo, error) {
+	// Extract display name from fixupx HTML
+	displayName := ""
+	titlePattern := regexp.MustCompile(`<meta[^>]*property="og:title"[^>]*content="([^"]+)"`)
+	if matches := titlePattern.FindStringSubmatch(html); len(matches) > 1 {
+		title := matches[1]
+		if idx := strings.Index(title, " (@"); idx > 0 {
+			displayName = title[:idx]
+		}
+	}
+	
+	return te.parseFixupxHTMLWithAuthor(html, tweetID, username, displayName)
+}
+
+func (te *TwitterExtractor) parseFixupxHTMLWithAuthor(html string, tweetID string, username string, displayName string) ([]*MediaInfo, error) {
 	var mediaInfos []*MediaInfo
 	
 	log.Printf("📝 Parsing fixupx HTML for tweet %s by @%s", tweetID, username)
@@ -1534,10 +1706,8 @@ func (te *TwitterExtractor) parseFixupxHTML(html string, tweetID string, usernam
 			continue
 		}
 		
-		// Use extracted tweet text as caption
-		if tweetText != "" {
-			mediaInfo.Caption = tweetText
-		}
+		// Format caption with author info
+		mediaInfo.Caption = te.formatTweetCaption(displayName, username, tweetText)
 		
 		mediaInfos = append(mediaInfos, mediaInfo)
 	}
@@ -1548,7 +1718,7 @@ func (te *TwitterExtractor) parseFixupxHTML(html string, tweetID string, usernam
 		textMedia := &MediaInfo{
 			Type:    "text",
 			URL:     fmt.Sprintf("https://x.com/%s/status/%s", username, tweetID),
-			Caption: tweetText,
+			Caption: te.formatTweetCaption(displayName, username, tweetText),
 			Filename: "",
 		}
 		mediaInfos = append(mediaInfos, textMedia)

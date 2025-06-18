@@ -67,30 +67,24 @@ func processRecentUpdates(offset int, isFirstRun bool) *response.TgUpdate {
 		validUpdates = append(validUpdates, update)
 	}
 
-	// Process updates concurrently for better performance
-	if len(validUpdates) == 1 {
-		// Single update - process directly
-		log.Printf("📱 [SINGLE UPDATE] Processing update %d", validUpdates[0].UpdateId)
-		processUpdate(validUpdates[0])
-		lastProcessedUpd = validUpdates[0]
-	} else if len(validUpdates) > 1 {
-		// Multiple updates - process concurrently
-		log.Printf("🚀 [MULTI-UPDATE] Starting concurrent processing of %d updates", len(validUpdates))
-		var wg sync.WaitGroup
+	// Process ALL updates concurrently, even single ones
+	if len(validUpdates) > 0 {
+		log.Printf("🚀 [CONCURRENT] Starting concurrent processing of %d update(s)", len(validUpdates))
 		
+		// Process each update in its own goroutine
 		for i, update := range validUpdates {
-			wg.Add(1)
 			go func(index int, upd *response.TgUpdate) {
-				defer wg.Done()
-				log.Printf("📱 [UPDATE-THREAD-%d] START: Processing update %d", index+1, upd.UpdateId)
+				log.Printf("📱 [UPDATE-THREAD-%d] START: Processing update %d from user %d", 
+					index+1, upd.UpdateId, upd.Message.From.Id)
 				processUpdate(upd)
-				log.Printf("✅ [UPDATE-THREAD-%d] DONE: Finished update %d", index+1, upd.UpdateId)
+				log.Printf("✅ [UPDATE-THREAD-%d] DONE: Finished update %d from user %d", 
+					index+1, upd.UpdateId, upd.Message.From.Id)
 			}(i, update)
 		}
 		
-		log.Printf("⏳ [MULTI-UPDATE] Waiting for all %d update threads to complete...", len(validUpdates))
-		wg.Wait()
-		log.Printf("✅ [MULTI-UPDATE] All %d updates processed successfully", len(validUpdates))
+		// Don't wait for goroutines to complete - let them run in background
+		// This allows the bot to immediately fetch and process new updates
+		log.Printf("🏃 [CONCURRENT] Launched %d update thread(s), continuing to poll for new updates", len(validUpdates))
 		
 		// Return the last update in the batch for offset tracking
 		lastProcessedUpd = validUpdates[len(validUpdates)-1]
@@ -108,6 +102,8 @@ func getRecentUpdates(offset int) []*response.TgUpdate {
 	updates := message.NewGetUpdates(payload.TgPlGetUpdates{
 		Offset:         offset,
 		AllowedUpdates: []string{"message"},
+		Timeout:        5,  // Short polling timeout (5 seconds) for faster response to new messages
+		Limit:          100, // Get up to 100 updates at once
 	})
 
 	respPayload := updates.ResponsePayload
@@ -239,22 +235,31 @@ func processMediaDownload(url string, origChat *response.TgChat, origMessage *re
 	if err != nil {
 		log.Printf("Failed to download media from %s: %v", url, err)
 		
-		// Skip error notifications for 9GAG (silently fail)
-		if strings.Contains(url, "9gag.com") {
-			log.Printf("🤐 Skipping error notification for 9GAG link")
+		// Skip error notifications for platforms that commonly fail (silently fail)
+		if strings.Contains(url, "9gag.com") || strings.Contains(url, "reddit.com") || strings.Contains(url, "facebook.com") {
+			platformName := "9GAG"
+			if strings.Contains(url, "reddit.com") {
+				platformName = "Reddit"
+			} else if strings.Contains(url, "facebook.com") {
+				platformName = "Facebook"
+			}
+			log.Printf("🤐 Skipping error notification for %s link", platformName)
 			services.LogTelegramMessage(origChat.Id, "error-skipped", false, "")
 			return
 		}
 		
 		// Send error message for other platforms
-		errorMsg := payload.TgPlSendMessage{
-			ChatId:              origChat.Id,
-			Text:                getErrorMessage(url),
-			ReplyToMessageId:    origMessage.MessageId,
-			DisableNotification: true,
+		errorText := getErrorMessage(url)
+		if errorText != "" {
+			errorMsg := payload.TgPlSendMessage{
+				ChatId:              origChat.Id,
+				Text:                errorText,
+				ReplyToMessageId:    origMessage.MessageId,
+				DisableNotification: true,
+			}
+			response := message.NewSendMessage(errorMsg)
+			services.LogTelegramMessage(origChat.Id, "error", response != nil, "")
 		}
-		response := message.NewSendMessage(errorMsg)
-		services.LogTelegramMessage(origChat.Id, "error", response != nil, "")
 		return
 	}
 	
@@ -394,6 +399,7 @@ func processMediaDownload(url string, origChat *response.TgChat, origMessage *re
 		}
 	}
 }
+
 
 func sendMediaFile(mediaInfo *services.MediaInfo, origChat *response.TgChat, origMessage *response.TgMessage) error {
 	log.Printf("Sending media to chat ID: %d", origChat.Id)
@@ -618,11 +624,14 @@ func sendFixedLinkFallback(originalUrl string, origChat *response.TgChat) {
 		message.NewSendMessage(fallbackMsg)
 	} else {
 		// If no fixed link available, send error
-		errorMsg := payload.TgPlSendMessage{
-			ChatId: origChat.Id,
-			Text:   getErrorMessage(originalUrl),
+		errorText := getErrorMessage(originalUrl)
+		if errorText != "" {
+			errorMsg := payload.TgPlSendMessage{
+				ChatId: origChat.Id,
+				Text:   errorText,
+			}
+			message.NewSendMessage(errorMsg)
 		}
-		message.NewSendMessage(errorMsg)
 	}
 }
 
@@ -653,11 +662,8 @@ func getFixedUrl(url string) string {
 
 func getErrorMessage(url string) string {
 	if strings.Contains(url, "youtube.com") || strings.Contains(url, "youtu.be") {
-		return "❌ YouTube download failed due to bot detection.\n\n" +
-			"To fix this, add YouTube cookies:\n" +
-			"1. Export cookies from browser\n" +
-			"2. Save as youtube_cookies.txt\n" +
-			"3. Place in bot directory"
+		// Don't send YouTube error messages to Telegram
+		return ""
 	} else if strings.Contains(url, "9gag.com") {
 		return "❌ Failed to download from 9GAG.\n\n" +
 			"9GAG content may be region-restricted or unavailable."
@@ -816,18 +822,83 @@ type TwitterTweet struct {
 func processTwitterThread(thread TwitterThread, origChat *response.TgChat, origMessage *response.TgMessage, downloader *services.SmartDownloader) {
 	log.Printf("🧵 [THREAD] Processing thread from @%s with %d tweets", thread.Username, len(thread.URLs))
 	
-	// Process thread tweets sequentially to maintain order
-	for i, url := range thread.URLs {
-		log.Printf("🧵 [THREAD] Processing tweet %d/%d: %s", i+1, len(thread.URLs), url)
-		processMediaDownload(url, origChat, origMessage, downloader)
+	// Check if this is a content-based thread (pseudo-URLs with #thread-part-)
+	isContentThread := len(thread.URLs) > 1 && strings.Contains(thread.URLs[1], "#thread-part-")
+	
+	if isContentThread {
+		log.Printf("🧵 [CONTENT-THREAD] Detected content-based thread, extracting text parts")
 		
-		// Small delay between thread posts to maintain order
-		if i < len(thread.URLs)-1 {
-			time.Sleep(500 * time.Millisecond)
+		// Re-extract the thread content to get the actual text
+		originalURL := thread.URLs[0]
+		cliBrowser := services.NewCliBrowserExtractor(downloader.GetWorkingDir(), downloader.GetTempDir())
+		html, err := cliBrowser.RenderPageForTwitterThread(originalURL)
+		if err != nil {
+			log.Printf("❌ [CONTENT-THREAD] Failed to re-render for content: %v", err)
+			return
 		}
+		
+		contentParts := parseTwitterThreadContent(html, thread.Username, "", originalURL)
+		
+		// Process the original tweet first (normal processing)
+		log.Printf("🧵 [CONTENT-THREAD] Processing original tweet: %s", originalURL)
+		processMediaDownload(originalURL, origChat, origMessage, downloader)
+		
+		// Then send additional content parts as text messages
+		for i := 1; i < len(contentParts); i++ {
+			time.Sleep(500 * time.Millisecond) // Delay between parts
+			
+			content := contentParts[i]
+			log.Printf("🧵 [CONTENT-THREAD] Sending thread part %d: %.100s...", i, content.Caption)
+			
+			// Send as text message with proper formatting
+			sendThreadTextMessage(content.Caption, origChat, origMessage)
+		}
+		
+		log.Printf("🧵 [CONTENT-THREAD] Completed processing content thread from @%s", thread.Username)
+	} else {
+		// Standard URL-based thread processing
+		for i, url := range thread.URLs {
+			log.Printf("🧵 [URL-THREAD] Processing tweet %d/%d: %s", i+1, len(thread.URLs), url)
+			processMediaDownload(url, origChat, origMessage, downloader)
+			
+			// Small delay between thread posts to maintain order
+			if i < len(thread.URLs)-1 {
+				time.Sleep(500 * time.Millisecond)
+			}
+		}
+		
+		log.Printf("🧵 [URL-THREAD] Completed processing thread from @%s", thread.Username)
+	}
+}
+
+// sendThreadTextMessage sends a text-only message as part of a thread
+func sendThreadTextMessage(text string, origChat *response.TgChat, origMessage *response.TgMessage) error {
+	log.Printf("Sending thread text to chat ID: %d", origChat.Id)
+	
+	// Decode HTML entities
+	cleanText := html.UnescapeString(text)
+	
+	// Limit text length to Telegram's message limit (4096 characters)
+	if len(cleanText) > 4090 {
+		cleanText = cleanText[:4087] + "..."
 	}
 	
-	log.Printf("🧵 [THREAD] Completed processing thread from @%s", thread.Username)
+	// Send text message with reply and silent notification
+	textPayload := payload.TgPlSendMessage{
+		ChatId:              origChat.Id,
+		Text:                cleanText,
+		ReplyToMessageId:    origMessage.MessageId,
+		DisableNotification: true,
+	}
+	
+	response := message.NewSendMessage(textPayload)
+	if response == nil {
+		log.Printf("❌ Failed to send thread text message")
+		return fmt.Errorf("failed to send thread text message")
+	}
+	
+	log.Printf("✅ Sent thread text message (%.100s...)", cleanText)
+	return nil
 }
 
 // cleanURLParams removes tracking parameters and UTM tags from URLs
@@ -970,7 +1041,10 @@ func fetchTwitterThreadWithBrowser(tweetURL, authorUsername, originalTweetID str
 	log.Printf("🌐 [AUTO-THREAD] Using browser rendering for thread discovery")
 	
 	// Use the existing CLI browser extractor that's already integrated
-	cliBrowser := services.NewCliBrowserExtractor("", "") // Using defaults like in image extraction
+	// Get working directory for proper cookie path resolution
+	workingDir := downloader.GetWorkingDir()
+	tempDir := downloader.GetTempDir()
+	cliBrowser := services.NewCliBrowserExtractor(workingDir, tempDir)
 	
 	// Render the page using Chrome (same approach as Twitter image extraction)
 	html, err := cliBrowser.RenderPageForTwitterThread(tweetURL)
@@ -984,8 +1058,129 @@ func fetchTwitterThreadWithBrowser(tweetURL, authorUsername, originalTweetID str
 	usernameCount := strings.Count(html, authorUsername)
 	log.Printf("🔍 [AUTO-THREAD] HTML contains username '%s' %d times", authorUsername, usernameCount)
 	
-	// Extract follow-up tweet URLs from the same author (excluding original)
-	return parseTwitterThreadURLs(html, authorUsername, originalTweetID), nil
+	// Try both URL-based and content-based thread detection
+	urls := parseTwitterThreadURLs(html, authorUsername, originalTweetID)
+	
+	// If no URLs found, try content-based approach
+	if len(urls) == 0 {
+		log.Printf("🔍 [AUTO-THREAD] No follow-up URLs found, trying content-based thread detection")
+		contentParts := parseTwitterThreadContent(html, authorUsername, originalTweetID, tweetURL)
+		if len(contentParts) > 1 { // More than just the original tweet
+			log.Printf("✅ [AUTO-THREAD] Found %d thread content parts", len(contentParts))
+			// Convert content parts to URLs (we'll process them as content later)
+			for i := 1; i < len(contentParts); i++ { // Skip first part (original tweet)
+				// Create pseudo-URLs to represent thread parts
+				pseudoURL := fmt.Sprintf("%s#thread-part-%d", tweetURL, i)
+				urls = append(urls, pseudoURL)
+			}
+		}
+	}
+	
+	return urls, nil
+}
+
+// parseTwitterThreadContent extracts thread content from multiple tweetText elements
+func parseTwitterThreadContent(html, authorUsername, originalTweetID, originalURL string) []services.MediaInfo {
+	var threadItems []services.MediaInfo
+	
+	log.Printf("🔍 [AUTO-THREAD] Parsing tweetText elements for thread content from @%s", authorUsername)
+	
+	// Check if the tweet contains a thread indicator (👇 or "thread" text)
+	hasThreadIndicator := strings.Contains(html, "👇") || 
+						 strings.Contains(strings.ToLower(html), "thread") ||
+						 strings.Contains(html, "Show this thread")
+	
+	if hasThreadIndicator {
+		log.Printf("🧵 [AUTO-THREAD] Thread indicator found in HTML - this appears to be a thread")
+	}
+	
+	// Pattern to find tweetText elements - handle nested content
+	tweetTextPattern := regexp.MustCompile(`(?s)<div[^>]*data-testid="tweetText"[^>]*>(.*?)</div>`)
+	
+	// Also look for tweet containers that might contain thread parts
+	tweetContainerPattern := regexp.MustCompile(`(?s)<article[^>]*data-testid="tweet"[^>]*>.*?</article>`)
+	
+	// Find all tweetText matches
+	matches := tweetTextPattern.FindAllStringSubmatch(html, -1)
+	containerMatches := tweetContainerPattern.FindAllString(html, -1)
+	
+	log.Printf("🔍 [AUTO-THREAD] Found %d tweetText elements and %d tweet containers in HTML", len(matches), len(containerMatches))
+	
+	for i, match := range matches {
+		if len(match) >= 2 {
+			rawContent := match[1]
+			
+			// Clean the tweet content (remove HTML tags, decode entities)
+			cleanContent := cleanTweetText(rawContent)
+			
+			// Skip empty content
+			if strings.TrimSpace(cleanContent) == "" {
+				log.Printf("   ❌ TweetText %d: Empty content, skipping", i+1)
+				continue
+			}
+			
+			log.Printf("   ✅ TweetText %d: Found content (%.100s...)", i+1, cleanContent)
+			
+			// Create a MediaInfo for this thread part (text-only)
+			mediaInfo := services.MediaInfo{
+				Type:    "text", // Special type for thread text content
+				URL:     originalURL,
+				Caption: cleanContent,
+				// No filename for text-only content
+			}
+			
+			threadItems = append(threadItems, mediaInfo)
+		}
+	}
+	
+	log.Printf("🔍 [AUTO-THREAD] Extracted %d thread content items for @%s", len(threadItems), authorUsername)
+	
+	// If we found thread indicators but only 1 content item, the thread might be in replies
+	// that aren't loaded in the current view. For now, we'll treat it as a single tweet.
+	if hasThreadIndicator && len(threadItems) == 1 {
+		log.Printf("🧵 [AUTO-THREAD] Thread indicator found but only 1 content item - thread parts may be in separate replies")
+		
+		// Check if the content has natural break points that could be split
+		content := threadItems[0].Caption
+		if len(content) > 500 && (strings.Contains(content, "👇") || strings.Count(content, "\n\n") >= 3) {
+			log.Printf("🧵 [AUTO-THREAD] Long content with potential split points detected")
+			// For now, return as single item - could implement intelligent splitting later
+		}
+	}
+	
+	return threadItems
+}
+
+// cleanTweetText removes HTML tags and decodes entities from tweet content
+func cleanTweetText(rawText string) string {
+	text := rawText
+	
+	// Remove HTML tags
+	text = regexp.MustCompile(`<[^>]*>`).ReplaceAllString(text, "")
+	
+	// Decode HTML entities
+	text = strings.ReplaceAll(text, "&amp;", "&")
+	text = strings.ReplaceAll(text, "&lt;", "<")
+	text = strings.ReplaceAll(text, "&gt;", ">")
+	text = strings.ReplaceAll(text, "&quot;", `"`)
+	text = strings.ReplaceAll(text, "&#39;", "'")
+	text = strings.ReplaceAll(text, "&#34;", `"`)
+	
+	// Decode JSON escape sequences
+	text = strings.ReplaceAll(text, `\"`, `"`)
+	text = strings.ReplaceAll(text, `\\n`, "\n")
+	text = strings.ReplaceAll(text, `\\t`, "\t")
+	text = strings.ReplaceAll(text, `\\r`, "\r")
+	
+	// Remove pic.twitter.com links
+	picTwitterPattern := regexp.MustCompile(`\s*pic\.twitter\.com/[a-zA-Z0-9]+\s*`)
+	text = picTwitterPattern.ReplaceAllString(text, "")
+	
+	// Clean up multiple spaces and newlines
+	text = regexp.MustCompile(`\s+`).ReplaceAllString(text, " ")
+	text = strings.TrimSpace(text)
+	
+	return text
 }
 
 // parseTwitterThreadURLs extracts follow-up tweet URLs from Twitter HTML, excluding the original tweet
