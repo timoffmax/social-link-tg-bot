@@ -123,8 +123,8 @@ func GetOriginalTwitterLinks(message *response.TgMessage) []string {
 
 
 func GetYouTubeLinks(message *response.TgMessage) []string {
-	// Match YouTube Shorts URLs and Posts: youtube.com/shorts/*, youtube.com/post/*, youtu.be/*, m.youtube.com/shorts/*
-	regex := regexp.MustCompile(`https?:\/\/(www\.|m\.)?(youtube\.com\/(shorts|post)\/|youtu\.be\/)[^\s]+`)
+	// Match YouTube Shorts, Posts, and Community posts: youtube.com/shorts/*, youtube.com/post/*, youtube.com/channel/*/community*, youtu.be/*, m.youtube.com/shorts/*
+	regex := regexp.MustCompile(`https?:\/\/(www\.|m\.)?(youtube\.com\/(shorts|post)\/|youtube\.com\/channel\/[^\/]+\/community|youtu\.be\/)[^\s]+`)
 	result := regex.FindAllString(message.Text, -1)
 	
 	// No fixed link service for YouTube, return as-is
@@ -132,8 +132,8 @@ func GetYouTubeLinks(message *response.TgMessage) []string {
 }
 
 func GetOriginalYouTubeLinks(message *response.TgMessage) []string {
-	// Match YouTube Shorts URLs and Posts: youtube.com/shorts/*, youtube.com/post/*, youtu.be/*, m.youtube.com/shorts/*
-	regex := regexp.MustCompile(`https?:\/\/(www\.|m\.)?(youtube\.com\/(shorts|post)\/|youtu\.be\/)[^\s]+`)
+	// Match YouTube Shorts, Posts, and Community posts: youtube.com/shorts/*, youtube.com/post/*, youtube.com/channel/*/community*, youtu.be/*, m.youtube.com/shorts/*
+	regex := regexp.MustCompile(`https?:\/\/(www\.|m\.)?(youtube\.com\/(shorts|post)\/|youtube\.com\/channel\/[^\/]+\/community|youtu\.be\/)[^\s]+`)
 	return regex.FindAllString(message.Text, -1)
 }
 

@@ -2038,12 +2038,20 @@ func (ube *UniversalBrowserExtractor) extractRedditAuthorInfo(html string) (disp
 
 // extractFacebookAuthorInfo extracts author info from Facebook HTML
 func (ube *UniversalBrowserExtractor) extractFacebookAuthorInfo(html string) (displayName, username string) {
-	// Facebook author patterns
+	// Facebook author patterns - ordered by reliability
 	patterns := []string{
+		// Profile name in data-ad-rendering-role (most reliable)
+		`data-ad-rendering-role="profile_name"[^>]*>.*?<[^>]*>([^<]+)</`,
+		// Strong tag within profile name
+		`data-ad-rendering-role="profile_name"[^>]*>.*?<strong[^>]*>.*?<span[^>]*>([^<]+)</span>.*?</strong>`,
+		// Link within profile name area
+		`data-ad-rendering-role="profile_name"[^>]*>.*?<a[^>]*>.*?<strong[^>]*>.*?<span[^>]*>([^<]+)</span>`,
+		// Aria-label patterns for links
+		`<a[^>]*aria-label="([^"]+)"[^>]*href="[^"]*facebook\.com/([^/?"]+)`,
 		// Meta tag patterns
 		`<meta[^>]*property="og:title"[^>]*content="([^"]+)"`,
 		`<meta[^>]*name="twitter:title"[^>]*content="([^"]+)"`,
-		// Profile patterns
+		// JSON patterns
 		`"name":"([^"]+)".*?"username":"([^"]+)"`,
 	}
 	
@@ -2052,20 +2060,25 @@ func (ube *UniversalBrowserExtractor) extractFacebookAuthorInfo(html string) (di
 		matches := re.FindStringSubmatch(html)
 		
 		if len(matches) >= 2 {
-			if len(matches) >= 3 && strings.Contains(pattern, "username") {
+			if len(matches) >= 3 && (strings.Contains(pattern, "username") || strings.Contains(pattern, "facebook.com")) {
 				displayName = strings.TrimSpace(matches[1])
 				username = strings.TrimSpace(matches[2])
 			} else {
 				displayName = strings.TrimSpace(matches[1])
 			}
 			
-			if displayName != "" && !strings.Contains(displayName, "Facebook") {
+			// Clean up the display name
+			displayName = strings.TrimSpace(displayName)
+			displayName = regexp.MustCompile(`\s+`).ReplaceAllString(displayName, " ")
+			
+			if displayName != "" && !strings.Contains(displayName, "Facebook") && displayName != "..." {
 				log.Printf("✅ Extracted Facebook author: %s (@%s)", displayName, username)
 				return displayName, username
 			}
 		}
 	}
 	
+	log.Printf("⚠️ No Facebook author found in HTML")
 	return "", ""
 }
 

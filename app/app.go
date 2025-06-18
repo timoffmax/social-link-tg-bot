@@ -45,10 +45,8 @@ func runStartupChecks() {
 	checker := services.NewStartupChecker()
 	checker.RunStartupChecks()
 	
-	// Run a quick functional test
-	log.Printf("\n🧪 Running quick functional test...")
-	tester := services.NewRealLinkTester()
-	tester.RunQuickTest()
+	// Startup testing removed - tests can be run on-demand via services.NewRealLinkTester().RunQuickTest()
+	log.Printf("✅ Startup complete. Use services.NewRealLinkTester().RunQuickTest() for on-demand testing")
 }
 
 func loadEnvFile() {

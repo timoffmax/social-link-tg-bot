@@ -321,3 +321,17 @@ func (rlt *RealLinkTester) RunQuickTest() {
 		log.Printf("\n❌ Quick test failed. Please check your configuration.")
 	}
 }
+
+// RunOnDemandTest is a global function for easy on-demand testing
+func RunOnDemandTest() {
+	log.Printf("\n🧪 Running on-demand media extraction test...")
+	tester := NewRealLinkTester()
+	tester.RunQuickTest()
+}
+
+// RunAllTests is a global function for comprehensive testing
+func RunAllTests() {
+	log.Printf("\n🧪 Running comprehensive media extraction tests...")
+	tester := NewRealLinkTester()
+	tester.RunTests()
+}

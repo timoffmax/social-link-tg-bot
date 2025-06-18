@@ -381,17 +381,28 @@ func (yd *YtDlpDownloader) attemptDownload(url string, outputTemplate string, pr
 			username := extractTikTokUsernameFromURL(url)
 			displayName := ""
 			
-			// Try to get username and display name from metadata if not found in URL
+			// Try to get username and display name from metadata
 			if metadataInfo != nil {
-				if uploader, ok := metadataInfo["uploader"].(string); ok {
+				// Check various metadata fields for username/display name
+				if uploader, ok := metadataInfo["uploader"].(string); ok && uploader != "" {
 					if username == "" {
-						username = uploader
+						username = strings.TrimPrefix(uploader, "@")
 					} else {
-						displayName = uploader // If we have username from URL, uploader might be display name
+						displayName = uploader
 					}
 				}
-				if creator, ok := metadataInfo["creator"].(string); ok && displayName == "" {
+				if uploaderID, ok := metadataInfo["uploader_id"].(string); ok && uploaderID != "" && username == "" {
+					username = strings.TrimPrefix(uploaderID, "@")
+				}
+				if creator, ok := metadataInfo["creator"].(string); ok && creator != "" && displayName == "" {
 					displayName = creator
+				}
+				if channel, ok := metadataInfo["channel"].(string); ok && channel != "" {
+					if username == "" {
+						username = strings.TrimPrefix(channel, "@")
+					} else if displayName == "" {
+						displayName = channel
+					}
 				}
 			}
 			
@@ -400,6 +411,8 @@ func (yd *YtDlpDownloader) attemptDownload(url string, outputTemplate string, pr
 			if metadataInfo != nil {
 				if desc, ok := metadataInfo["description"].(string); ok {
 					description = desc
+				} else if title, ok := metadataInfo["title"].(string); ok {
+					description = title
 				}
 			}
 			caption = FormatAuthorCaption("tiktok", displayName, username, description)
@@ -465,6 +478,46 @@ func (yd *YtDlpDownloader) attemptDownload(url string, outputTemplate string, pr
 				}
 			}
 			caption = FormatAuthorCaption("instagram", displayName, username, description)
+		} else if strings.Contains(url, "facebook.com") {
+			// Facebook platform
+			username := ExtractFacebookUsername(url)
+			displayName := ""
+			
+			// Try to get username and display name from metadata
+			if metadataInfo != nil {
+				// Check various metadata fields for username/display name
+				if uploader, ok := metadataInfo["uploader"].(string); ok && uploader != "" {
+					if username == "" {
+						username = uploader
+					} else {
+						displayName = uploader
+					}
+				}
+				if uploaderID, ok := metadataInfo["uploader_id"].(string); ok && uploaderID != "" && username == "" {
+					username = uploaderID
+				}
+				if creator, ok := metadataInfo["creator"].(string); ok && creator != "" && displayName == "" {
+					displayName = creator
+				}
+				if channel, ok := metadataInfo["channel"].(string); ok && channel != "" {
+					if username == "" {
+						username = channel
+					} else if displayName == "" {
+						displayName = channel
+					}
+				}
+			}
+			
+			// Try to get description from metadata
+			description := ""
+			if metadataInfo != nil {
+				if desc, ok := metadataInfo["description"].(string); ok {
+					description = desc
+				} else if title, ok := metadataInfo["title"].(string); ok {
+					description = title
+				}
+			}
+			caption = FormatAuthorCaption("facebook", displayName, username, description)
 		}
 		
 		mediaInfo := &MediaInfo{
