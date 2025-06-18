@@ -25,27 +25,14 @@ type ExtractionStrategy struct {
 
 // GetExtractionStrategy returns the optimal extraction strategy for a given URL
 func GetExtractionStrategy(url string) *ExtractionStrategy {
-	// Instagram: different strategies for videos vs photos/stories
+	// Instagram: optimized based on test results showing yt-dlp performance is excellent
 	if strings.Contains(url, "instagram.com") {
-		// Videos (reels) work well with yt-dlp
-		if strings.Contains(url, "/reel/") {
-			return &ExtractionStrategy{
-				Platform: "instagram",
-				Methods: []ExtractionMethod{
-					MethodYtDlp,
-					MethodBrowser,
-					MethodFixedLink,
-				},
-				HasFixedLink: true,
-				FixedLinkDomain: "instagramez.com",
-			}
-		}
-		// Photos and stories: try browser first, then yt-dlp, fixed link as last resort
+		// All Instagram content: yt-dlp first (fast and reliable), browser fallback, fixed link last resort
 		return &ExtractionStrategy{
 			Platform: "instagram",
 			Methods: []ExtractionMethod{
-				MethodBrowser,
 				MethodYtDlp,
+				MethodBrowser,
 				MethodFixedLink,
 			},
 			HasFixedLink: true,
@@ -54,7 +41,7 @@ func GetExtractionStrategy(url string) *ExtractionStrategy {
 	}
 	
 	// TikTok: different strategies for videos vs slideshows
-	if strings.Contains(url, "tiktok.com") {
+	if strings.Contains(url, "tiktok.com") || strings.Contains(url, "vm.tiktok.com") {
 		// Photo slideshows: browser extraction often works better than yt-dlp for individual images
 		if strings.Contains(url, "/photo/") {
 			return &ExtractionStrategy{
@@ -68,7 +55,7 @@ func GetExtractionStrategy(url string) *ExtractionStrategy {
 				FixedLinkDomain: "vxtiktok.com",
 			}
 		}
-		// Regular videos: yt-dlp first, then fixed link (browser blocks regular videos)
+		// Regular videos: yt-dlp first, then fixed link for fallback
 		return &ExtractionStrategy{
 			Platform: "tiktok",
 			Methods: []ExtractionMethod{
@@ -94,12 +81,24 @@ func GetExtractionStrategy(url string) *ExtractionStrategy {
 		}
 	}
 	
-	// YouTube: yt-dlp only (no fixed link service)
+	// YouTube: different strategies for videos vs community posts
 	if strings.Contains(url, "youtube.com") || strings.Contains(url, "youtu.be") {
+		// Community posts: browser extraction only (yt-dlp doesn't support them)
+		if strings.Contains(url, "/post/") {
+			return &ExtractionStrategy{
+				Platform: "youtube",
+				Methods: []ExtractionMethod{
+					MethodBrowser, // CLI browser with enhanced YouTube community post extraction
+				},
+				HasFixedLink: false,
+			}
+		}
+		// Regular videos: yt-dlp first, then browser fallback
 		return &ExtractionStrategy{
 			Platform: "youtube",
 			Methods: []ExtractionMethod{
 				MethodYtDlp,
+				MethodBrowser, // Fallback for when yt-dlp fails
 			},
 			HasFixedLink: false,
 		}

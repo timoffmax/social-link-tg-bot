@@ -121,7 +121,8 @@ func ExtractFacebookUsername(url string) string {
 			username := matches[1]
 			// Skip special paths
 			if username != "pages" && username != "groups" && username != "watch" && 
-			   username != "profile.php" && username != "photo.php" && username != "video.php" {
+			   username != "profile.php" && username != "photo.php" && username != "video.php" && 
+			   username != "share" && username != "reel" && username != "stories" {
 				return username
 			}
 		}

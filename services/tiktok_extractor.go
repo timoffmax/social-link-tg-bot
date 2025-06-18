@@ -439,6 +439,10 @@ func (te *TikTokExtractor) extractSlideshowFromHTML(html string, postID string, 
 	postText := te.extractPostTextFromRenderedHTML(html)
 	log.Printf("📝 Extracted text from browser HTML: %.200s", postText)
 	
+	// Extract display name from HTML using the same patterns as universal browser extractor
+	displayName := te.extractDisplayNameFromHTML(html)
+	log.Printf("👤 Extracted display name from HTML: '%s', username: '%s'", displayName, username)
+	
 	// Enhanced patterns specifically for slideshow images loaded by JavaScript
 	slideshowPatterns := []string{
 		// 2025 TikTok slideshow patterns after JavaScript execution
@@ -527,13 +531,13 @@ func (te *TikTokExtractor) extractSlideshowFromHTML(html string, postID string, 
 			continue
 		}
 		
-		// Use post text as caption
+		// Use post text as caption with author information
 		if postText != "" {
-			mediaInfo.Caption = postText
+			mediaInfo.Caption = FormatAuthorCaption("tiktok", displayName, username, postText)
 		} else {
 			// Only set default caption for the first media item
 			if i == 0 {
-				mediaInfo.Caption = "🎵 TikTok slideshow"
+				mediaInfo.Caption = FormatAuthorCaption("tiktok", displayName, username, "")
 			}
 		}
 		
@@ -1686,4 +1690,34 @@ func (te *TikTokExtractor) extractVxTikTokMediaURLs(html string) []string {
 	}
 	
 	return uniqueURLs
+}
+
+// extractDisplayNameFromHTML extracts display name from TikTok HTML using similar patterns to universal browser extractor
+func (te *TikTokExtractor) extractDisplayNameFromHTML(html string) string {
+	// TikTok display name patterns - similar to universal browser extractor
+	patterns := []string{
+		// HTML data-e2e patterns (most reliable for new TikTok UI)
+		`data-e2e="browser-nickname"[^>]*>.*?<span[^>]*>([^<]+)</span>`,
+		// Meta tag patterns
+		`<meta[^>]*property="og:title"[^>]*content="([^"]+) \(@[^)]+\)`,
+		`<meta[^>]*name="twitter:title"[^>]*content="([^"]+) \(@[^)]+\)`,
+		// JSON data patterns
+		`"nickname":"([^"]+)"`,
+		`"displayName":"([^"]+)"`,
+	}
+	
+	for _, pattern := range patterns {
+		re := regexp.MustCompile(pattern)
+		matches := re.FindStringSubmatch(html)
+		
+		if len(matches) >= 2 {
+			displayName := strings.TrimSpace(matches[1])
+			if displayName != "" {
+				log.Printf("✅ Extracted TikTok display name: '%s'", displayName)
+				return displayName
+			}
+		}
+	}
+	
+	return ""
 }

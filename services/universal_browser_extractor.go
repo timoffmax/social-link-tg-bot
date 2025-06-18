@@ -336,8 +336,25 @@ func (ube *UniversalBrowserExtractor) extractYouTubeMedia(mediaURL string) ([]*M
 
 	// Extract username from URL
 	username := ExtractYouTubeChannel(mediaURL)
+	
+	// Check if this is a community post and transform URL if needed
+	isYouTubePost := strings.Contains(mediaURL, "/post/")
+	if isYouTubePost {
+		// Ensure https protocol for community posts
+		if strings.HasPrefix(mediaURL, "http://") {
+			mediaURL = "https" + mediaURL[4:]
+			log.Printf("📺 Transformed HTTP to HTTPS: %s", mediaURL)
+		}
+	}
 
-	html, err := ube.renderPageWithBrowser(mediaURL, 6*time.Second)
+	// Use longer timeout for YouTube community posts as they load more content
+	timeout := 6 * time.Second
+	if isYouTubePost {
+		timeout = 12 * time.Second
+		log.Printf("📺 Using extended timeout for YouTube community post")
+	}
+
+	html, err := ube.renderPageWithBrowser(mediaURL, timeout)
 	if err != nil {
 		return nil, err
 	}
@@ -350,22 +367,28 @@ func (ube *UniversalBrowserExtractor) extractYouTubeMedia(mediaURL string) ([]*M
 
 	var mediaInfos []*MediaInfo
 
-	// Check if this is a YouTube post vs Shorts
-	isYouTubePost := strings.Contains(mediaURL, "/post/")
+	// Already determined isYouTubePost above
 	
 	var mediaPatterns []string
 	if isYouTubePost {
 		// YouTube Community Post patterns (images, polls, text)
 		mediaPatterns = []string{
-			// Community post images
+			// Meta tag images (primary)
 			`<meta[^>]*property="og:image"[^>]*content="(https://yt[0-9]\.ggpht\.com/[^"]*)"`,
 			`<meta[^>]*property="og:image"[^>]*content="(https://i\.ytimg\.com/[^"]*)"`,
-			// Attached images in community posts
+			`<meta[^>]*name="twitter:image"[^>]*content="(https://yt[0-9]\.ggpht\.com/[^"]*)"`,
+			`<meta[^>]*name="twitter:image"[^>]*content="(https://i\.ytimg\.com/[^"]*)"`,
+			// JSON data (most reliable for actual content)
 			`"url":"(https://yt[0-9]\.ggpht\.com/[^"]*)"`,
 			`"url":"(https://i\.ytimg\.com/[^"]*\.jpg[^"]*)"`,
-			// Community post photo content
+			`"thumbnail":"(https://yt[0-9]\.ggpht\.com/[^"]*)"`,
+			`"image":"(https://yt[0-9]\.ggpht\.com/[^"]*)"`,
+			// IMG tags in rendered HTML
 			`<img[^>]*src="(https://yt[0-9]\.ggpht\.com/[^"]*)"`,
 			`<img[^>]*src="(https://i\.ytimg\.com/[^"]*\.jpg[^"]*)"`,
+			// Background images
+			`background-image:\s*url\("(https://yt[0-9]\.ggpht\.com/[^"]*)"`,
+			`background-image:\s*url\("(https://i\.ytimg\.com/[^"]*\.jpg[^"]*)"`,
 		}
 		log.Printf("📺 Detected YouTube Community Post")
 	} else {
@@ -1939,8 +1962,14 @@ func (ube *UniversalBrowserExtractor) extractInstagramAuthorInfo(html string) (d
 
 // extractTikTokAuthorInfo extracts author display name and username from TikTok HTML
 func (ube *UniversalBrowserExtractor) extractTikTokAuthorInfo(html string) (displayName, username string) {
-	// TikTok author patterns
+	// TikTok author patterns - ordered by reliability
 	patterns := []string{
+		// HTML data-e2e patterns (most reliable for new TikTok UI)
+		`data-e2e="browse-username"[^>]*>([^<]+)</.*?data-e2e="browser-nickname"[^>]*>.*?<span[^>]*>([^<]+)</span>`,
+		`data-e2e="browser-nickname"[^>]*>.*?<span[^>]*>([^<]+)</span>.*?data-e2e="browse-username"[^>]*>([^<]+)</`,
+		// Individual patterns
+		`data-e2e="browse-username"[^>]*>([^<]+)</span>`,
+		`data-e2e="browser-nickname"[^>]*>.*?<span[^>]*>([^<]+)</span>`,
 		// Meta tag patterns
 		`<meta[^>]*property="og:title"[^>]*content="([^"]+) \(@([^)]+)\)`,
 		`<meta[^>]*name="twitter:title"[^>]*content="([^"]+) \(@([^)]+)\)`,
@@ -1953,14 +1982,34 @@ func (ube *UniversalBrowserExtractor) extractTikTokAuthorInfo(html string) (disp
 		re := regexp.MustCompile(pattern)
 		matches := re.FindStringSubmatch(html)
 		
-		if len(matches) >= 3 {
-			if strings.Contains(pattern, "uniqueId.*nickname") {
+		if len(matches) >= 2 {
+			if strings.Contains(pattern, "browse-username.*browser-nickname") {
+				// Username comes first, display name second
 				username = strings.TrimSpace(matches[1])
 				displayName = strings.TrimSpace(matches[2])
-			} else {
+			} else if strings.Contains(pattern, "browser-nickname.*browse-username") {
+				// Display name comes first, username second
 				displayName = strings.TrimSpace(matches[1])
 				username = strings.TrimSpace(matches[2])
+			} else if strings.Contains(pattern, "browse-username") {
+				// Just username
+				username = strings.TrimSpace(matches[1])
+			} else if strings.Contains(pattern, "browser-nickname") {
+				// Just display name
+				displayName = strings.TrimSpace(matches[1])
+			} else if len(matches) >= 3 {
+				if strings.Contains(pattern, "uniqueId.*nickname") {
+					username = strings.TrimSpace(matches[1])
+					displayName = strings.TrimSpace(matches[2])
+				} else {
+					displayName = strings.TrimSpace(matches[1])
+					username = strings.TrimSpace(matches[2])
+				}
 			}
+			
+			// Clean up extracted values
+			displayName = strings.TrimSpace(displayName)
+			username = strings.TrimSpace(username)
 			
 			if displayName != "" || username != "" {
 				log.Printf("✅ Extracted TikTok author: %s (@%s)", displayName, username)
@@ -1969,6 +2018,7 @@ func (ube *UniversalBrowserExtractor) extractTikTokAuthorInfo(html string) (disp
 		}
 	}
 	
+	log.Printf("⚠️ No TikTok author found in HTML")
 	return "", ""
 }
 
@@ -2041,18 +2091,16 @@ func (ube *UniversalBrowserExtractor) extractFacebookAuthorInfo(html string) (di
 	// Facebook author patterns - ordered by reliability
 	patterns := []string{
 		// Profile name in data-ad-rendering-role (most reliable)
-		`data-ad-rendering-role="profile_name"[^>]*>.*?<[^>]*>([^<]+)</`,
-		// Strong tag within profile name
 		`data-ad-rendering-role="profile_name"[^>]*>.*?<strong[^>]*>.*?<span[^>]*>([^<]+)</span>.*?</strong>`,
-		// Link within profile name area
 		`data-ad-rendering-role="profile_name"[^>]*>.*?<a[^>]*>.*?<strong[^>]*>.*?<span[^>]*>([^<]+)</span>`,
-		// Aria-label patterns for links
+		`data-ad-rendering-role="profile_name"[^>]*>.*?<h2[^>]*>.*?<span[^>]*>.*?<a[^>]*>.*?<strong[^>]*>.*?<span[^>]*>([^<]+)</span>`,
+		// Aria-label patterns for page links (extract page name only, no username)
 		`<a[^>]*aria-label="([^"]+)"[^>]*href="[^"]*facebook\.com/([^/?"]+)`,
-		// Meta tag patterns
+		// Meta tag patterns  
 		`<meta[^>]*property="og:title"[^>]*content="([^"]+)"`,
 		`<meta[^>]*name="twitter:title"[^>]*content="([^"]+)"`,
 		// JSON patterns
-		`"name":"([^"]+)".*?"username":"([^"]+)"`,
+		`"name":"([^"]+)"`,
 	}
 	
 	for _, pattern := range patterns {
@@ -2060,9 +2108,14 @@ func (ube *UniversalBrowserExtractor) extractFacebookAuthorInfo(html string) (di
 		matches := re.FindStringSubmatch(html)
 		
 		if len(matches) >= 2 {
-			if len(matches) >= 3 && (strings.Contains(pattern, "username") || strings.Contains(pattern, "facebook.com")) {
+			if len(matches) >= 3 && strings.Contains(pattern, "facebook.com") {
 				displayName = strings.TrimSpace(matches[1])
-				username = strings.TrimSpace(matches[2])
+				potentialUsername := strings.TrimSpace(matches[2])
+				// Only use as username if it's not a special path
+				if potentialUsername != "share" && potentialUsername != "reel" && potentialUsername != "stories" && 
+				   potentialUsername != "pages" && potentialUsername != "groups" && potentialUsername != "watch" {
+					username = potentialUsername
+				}
 			} else {
 				displayName = strings.TrimSpace(matches[1])
 			}
@@ -2071,9 +2124,12 @@ func (ube *UniversalBrowserExtractor) extractFacebookAuthorInfo(html string) (di
 			displayName = strings.TrimSpace(displayName)
 			displayName = regexp.MustCompile(`\s+`).ReplaceAllString(displayName, " ")
 			
-			if displayName != "" && !strings.Contains(displayName, "Facebook") && displayName != "..." {
-				log.Printf("✅ Extracted Facebook author: %s (@%s)", displayName, username)
-				return displayName, username
+			// Additional filtering for Facebook
+			if displayName != "" && !strings.Contains(displayName, "Facebook") && 
+			   displayName != "..." && displayName != "share" && len(displayName) > 1 {
+				// For Facebook, we typically only show display name (no username)
+				log.Printf("✅ Extracted Facebook author: %s", displayName)
+				return displayName, "" // Return empty username for Facebook
 			}
 		}
 	}

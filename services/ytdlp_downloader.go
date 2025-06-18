@@ -158,6 +158,12 @@ func (yd *YtDlpDownloader) GetMediaInfo(url string) (*YtDlpInfo, error) {
 func (yd *YtDlpDownloader) DownloadMedia(url string) ([]*MediaInfo, error) {
 	log.Printf("Starting media download from: %s", url)
 	
+	// Skip YouTube community posts for yt-dlp (they need browser extraction)
+	if strings.Contains(url, "youtube.com/post/") || strings.Contains(url, "youtu.be/post/") {
+		log.Printf("📺 Skipping yt-dlp for YouTube community post - requires browser extraction")
+		return nil, fmt.Errorf("yt-dlp cannot handle YouTube community posts, browser extraction required")
+	}
+	
 	// Ensure temp directory exists
 	if err := os.MkdirAll(yd.TempDir, 0755); err != nil {
 		return nil, fmt.Errorf("failed to create temp directory: %v", err)
@@ -381,30 +387,45 @@ func (yd *YtDlpDownloader) attemptDownload(url string, outputTemplate string, pr
 			username := extractTikTokUsernameFromURL(url)
 			displayName := ""
 			
+			log.Printf("🎵 [TIKTOK] URL-extracted username: '%s'", username)
+			
 			// Try to get username and display name from metadata
 			if metadataInfo != nil {
+				log.Printf("🎵 [TIKTOK] Metadata available, checking fields...")
+				
 				// Check various metadata fields for username/display name
 				if uploader, ok := metadataInfo["uploader"].(string); ok && uploader != "" {
+					log.Printf("🎵 [TIKTOK] Found uploader: '%s'", uploader)
 					if username == "" {
 						username = strings.TrimPrefix(uploader, "@")
+						log.Printf("🎵 [TIKTOK] Set username from uploader: '%s'", username)
 					} else {
 						displayName = uploader
+						log.Printf("🎵 [TIKTOK] Set displayName from uploader: '%s'", displayName)
 					}
 				}
 				if uploaderID, ok := metadataInfo["uploader_id"].(string); ok && uploaderID != "" && username == "" {
 					username = strings.TrimPrefix(uploaderID, "@")
+					log.Printf("🎵 [TIKTOK] Set username from uploader_id: '%s'", username)
 				}
 				if creator, ok := metadataInfo["creator"].(string); ok && creator != "" && displayName == "" {
 					displayName = creator
+					log.Printf("🎵 [TIKTOK] Set displayName from creator: '%s'", displayName)
 				}
 				if channel, ok := metadataInfo["channel"].(string); ok && channel != "" {
 					if username == "" {
 						username = strings.TrimPrefix(channel, "@")
+						log.Printf("🎵 [TIKTOK] Set username from channel: '%s'", username)
 					} else if displayName == "" {
 						displayName = channel
+						log.Printf("🎵 [TIKTOK] Set displayName from channel: '%s'", displayName)
 					}
 				}
+			} else {
+				log.Printf("🎵 [TIKTOK] No metadata available")
 			}
+			
+			log.Printf("🎵 [TIKTOK] Final: username='%s', displayName='%s'", username, displayName)
 			
 			// Try to get description from metadata
 			description := ""
@@ -479,32 +500,20 @@ func (yd *YtDlpDownloader) attemptDownload(url string, outputTemplate string, pr
 			}
 			caption = FormatAuthorCaption("instagram", displayName, username, description)
 		} else if strings.Contains(url, "facebook.com") {
-			// Facebook platform
-			username := ExtractFacebookUsername(url)
+			// Facebook platform - usually only has display names, not usernames
 			displayName := ""
 			
-			// Try to get username and display name from metadata
+			// Try to get display name from metadata (Facebook rarely has usernames)
 			if metadataInfo != nil {
-				// Check various metadata fields for username/display name
+				// Check various metadata fields for display name
 				if uploader, ok := metadataInfo["uploader"].(string); ok && uploader != "" {
-					if username == "" {
-						username = uploader
-					} else {
-						displayName = uploader
-					}
-				}
-				if uploaderID, ok := metadataInfo["uploader_id"].(string); ok && uploaderID != "" && username == "" {
-					username = uploaderID
+					displayName = uploader
 				}
 				if creator, ok := metadataInfo["creator"].(string); ok && creator != "" && displayName == "" {
 					displayName = creator
 				}
-				if channel, ok := metadataInfo["channel"].(string); ok && channel != "" {
-					if username == "" {
-						username = channel
-					} else if displayName == "" {
-						displayName = channel
-					}
+				if channel, ok := metadataInfo["channel"].(string); ok && channel != "" && displayName == "" {
+					displayName = channel
 				}
 			}
 			
@@ -517,7 +526,7 @@ func (yd *YtDlpDownloader) attemptDownload(url string, outputTemplate string, pr
 					description = title
 				}
 			}
-			caption = FormatAuthorCaption("facebook", displayName, username, description)
+			caption = FormatAuthorCaption("facebook", displayName, "", description) // Empty username for Facebook
 		}
 		
 		mediaInfo := &MediaInfo{
