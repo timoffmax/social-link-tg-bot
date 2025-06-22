@@ -1,0 +1,152 @@
+#!/bin/bash
+
+# Extract YouTube cookies from Firefox running on the server
+# Uses server-IP authenticated session
+
+echo "🦊 Extracting YouTube Cookies from Firefox"
+echo "==========================================="
+echo ""
+
+# Get script directory
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+BOT_DIR="$(dirname "$SCRIPT_DIR")"
+
+# Check if Firefox is installed
+if ! command -v firefox &> /dev/null; then
+    echo "❌ Firefox not found. Install with: sudo apt install firefox-esr"
+    exit 1
+fi
+
+# Try to find Firefox profile directory
+FIREFOX_PROFILES=""
+for profile_root in ~/.mozilla/firefox ~/.mozilla/firefox-esr; do
+    if [ -d "$profile_root" ]; then
+        FIREFOX_PROFILES="$profile_root"
+        break
+    fi
+done
+
+if [ -z "$FIREFOX_PROFILES" ]; then
+    echo "❌ Firefox profile directory not found"
+    echo "💡 Start Firefox first to create a profile, then run this script"
+    exit 1
+fi
+
+echo "🔍 Found Firefox profiles in: $FIREFOX_PROFILES"
+
+# Find the default profile or most recently used
+PROFILE_DIR=""
+if [ -f "$FIREFOX_PROFILES/profiles.ini" ]; then
+    # Try to find default profile
+    DEFAULT_PROFILE=$(grep -A2 "\[Profile0\]" "$FIREFOX_PROFILES/profiles.ini" | grep "Path=" | cut -d'=' -f2)
+    if [ -n "$DEFAULT_PROFILE" ]; then
+        PROFILE_DIR="$FIREFOX_PROFILES/$DEFAULT_PROFILE"
+    fi
+fi
+
+# If no default found, use the most recent profile
+if [ -z "$PROFILE_DIR" ] || [ ! -d "$PROFILE_DIR" ]; then
+    PROFILE_DIR=$(find "$FIREFOX_PROFILES" -maxdepth 1 -type d -name "*.default*" | head -1)
+fi
+
+if [ -z "$PROFILE_DIR" ] || [ ! -d "$PROFILE_DIR" ]; then
+    echo "❌ Could not find Firefox profile directory"
+    echo "Available profiles:"
+    ls -la "$FIREFOX_PROFILES/"
+    exit 1
+fi
+
+echo "📁 Using Firefox profile: $PROFILE_DIR"
+
+# Check if cookies database exists
+COOKIES_DB="$PROFILE_DIR/cookies.sqlite"
+if [ ! -f "$COOKIES_DB" ]; then
+    echo "❌ Firefox cookies database not found: $COOKIES_DB"
+    echo "💡 Make sure Firefox has been started and you've visited websites"
+    exit 1
+fi
+
+echo "🍪 Found cookies database: $COOKIES_DB"
+
+# Check if sqlite3 is available
+if ! command -v sqlite3 &> /dev/null; then
+    echo "📦 Installing sqlite3..."
+    sudo apt update && sudo apt install -y sqlite3
+fi
+
+# Extract YouTube cookies from Firefox database
+echo "🔄 Extracting YouTube cookies..."
+
+# Create temporary file for extraction
+TEMP_COOKIES=$(mktemp)
+
+# SQL query to extract YouTube cookies in Netscape format
+sqlite3 -separator $'\t' "$COOKIES_DB" "
+SELECT 
+    host, 
+    CASE 
+        WHEN host LIKE '.%' THEN 'TRUE' 
+        ELSE 'FALSE' 
+    END as domain_flag,
+    path,
+    CASE 
+        WHEN isSecure = 1 THEN 'TRUE' 
+        ELSE 'FALSE' 
+    END as secure,
+    expiry,
+    name,
+    value
+FROM moz_cookies 
+WHERE host LIKE '%youtube.com%' OR host LIKE '%google.com%'
+ORDER BY host, name;
+" > "$TEMP_COOKIES"
+
+# Check if we got any cookies
+if [ ! -s "$TEMP_COOKIES" ]; then
+    echo "❌ No YouTube cookies found in Firefox"
+    echo "💡 Make sure you've logged into YouTube in Firefox"
+    rm "$TEMP_COOKIES"
+    exit 1
+fi
+
+# Create Netscape format cookie file
+echo "📝 Creating Netscape format cookie file..."
+
+cat > "$BOT_DIR/youtube_cookies.txt" << 'EOF'
+# Netscape HTTP Cookie File
+# Extracted from Firefox on server - authenticated from server IP
+EOF
+
+# Add cookies to file
+cat "$TEMP_COOKIES" >> "$BOT_DIR/youtube_cookies.txt"
+
+# Clean up
+rm "$TEMP_COOKIES"
+
+echo "✅ YouTube cookies extracted to: $BOT_DIR/youtube_cookies.txt"
+
+# Show cookie count
+COOKIE_COUNT=$(grep -v '^#' "$BOT_DIR/youtube_cookies.txt" | wc -l)
+echo "📊 Extracted $COOKIE_COUNT cookies"
+
+# Test the cookies
+echo "🧪 Testing extracted cookies..."
+if yt-dlp --cookies "$BOT_DIR/youtube_cookies.txt" --dump-json --no-download "https://www.youtube.com/watch?v=dQw4w9WgXcQ" >/dev/null 2>&1; then
+    echo "✅ Cookies are working! YouTube authentication successful"
+    echo ""
+    echo "🎉 Server-IP authenticated YouTube cookies ready for use!"
+    echo "🤖 The bot will now use these cookies for YouTube downloads"
+else
+    echo "⚠️ Cookie test failed. Possible issues:"
+    echo "   - Cookies may be expired"
+    echo "   - YouTube session may be invalid"
+    echo "   - Firefox may need to be restarted"
+    echo ""
+    echo "💡 Try refreshing your YouTube login in Firefox"
+fi
+
+echo ""
+echo "🔄 To refresh cookies:"
+echo "   1. Open Firefox and go to YouTube"
+echo "   2. Log out and log back in"
+echo "   3. Run this script again: ./bin/extract-firefox-cookies"

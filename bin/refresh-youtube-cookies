@@ -7,18 +7,31 @@ echo "🍪 Refreshing YouTube cookies for social-link-bot..."
 echo "⚠️  WARNING: YouTube has strict policies. Use responsibly to avoid account bans."
 echo ""
 
+# Check if we're on the server with Firefox
+if command -v firefox &> /dev/null && [ -d ~/.mozilla ]; then
+    echo "🦊 Firefox detected on server!"
+    echo ""
+    echo "Recommended: Extract cookies directly from Firefox"
+    echo "  ./bin/extract-firefox-cookies - Extract from server Firefox (best for server IP)"
+    echo ""
+    read -p "Extract from Firefox now? (y/n): " use_firefox
+    if [ "$use_firefox" = "y" ] || [ "$use_firefox" = "Y" ]; then
+        exec "$SCRIPT_DIR/extract-firefox-cookies"
+    fi
+fi
+
 # Detect if we're on a headless server
 if [ -z "$DISPLAY" ] && [ -z "$SSH_CLIENT" ]; then
     echo "🖥️  Headless server detected!"
     echo ""
     echo "CLI-friendly options:"
-    echo "  ./bin/quick-youtube-cookies     - Manual paste method (recommended)"
+    echo "  ./bin/extract-firefox-cookies   - Extract from server Firefox (recommended)"
+    echo "  ./bin/quick-youtube-cookies     - Manual paste method"
     echo "  ./bin/setup-youtube-cookies-cli - Full CLI setup with multiple options"
-    echo "  ./bin/curl-youtube-cookies      - Basic curl extraction (limited)"
     echo ""
-    read -p "Use quick manual paste method now? (y/n): " use_quick
+    read -p "Use Firefox extraction now? (y/n): " use_quick
     if [ "$use_quick" = "y" ] || [ "$use_quick" = "Y" ]; then
-        exec "$SCRIPT_DIR/quick-youtube-cookies"
+        exec "$SCRIPT_DIR/extract-firefox-cookies"
     else
         echo "Run one of the CLI scripts above, or continue with browser detection..."
         echo ""
