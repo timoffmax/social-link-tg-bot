@@ -15,6 +15,16 @@ import (
 	"github.com/timoffmax/social-link-bot/config"
 )
 
+// maskProxyCredentials masks sensitive parts of proxy URL for logging
+func maskProxyCredentials(proxyURL string) string {
+	if atIndex := strings.Index(proxyURL, "@"); atIndex >= 0 {
+		if protocolEnd := strings.Index(proxyURL, "://"); protocolEnd >= 0 {
+			return proxyURL[:protocolEnd+3] + "***:***@" + proxyURL[atIndex+1:]
+		}
+	}
+	return proxyURL
+}
+
 type YtDlpInfo struct {
 	ID          string `json:"id"`
 	Title       string `json:"title"`
@@ -297,7 +307,7 @@ func (yd *YtDlpDownloader) attemptDownload(url string, outputTemplate string, pr
 		if i > 0 && (args[i-1] == "--password" || args[i-1] == "--username" || args[i-1] == "--proxy") {
 			if args[i-1] == "--proxy" && strings.Contains(args[i], "@") {
 				// Mask proxy credentials
-				safeArgs[i] = config.MaskProxyURL(args[i])
+				safeArgs[i] = maskProxyCredentials(args[i])
 			} else {
 				safeArgs[i] = "***"
 			}
