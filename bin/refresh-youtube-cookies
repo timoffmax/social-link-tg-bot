@@ -5,6 +5,25 @@
 
 echo "🍪 Refreshing YouTube cookies for social-link-bot..."
 echo "⚠️  WARNING: YouTube has strict policies. Use responsibly to avoid account bans."
+echo ""
+
+# Detect if we're on a headless server
+if [ -z "$DISPLAY" ] && [ -z "$SSH_CLIENT" ]; then
+    echo "🖥️  Headless server detected!"
+    echo ""
+    echo "CLI-friendly options:"
+    echo "  ./bin/quick-youtube-cookies     - Manual paste method (recommended)"
+    echo "  ./bin/setup-youtube-cookies-cli - Full CLI setup with multiple options"
+    echo "  ./bin/curl-youtube-cookies      - Basic curl extraction (limited)"
+    echo ""
+    read -p "Use quick manual paste method now? (y/n): " use_quick
+    if [ "$use_quick" = "y" ] || [ "$use_quick" = "Y" ]; then
+        exec "$SCRIPT_DIR/quick-youtube-cookies"
+    else
+        echo "Run one of the CLI scripts above, or continue with browser detection..."
+        echo ""
+    fi
+fi
 
 # Check if yt-dlp is available
 if ! command -v yt-dlp &> /dev/null; then
