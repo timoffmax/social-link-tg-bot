@@ -1,10 +1,32 @@
 #!/bin/bash
 
-# Extract YouTube cookies from Firefox running on the server
-# Uses server-IP authenticated session
+# Extract cookies from Firefox running on the server
+# Uses server-IP authenticated session for any social media platform
+# Usage: ./bin/extract-firefox-cookies [platform]
+# Supported: youtube, twitter, tiktok, instagram, facebook, reddit, 9gag, all
 
-echo "🦊 Extracting YouTube Cookies from Firefox"
-echo "==========================================="
+# Parse command line arguments
+PLATFORM="${1:-all}"
+
+case "$PLATFORM" in
+    youtube|twitter|tiktok|instagram|facebook|reddit|9gag|all)
+        ;; # Valid platform
+    *)
+        echo "❌ Invalid platform: $PLATFORM"
+        echo "📖 Usage: $0 [platform]"
+        echo "📋 Supported platforms: youtube, twitter, tiktok, instagram, facebook, reddit, 9gag, all"
+        echo "💡 Default: all (extracts cookies for all platforms)"
+        exit 1
+        ;;
+esac
+
+if [ "$PLATFORM" = "all" ]; then
+    echo "🦊 Extracting Cookies from Firefox (All Platforms)"
+    echo "=================================================="
+else
+    echo "🦊 Extracting ${PLATFORM^} Cookies from Firefox"
+    echo "==========================================="
+fi
 echo ""
 
 # Get script directory
@@ -80,7 +102,39 @@ echo "🔄 Extracting YouTube cookies..."
 # Create temporary file for extraction
 TEMP_COOKIES=$(mktemp)
 
-# SQL query to extract YouTube cookies in Netscape format
+# Define platform-specific queries
+get_platform_query() {
+    local platform="$1"
+    case "$platform" in
+        youtube)
+            echo "WHERE host LIKE '%youtube.com%' OR host LIKE '%google.com%'"
+            ;;
+        twitter)
+            echo "WHERE host LIKE '%twitter.com%' OR host LIKE '%x.com%'"
+            ;;
+        tiktok)
+            echo "WHERE host LIKE '%tiktok.com%'"
+            ;;
+        instagram)
+            echo "WHERE host LIKE '%instagram.com%' OR host LIKE '%facebook.com%'"
+            ;;
+        facebook)
+            echo "WHERE host LIKE '%facebook.com%' OR host LIKE '%meta.com%'"
+            ;;
+        reddit)
+            echo "WHERE host LIKE '%reddit.com%'"
+            ;;
+        9gag)
+            echo "WHERE host LIKE '%9gag.com%'"
+            ;;
+        all)
+            echo "WHERE host LIKE '%youtube.com%' OR host LIKE '%google.com%' OR host LIKE '%twitter.com%' OR host LIKE '%x.com%' OR host LIKE '%tiktok.com%' OR host LIKE '%instagram.com%' OR host LIKE '%facebook.com%' OR host LIKE '%meta.com%' OR host LIKE '%reddit.com%' OR host LIKE '%9gag.com%'"
+            ;;
+    esac
+}
+
+# SQL query to extract cookies in Netscape format
+WHERE_CLAUSE=$(get_platform_query "$PLATFORM")
 sqlite3 -separator $'\t' "$COOKIES_DB" "
 SELECT 
     host, 
@@ -97,56 +151,111 @@ SELECT
     name,
     value
 FROM moz_cookies 
-WHERE host LIKE '%youtube.com%' OR host LIKE '%google.com%'
+$WHERE_CLAUSE
 ORDER BY host, name;
 " > "$TEMP_COOKIES"
 
 # Check if we got any cookies
 if [ ! -s "$TEMP_COOKIES" ]; then
-    echo "❌ No YouTube cookies found in Firefox"
-    echo "💡 Make sure you've logged into YouTube in Firefox"
+    if [ "$PLATFORM" = "all" ]; then
+        echo "❌ No social media cookies found in Firefox"
+        echo "💡 Make sure you've logged into social media platforms in Firefox"
+    else
+        echo "❌ No ${PLATFORM^} cookies found in Firefox"
+        echo "💡 Make sure you've logged into ${PLATFORM^} in Firefox"
+    fi
     rm "$TEMP_COOKIES"
     exit 1
 fi
 
-# Create Netscape format cookie file
-echo "📝 Creating Netscape format cookie file..."
+# Extract cookies by platform
+echo "📝 Creating Netscape format cookie files..."
 
-cat > "$BOT_DIR/youtube_cookies.txt" << 'EOF'
+if [ "$PLATFORM" = "all" ]; then
+    # Extract for all platforms
+    platforms=("youtube" "twitter" "tiktok" "instagram" "facebook" "reddit" "9gag")
+    
+    for p in "${platforms[@]}"; do
+        PLATFORM_TEMP=$(mktemp)
+        WHERE_CLAUSE=$(get_platform_query "$p")
+        
+        sqlite3 -separator $'\t' "$COOKIES_DB" "
+        SELECT 
+            host, 
+            CASE 
+                WHEN host LIKE '.%' THEN 'TRUE' 
+                ELSE 'FALSE' 
+            END as domain_flag,
+            path,
+            CASE 
+                WHEN isSecure = 1 THEN 'TRUE' 
+                ELSE 'FALSE' 
+            END as secure,
+            expiry,
+            name,
+            value
+        FROM moz_cookies 
+        $WHERE_CLAUSE
+        ORDER BY host, name;
+        " > "$PLATFORM_TEMP"
+        
+        if [ -s "$PLATFORM_TEMP" ]; then
+            cat > "$BOT_DIR/${p}_cookies.txt" << EOF
 # Netscape HTTP Cookie File
-# Extracted from Firefox on server - authenticated from server IP
+# ${p^} cookies extracted from Firefox on server - authenticated from server IP
 EOF
-
-# Add cookies to file
-cat "$TEMP_COOKIES" >> "$BOT_DIR/youtube_cookies.txt"
+            cat "$PLATFORM_TEMP" >> "$BOT_DIR/${p}_cookies.txt"
+            COOKIE_COUNT=$(grep -v '^#' "$BOT_DIR/${p}_cookies.txt" | wc -l)
+            echo "✅ ${p^}: $COOKIE_COUNT cookies extracted to ${p}_cookies.txt"
+        else
+            echo "⚠️ ${p^}: No cookies found (not logged in?)"
+        fi
+        
+        rm "$PLATFORM_TEMP"
+    done
+else
+    # Extract for specific platform
+    cat > "$BOT_DIR/${PLATFORM}_cookies.txt" << EOF
+# Netscape HTTP Cookie File
+# ${PLATFORM^} cookies extracted from Firefox on server - authenticated from server IP
+EOF
+    cat "$TEMP_COOKIES" >> "$BOT_DIR/${PLATFORM}_cookies.txt"
+    echo "✅ ${PLATFORM^} cookies extracted to: $BOT_DIR/${PLATFORM}_cookies.txt"
+fi
 
 # Clean up
 rm "$TEMP_COOKIES"
 
-echo "✅ YouTube cookies extracted to: $BOT_DIR/youtube_cookies.txt"
-
-# Show cookie count
-COOKIE_COUNT=$(grep -v '^#' "$BOT_DIR/youtube_cookies.txt" | wc -l)
-echo "📊 Extracted $COOKIE_COUNT cookies"
+# Show total cookie count
+if [ "$PLATFORM" != "all" ]; then
+    COOKIE_COUNT=$(grep -v '^#' "$BOT_DIR/${PLATFORM}_cookies.txt" | wc -l)
+    echo "📊 Extracted $COOKIE_COUNT cookies"
+fi
 
 # Test the cookies
-echo "🧪 Testing extracted cookies..."
-if yt-dlp --cookies "$BOT_DIR/youtube_cookies.txt" --dump-json --no-download "https://www.youtube.com/watch?v=dQw4w9WgXcQ" >/dev/null 2>&1; then
-    echo "✅ Cookies are working! YouTube authentication successful"
-    echo ""
-    echo "🎉 Server-IP authenticated YouTube cookies ready for use!"
-    echo "🤖 The bot will now use these cookies for YouTube downloads"
-else
-    echo "⚠️ Cookie test failed. Possible issues:"
-    echo "   - Cookies may be expired"
-    echo "   - YouTube session may be invalid"
-    echo "   - Firefox may need to be restarted"
-    echo ""
-    echo "💡 Try refreshing your YouTube login in Firefox"
+if [ "$PLATFORM" = "youtube" ] || [ "$PLATFORM" = "all" ]; then
+    if [ -f "$BOT_DIR/youtube_cookies.txt" ] && [ -s "$BOT_DIR/youtube_cookies.txt" ]; then
+        echo "🧪 Testing YouTube cookies..."
+        if yt-dlp --cookies "$BOT_DIR/youtube_cookies.txt" --dump-json --no-download "https://www.youtube.com/watch?v=dQw4w9WgXcQ" >/dev/null 2>&1; then
+            echo "✅ YouTube cookies are working!"
+        else
+            echo "⚠️ YouTube cookie test failed"
+        fi
+    fi
 fi
 
 echo ""
+if [ "$PLATFORM" = "all" ]; then
+    echo "🎉 Server-IP authenticated cookies ready for use!"
+    echo "🤖 The bot will now use these cookies for enhanced platform access"
+else
+    echo "🎉 Server-IP authenticated ${PLATFORM^} cookies ready for use!"
+    echo "🤖 The bot will now use these cookies for ${PLATFORM^} downloads"
+fi
+echo ""
 echo "🔄 To refresh cookies:"
-echo "   1. Open Firefox and go to YouTube"
+echo "   1. Open Firefox in VNC and navigate to platform(s)"
 echo "   2. Log out and log back in"
-echo "   3. Run this script again: ./bin/extract-firefox-cookies"
+echo "   3. Run this script again: ./bin/extract-firefox-cookies [platform]"
+echo ""
+echo "📋 Available platforms: youtube, twitter, tiktok, instagram, facebook, reddit, 9gag, all"
