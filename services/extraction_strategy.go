@@ -1,6 +1,7 @@
 package services
 
 import (
+	"github.com/timoffmax/social-link-bot/config"
 	"log"
 	"strings"
 )
@@ -27,6 +28,13 @@ type ExtractionStrategy struct {
 func GetExtractionStrategy(url string) *ExtractionStrategy {
 	// Instagram: optimized based on test results showing yt-dlp performance is excellent
 	if strings.Contains(url, "instagram.com") {
+		if !config.IsInstagramEnabled() {
+			return &ExtractionStrategy{
+				Platform: "instagram",
+				Methods: []ExtractionMethod{},
+				HasFixedLink: false,
+			}
+		}
 		// All Instagram content: yt-dlp first (fast and reliable), browser fallback, fixed link last resort
 		return &ExtractionStrategy{
 			Platform: "instagram",
@@ -42,6 +50,13 @@ func GetExtractionStrategy(url string) *ExtractionStrategy {
 	
 	// TikTok: different strategies for videos vs slideshows
 	if strings.Contains(url, "tiktok.com") || strings.Contains(url, "vm.tiktok.com") {
+		if !config.IsTikTokEnabled() {
+			return &ExtractionStrategy{
+				Platform: "tiktok",
+				Methods: []ExtractionMethod{},
+				HasFixedLink: false,
+			}
+		}
 		// Photo slideshows: browser extraction often works better than yt-dlp for individual images
 		if strings.Contains(url, "/photo/") {
 			return &ExtractionStrategy{
@@ -69,6 +84,13 @@ func GetExtractionStrategy(url string) *ExtractionStrategy {
 	
 	// Twitter/X: yt-dlp first, then custom browser extractor for quotes, then fixed link
 	if strings.Contains(url, "twitter.com") || strings.Contains(url, "x.com") {
+		if !config.IsTwitterEnabled() {
+			return &ExtractionStrategy{
+				Platform: "twitter",
+				Methods: []ExtractionMethod{},
+				HasFixedLink: false,
+			}
+		}
 		return &ExtractionStrategy{
 			Platform: "twitter",
 			Methods: []ExtractionMethod{
@@ -83,6 +105,13 @@ func GetExtractionStrategy(url string) *ExtractionStrategy {
 	
 	// YouTube: different strategies for videos vs community posts
 	if strings.Contains(url, "youtube.com") || strings.Contains(url, "youtu.be") {
+		if !config.IsYouTubeEnabled() {
+			return &ExtractionStrategy{
+				Platform: "youtube",
+				Methods: []ExtractionMethod{},
+				HasFixedLink: false,
+			}
+		}
 		// Community posts: browser extraction only (yt-dlp doesn't support them)
 		if strings.Contains(url, "/post/") {
 			return &ExtractionStrategy{
@@ -104,13 +133,22 @@ func GetExtractionStrategy(url string) *ExtractionStrategy {
 		}
 	}
 	
-	// 9GAG: temporarily disabled due to aggressive IP/Tor blocking by Cloudflare
-	// To re-enable: uncomment MethodBrowser and ensure working proxy/VPN
+	// 9GAG: configurable enablement via ENABLE_9GAG environment variable
 	if strings.Contains(url, "9gag.com") {
+		if !config.Is9GAGEnabled() {
+			// 9GAG disabled via configuration
+			return &ExtractionStrategy{
+				Platform: "9gag",
+				Methods: []ExtractionMethod{},
+				HasFixedLink: false,
+			}
+		}
+		
+		// 9GAG enabled - use browser extraction with proxy support
 		return &ExtractionStrategy{
 			Platform: "9gag",
 			Methods: []ExtractionMethod{
-				// MethodBrowser, // Disabled - requires residential proxy or unblocked IP
+				MethodBrowser, // CLI browser with proxy support
 			},
 			HasFixedLink: false,
 		}
@@ -118,6 +156,13 @@ func GetExtractionStrategy(url string) *ExtractionStrategy {
 	
 	// Reddit: yt-dlp works well for video posts, browser fallback for images
 	if strings.Contains(url, "reddit.com") {
+		if !config.IsRedditEnabled() {
+			return &ExtractionStrategy{
+				Platform: "reddit",
+				Methods: []ExtractionMethod{},
+				HasFixedLink: false,
+			}
+		}
 		return &ExtractionStrategy{
 			Platform: "reddit",
 			Methods: []ExtractionMethod{
@@ -130,6 +175,13 @@ func GetExtractionStrategy(url string) *ExtractionStrategy {
 	
 	// Facebook: yt-dlp first (works for some video posts), then browser fallback
 	if strings.Contains(url, "facebook.com") {
+		if !config.IsFacebookEnabled() {
+			return &ExtractionStrategy{
+				Platform: "facebook",
+				Methods: []ExtractionMethod{},
+				HasFixedLink: false,
+			}
+		}
 		return &ExtractionStrategy{
 			Platform: "facebook",
 			Methods: []ExtractionMethod{

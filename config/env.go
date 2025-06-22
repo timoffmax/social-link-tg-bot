@@ -82,3 +82,42 @@ func GetYouTubeDelay() string {
 	}
 	return delay
 }
+
+// Platform enablement configuration
+// Returns true if platform is enabled, false if disabled
+func IsYouTubeEnabled() bool {
+	return getBoolEnv("ENABLE_YOUTUBE", true)
+}
+
+func IsTwitterEnabled() bool {
+	return getBoolEnv("ENABLE_TWITTER", true)
+}
+
+func IsTikTokEnabled() bool {
+	return getBoolEnv("ENABLE_TIKTOK", true)
+}
+
+func IsInstagramEnabled() bool {
+	return getBoolEnv("ENABLE_INSTAGRAM", true)
+}
+
+func IsFacebookEnabled() bool {
+	return getBoolEnv("ENABLE_FACEBOOK", true)
+}
+
+func IsRedditEnabled() bool {
+	return getBoolEnv("ENABLE_REDDIT", true)
+}
+
+func Is9GAGEnabled() bool {
+	return getBoolEnv("ENABLE_9GAG", true)
+}
+
+// Helper function to parse boolean environment variables
+func getBoolEnv(key string, defaultValue bool) bool {
+	value := strings.ToLower(strings.TrimSpace(os.Getenv(key)))
+	if value == "" {
+		return defaultValue
+	}
+	return value == "true" || value == "1" || value == "yes" || value == "on"
+}

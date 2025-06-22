@@ -1,43 +1,90 @@
 package utils
 
 import (
+	"github.com/timoffmax/social-link-bot/config"
 	"github.com/timoffmax/social-link-bot/model/api/response"
 	"regexp"
 	"strings"
 )
 
 func GetAllLinks(message *response.TgMessage) []string {
-	instagramLinks := GetInstagramLinks(message)
-	tikTokLinks := GetTikTokLinks(message)
-	twitterLinks := GetTwitterLinks(message)
-	youtubeLinks := GetYouTubeLinks(message)
-	ninegagLinks := Get9GAGLinks(message)
-	redditLinks := GetRedditLinks(message)
-	facebookLinks := GetFacebookLinks(message)
+	var result []string
 	
-	result := append(append(instagramLinks, tikTokLinks...), twitterLinks...)
-	result = append(result, youtubeLinks...)
-	result = append(result, ninegagLinks...)
-	result = append(result, redditLinks...)
-	result = append(result, facebookLinks...)
+	if config.IsInstagramEnabled() {
+		instagramLinks := GetInstagramLinks(message)
+		result = append(result, instagramLinks...)
+	}
+	
+	if config.IsTikTokEnabled() {
+		tikTokLinks := GetTikTokLinks(message)
+		result = append(result, tikTokLinks...)
+	}
+	
+	if config.IsTwitterEnabled() {
+		twitterLinks := GetTwitterLinks(message)
+		result = append(result, twitterLinks...)
+	}
+	
+	if config.IsYouTubeEnabled() {
+		youtubeLinks := GetYouTubeLinks(message)
+		result = append(result, youtubeLinks...)
+	}
+	
+	if config.Is9GAGEnabled() {
+		ninegagLinks := Get9GAGLinks(message)
+		result = append(result, ninegagLinks...)
+	}
+	
+	if config.IsRedditEnabled() {
+		redditLinks := GetRedditLinks(message)
+		result = append(result, redditLinks...)
+	}
+	
+	if config.IsFacebookEnabled() {
+		facebookLinks := GetFacebookLinks(message)
+		result = append(result, facebookLinks...)
+	}
 
 	return result
 }
 
 func GetAllSocialLinks(message *response.TgMessage) []string {
-	instagramLinks := GetOriginalInstagramLinks(message)
-	tikTokLinks := GetOriginalTikTokLinks(message)
-	twitterLinks := GetOriginalTwitterLinks(message)
-	youtubeLinks := GetOriginalYouTubeLinks(message)
-	ninegagLinks := GetOriginal9GAGLinks(message)
-	redditLinks := GetOriginalRedditLinks(message)
-	facebookLinks := GetOriginalFacebookLinks(message)
+	var result []string
 	
-	result := append(append(instagramLinks, tikTokLinks...), twitterLinks...)
-	result = append(result, youtubeLinks...)
-	result = append(result, ninegagLinks...)
-	result = append(result, redditLinks...)
-	result = append(result, facebookLinks...)
+	if config.IsInstagramEnabled() {
+		instagramLinks := GetOriginalInstagramLinks(message)
+		result = append(result, instagramLinks...)
+	}
+	
+	if config.IsTikTokEnabled() {
+		tikTokLinks := GetOriginalTikTokLinks(message)
+		result = append(result, tikTokLinks...)
+	}
+	
+	if config.IsTwitterEnabled() {
+		twitterLinks := GetOriginalTwitterLinks(message)
+		result = append(result, twitterLinks...)
+	}
+	
+	if config.IsYouTubeEnabled() {
+		youtubeLinks := GetOriginalYouTubeLinks(message)
+		result = append(result, youtubeLinks...)
+	}
+	
+	if config.Is9GAGEnabled() {
+		ninegagLinks := GetOriginal9GAGLinks(message)
+		result = append(result, ninegagLinks...)
+	}
+	
+	if config.IsRedditEnabled() {
+		redditLinks := GetOriginalRedditLinks(message)
+		result = append(result, redditLinks...)
+	}
+	
+	if config.IsFacebookEnabled() {
+		facebookLinks := GetOriginalFacebookLinks(message)
+		result = append(result, facebookLinks...)
+	}
 
 	return result
 }
