@@ -1,0 +1,322 @@
+#!/bin/bash
+
+# Set up browser access on the server for YouTube authentication
+# Solves IP-specific cookie validation issue
+
+echo "🖥️ Server Browser Setup for YouTube Authentication"
+echo "================================================="
+echo ""
+echo "⚠️ YouTube validates cookies against the IP address where they were created."
+echo "📍 Server IP: $(curl -s ifconfig.me 2>/dev/null || echo "Unknown")"
+echo ""
+
+# Get script directory
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+BOT_DIR="$(dirname "$SCRIPT_DIR")"
+
+echo "Choose your server browser method:"
+echo ""
+echo "1. 🖼️  VNC Server (recommended - full desktop)"
+echo "2. 🔄 X11 Forwarding (requires SSH with -X)"
+echo "3. 🤖 Headless browser automation"
+echo "4. 🌐 Browser-in-browser (NoVNC web interface)"
+echo "5. ❓ Help - explain each method"
+echo ""
+
+read -p "Select method (1-5): " method
+
+case $method in
+    1)
+        echo ""
+        echo "🖼️ VNC Server Setup"
+        echo "==================="
+        echo ""
+        echo "Installing VNC server and desktop environment..."
+        
+        # Install VNC and lightweight desktop
+        echo "📦 Installing packages..."
+        sudo apt update
+        sudo apt install -y tightvncserver xfce4 xfce4-goodies firefox-esr
+        
+        # Set up VNC
+        echo "🔧 Setting up VNC server..."
+        
+        # Create VNC startup script
+        mkdir -p ~/.vnc
+        cat > ~/.vnc/xstartup << 'EOF'
+#!/bin/bash
+xrdb $HOME/.Xresources
+startxfce4 &
+EOF
+        chmod +x ~/.vnc/xstartup
+        
+        echo ""
+        echo "🔑 VNC Password Setup"
+        echo "Set a password for VNC access:"
+        vncpasswd
+        
+        # Start VNC server
+        echo "🚀 Starting VNC server on display :1..."
+        vncserver :1 -geometry 1024x768 -depth 24
+        
+        echo ""
+        echo "✅ VNC Server is running!"
+        echo ""
+        echo "📱 To connect:"
+        echo "   1. Install VNC viewer on your local machine"
+        echo "   2. Connect to: $(curl -s ifconfig.me):5901"
+        echo "   3. Or via SSH tunnel: ssh -L 5901:localhost:5901 user@server"
+        echo "   4. Then connect to: localhost:5901"
+        echo ""
+        echo "🌐 In the VNC session:"
+        echo "   1. Open Firefox"
+        echo "   2. Go to YouTube and log in"
+        echo "   3. Install 'Get cookies.txt LOCALLY' extension"
+        echo "   4. Export cookies to $BOT_DIR/youtube_cookies.txt"
+        echo ""
+        echo "🛑 To stop VNC: vncserver -kill :1"
+        ;;
+        
+    2)
+        echo ""
+        echo "🔄 X11 Forwarding Setup"
+        echo "======================="
+        echo ""
+        echo "Installing X11 and Firefox..."
+        
+        # Install X11 and browser
+        sudo apt update
+        sudo apt install -y xorg firefox-esr xauth
+        
+        echo ""
+        echo "✅ X11 forwarding ready!"
+        echo ""
+        echo "📱 To use:"
+        echo "   1. Disconnect from SSH"
+        echo "   2. Reconnect with: ssh -X user@$(curl -s ifconfig.me)"
+        echo "   3. Run: firefox"
+        echo "   4. Browser will open on your local display"
+        echo "   5. Log into YouTube and export cookies"
+        echo ""
+        echo "🔧 If it doesn't work:"
+        echo "   - Check: echo \$DISPLAY"
+        echo "   - Test: xeyes (should show eyes on your screen)"
+        echo "   - Try: ssh -Y instead of ssh -X"
+        ;;
+        
+    3)
+        echo ""
+        echo "🤖 Headless Browser Automation"
+        echo "=============================="
+        echo ""
+        
+        # Install ChromeDriver if not present
+        if ! command -v chromedriver &> /dev/null; then
+            echo "📦 Installing ChromeDriver..."
+            "$SCRIPT_DIR/install-chromedriver"
+        fi
+        
+        echo "🐍 Creating automated login script..."
+        cat > "$BOT_DIR/auto_youtube_login.py" << 'EOF'
+#!/usr/bin/env python3
+
+import time
+import getpass
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+
+def setup_browser():
+    options = Options()
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
+    options.add_argument("--disable-gpu")
+    options.add_argument("--window-size=1920,1080")
+    options.add_argument("--user-data-dir=/tmp/chrome-profile")
+    
+    return webdriver.Chrome(options=options)
+
+def login_to_youtube():
+    print("🌐 Starting browser...")
+    driver = setup_browser()
+    
+    try:
+        print("📱 Opening YouTube...")
+        driver.get("https://accounts.google.com/signin")
+        
+        # Wait for email input
+        email_input = WebDriverWait(driver, 10).until(
+            EC.presence_of_element_located((By.ID, "identifierId"))
+        )
+        
+        # Get credentials
+        email = input("Enter your Google email: ")
+        password = getpass.getpass("Enter your Google password: ")
+        
+        # Enter email
+        email_input.send_keys(email)
+        next_button = driver.find_element(By.ID, "identifierNext")
+        next_button.click()
+        
+        # Wait for password input
+        password_input = WebDriverWait(driver, 10).until(
+            EC.element_to_be_clickable((By.NAME, "password"))
+        )
+        
+        time.sleep(1)
+        password_input.send_keys(password)
+        
+        # Click password next
+        password_next = driver.find_element(By.ID, "passwordNext")
+        password_next.click()
+        
+        # Wait for login success
+        print("⏳ Waiting for login...")
+        time.sleep(5)
+        
+        # Go to YouTube
+        driver.get("https://www.youtube.com")
+        time.sleep(3)
+        
+        # Export cookies
+        print("🍪 Extracting cookies...")
+        cookies = driver.get_cookies()
+        
+        # Save cookies in Netscape format
+        with open('/var/www/social-link-tg-bot/youtube_cookies.txt', 'w') as f:
+            f.write("# Netscape HTTP Cookie File\n")
+            f.write("# Generated by automated login\n\n")
+            
+            for cookie in cookies:
+                domain = cookie['domain']
+                flag = "TRUE" if cookie['domain'].startswith('.') else "FALSE"
+                path = cookie['path']
+                secure = "TRUE" if cookie.get('secure', False) else "FALSE"
+                expiry = int(cookie.get('expiry', 0))
+                name = cookie['name']
+                value = cookie['value']
+                
+                f.write(f"{domain}\t{flag}\t{path}\t{secure}\t{expiry}\t{name}\t{value}\n")
+        
+        print("✅ Cookies saved to youtube_cookies.txt")
+        
+        # Keep browser open for manual verification
+        print("🔍 Browser will stay open for 60 seconds for manual verification...")
+        print("📱 Check if you're logged into YouTube in the browser")
+        time.sleep(60)
+        
+    except Exception as e:
+        print(f"❌ Login failed: {e}")
+        print("💡 Try manual VNC method instead")
+    finally:
+        driver.quit()
+
+if __name__ == "__main__":
+    login_to_youtube()
+EOF
+        
+        chmod +x "$BOT_DIR/auto_youtube_login.py"
+        
+        echo ""
+        echo "🤖 Automated login script created!"
+        echo ""
+        echo "⚠️ SECURITY WARNING:"
+        echo "   - This will prompt for your Google credentials"
+        echo "   - Use a throwaway account for safety"
+        echo "   - Consider 2FA complications"
+        echo ""
+        echo "🚀 To run: python3 $BOT_DIR/auto_youtube_login.py"
+        ;;
+        
+    4)
+        echo ""
+        echo "🌐 Browser-in-Browser (NoVNC)"
+        echo "============================="
+        echo ""
+        echo "Installing web-based VNC..."
+        
+        # Install NoVNC and VNC
+        sudo apt update
+        sudo apt install -y tightvncserver xfce4 xfce4-goodies firefox-esr novnc websockify
+        
+        # Set up VNC
+        mkdir -p ~/.vnc
+        cat > ~/.vnc/xstartup << 'EOF'
+#!/bin/bash
+xrdb $HOME/.Xresources
+startxfce4 &
+EOF
+        chmod +x ~/.vnc/xstartup
+        
+        echo "🔑 Set VNC password:"
+        vncpasswd
+        
+        # Start VNC
+        vncserver :1 -geometry 1280x720 -depth 24
+        
+        # Start NoVNC
+        echo "🌐 Starting web VNC interface..."
+        nohup websockify --web=/usr/share/novnc/ 6080 localhost:5901 > /tmp/novnc.log 2>&1 &
+        
+        echo ""
+        echo "✅ Web VNC is running!"
+        echo ""
+        echo "🌐 Access browser at: http://$(curl -s ifconfig.me):6080/vnc.html"
+        echo "🔑 VNC Password: (the one you just set)"
+        echo ""
+        echo "📱 In the web browser:"
+        echo "   1. Click 'Connect'"
+        echo "   2. Open Firefox in the VNC session"
+        echo "   3. Go to YouTube and log in"
+        echo "   4. Export cookies to $BOT_DIR/youtube_cookies.txt"
+        ;;
+        
+    5)
+        echo ""
+        echo "❓ Method Explanations"
+        echo "====================="
+        echo ""
+        echo "1. 🖼️ VNC Server:"
+        echo "   - Full desktop environment"
+        echo "   - Access via VNC client"
+        echo "   - Most user-friendly"
+        echo "   - Works from any device"
+        echo ""
+        echo "2. 🔄 X11 Forwarding:"
+        echo "   - Forwards GUI over SSH"
+        echo "   - Requires X11 on local machine"
+        echo "   - Lightweight option"
+        echo "   - Can be slow over slow connections"
+        echo ""
+        echo "3. 🤖 Headless Automation:"
+        echo "   - Fully automated login"
+        echo "   - No GUI required"
+        echo "   - May trigger Google security"
+        echo "   - Use throwaway account"
+        echo ""
+        echo "4. 🌐 NoVNC Web:"
+        echo "   - Browser-based VNC"
+        echo "   - No VNC client needed"
+        echo "   - Access via web browser"
+        echo "   - Easy to use"
+        echo ""
+        echo "Recommendation: Use VNC (option 1) for most reliable results"
+        ;;
+        
+    *)
+        echo "❌ Invalid selection"
+        exit 1
+        ;;
+esac
+
+echo ""
+echo "🎯 After getting cookies from the server IP:"
+echo "   1. Test with: yt-dlp --cookies youtube_cookies.txt --dump-json 'https://www.youtube.com/watch?v=dQw4w9WgXcQ'"
+echo "   2. The bot will now use server-IP-authenticated cookies"
+echo ""
+echo "🔄 Manage VNC server:"
+echo "   Start: vncserver :1"
+echo "   Stop:  vncserver -kill :1"
+echo "   List:  vncserver -list"
