@@ -56,25 +56,38 @@ fi
 
 echo "🔍 Found Firefox profiles in: $FIREFOX_PROFILES"
 
-# Find the default profile or most recently used
+# Find the profile with cookies (prioritize most recent with cookies.sqlite)
 PROFILE_DIR=""
-if [ -f "$FIREFOX_PROFILES/profiles.ini" ]; then
-    # Try to find default profile
-    DEFAULT_PROFILE=$(grep -A2 "\[Profile0\]" "$FIREFOX_PROFILES/profiles.ini" | grep "Path=" | cut -d'=' -f2)
-    if [ -n "$DEFAULT_PROFILE" ]; then
-        PROFILE_DIR="$FIREFOX_PROFILES/$DEFAULT_PROFILE"
-    fi
-fi
 
-# If no default found, use the most recent profile
-if [ -z "$PROFILE_DIR" ] || [ ! -d "$PROFILE_DIR" ]; then
-    PROFILE_DIR=$(find "$FIREFOX_PROFILES" -maxdepth 1 -type d -name "*.default*" | head -1)
+# First, try to find profiles with cookies.sqlite
+PROFILES_WITH_COOKIES=$(find "$FIREFOX_PROFILES" -maxdepth 2 -name "cookies.sqlite" -type f | sed 's|/cookies.sqlite||' | sort -t/ -k2 -r)
+
+if [ -n "$PROFILES_WITH_COOKIES" ]; then
+    # Use the most recently modified profile with cookies
+    PROFILE_DIR=$(echo "$PROFILES_WITH_COOKIES" | head -1)
+    echo "🍪 Found profile with cookies: $(basename "$PROFILE_DIR")"
+else
+    # Fallback: try default profile from profiles.ini
+    if [ -f "$FIREFOX_PROFILES/profiles.ini" ]; then
+        DEFAULT_PROFILE=$(grep -A2 "\[Profile0\]" "$FIREFOX_PROFILES/profiles.ini" | grep "Path=" | cut -d'=' -f2)
+        if [ -n "$DEFAULT_PROFILE" ]; then
+            PROFILE_DIR="$FIREFOX_PROFILES/$DEFAULT_PROFILE"
+        fi
+    fi
+    
+    # Final fallback: any profile directory
+    if [ -z "$PROFILE_DIR" ] || [ ! -d "$PROFILE_DIR" ]; then
+        PROFILE_DIR=$(find "$FIREFOX_PROFILES" -maxdepth 1 -type d -name "*.default*" | head -1)
+    fi
 fi
 
 if [ -z "$PROFILE_DIR" ] || [ ! -d "$PROFILE_DIR" ]; then
     echo "❌ Could not find Firefox profile directory"
-    echo "Available profiles:"
+    echo "🔍 Available profiles:"
     ls -la "$FIREFOX_PROFILES/"
+    echo ""
+    echo "🍪 Searching for cookies files:"
+    find "$FIREFOX_PROFILES" -name "cookies.sqlite" -type f 2>/dev/null | head -5
     exit 1
 fi
 
