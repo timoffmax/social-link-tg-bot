@@ -17,9 +17,9 @@ if ! command -v firefox &> /dev/null; then
     exit 1
 fi
 
-# Try to find Firefox profile directory
+# Try to find Firefox profile directory (check snap locations too)
 FIREFOX_PROFILES=""
-for profile_root in ~/.mozilla/firefox ~/.mozilla/firefox-esr; do
+for profile_root in ~/snap/firefox/common/.mozilla/firefox ~/.mozilla/firefox ~/.mozilla/firefox-esr; do
     if [ -d "$profile_root" ]; then
         FIREFOX_PROFILES="$profile_root"
         break

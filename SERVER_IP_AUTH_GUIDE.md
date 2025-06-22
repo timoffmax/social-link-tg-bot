@@ -1,6 +1,6 @@
-# Server IP Authentication Guide
+# VNC Cookie Authentication Guide
 
-YouTube validates cookies against the IP address where they were created. This guide shows how to authenticate directly from your server IP.
+Many social media platforms validate cookies against the IP address where they were created. This guide shows how to extract authenticated cookies directly from your server IP using VNC.
 
 ## 🎯 The Problem
 
@@ -9,9 +9,11 @@ YouTube validates cookies against the IP address where they were created. This g
 - ✅ Cookies created on server work on server IP
 - 📍 **Your server IP:** `YOUR_SERVER_IP`
 
+**Affected Platforms:** YouTube, Twitter/X, TikTok, Instagram, Facebook, Reddit
+
 ## 🚀 Quick Solution: VNC Desktop
 
-**Fastest way to get YouTube cookies from server IP:**
+**Fastest way to get authenticated cookies from server IP:**
 
 ```bash
 ./bin/quick-vnc-setup
@@ -45,10 +47,10 @@ ssh -L 5901:localhost:5901 YOUR_USER@YOUR_SERVER_IP
 
 ### Get Cookies
 1. Firefox opens automatically in VNC
-2. Go to https://www.youtube.com
-3. Log in with Google account
-4. Install "Get cookies.txt LOCALLY" extension
-5. Export cookies → save as `youtube_cookies.txt`
+2. Navigate to desired social media platform (YouTube, Twitter, etc.)
+3. Log in with your account
+4. Run cookie extraction: `./bin/extract-firefox-cookies`
+5. Cookies automatically saved to appropriate file (e.g., `youtube_cookies.txt`)
 
 ### VNC Management
 ```bash
