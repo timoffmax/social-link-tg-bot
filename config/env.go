@@ -2,11 +2,8 @@ package config
 
 import (
 	"github.com/joho/godotenv"
-	"log"
-	"math/rand"
 	"os"
 	"strings"
-	"time"
 )
 
 const tgBotTokenKey = "TG_BOT_TOKEN"
