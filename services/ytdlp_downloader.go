@@ -197,8 +197,8 @@ func (yd *YtDlpDownloader) DownloadMedia(url string) ([]*MediaInfo, error) {
 	
 	log.Printf("Using output template: %s", outputTemplate)
 	
-	// Get list of proxies to try
-	proxies := config.GetYtDlpProxies()
+	// Get list of proxies to try based on platform
+	var proxies []string
 	
 	// Check if we have authentication cookies for this platform
 	hasAuthCookies := false
@@ -207,32 +207,48 @@ func (yd *YtDlpDownloader) DownloadMedia(url string) ([]*MediaInfo, error) {
 		if _, err := os.Stat(twitterCookiesPath); err == nil {
 			hasAuthCookies = true
 		}
+		proxies = config.GetYtDlpProxies()
 	} else if strings.Contains(url, "tiktok.com") {
 		tiktokCookiesPath := yd.getFilePath("tiktok_cookies.txt")
 		if _, err := os.Stat(tiktokCookiesPath); err == nil {
 			hasAuthCookies = true
 		}
+		proxies = config.GetYtDlpProxies()
 	} else if strings.Contains(url, "youtube.com") || strings.Contains(url, "youtu.be") {
 		youtubeCookiesPath := yd.getFilePath("youtube_cookies.txt")
 		if _, err := os.Stat(youtubeCookiesPath); err == nil {
 			hasAuthCookies = true
 		}
+		// For YouTube, use the new proxy manager for intelligent rotation
+		proxyManager := config.GetYouTubeProxyManager()
+		proxyConfigs := proxyManager.GetAllProxies()
+		for _, pc := range proxyConfigs {
+			proxies = append(proxies, pc.URL)
+		}
+		log.Printf("🎯 YouTube detected: Using %d SOCKS5 proxies with intelligent rotation", len(proxies))
+	} else {
+		// For other platforms, use general proxy configuration
+		proxies = config.GetYtDlpProxies()
 	}
 	
-	// If we have authentication cookies, prioritize direct connection
-	if hasAuthCookies {
-		log.Printf("Authentication cookies available - trying direct connection first")
-		proxies = []string{""} // Start with direct connection only
+	// For YouTube, always add direct connection as final fallback
+	if strings.Contains(url, "youtube.com") || strings.Contains(url, "youtu.be") {
+		proxies = append(proxies, "") // Direct connection as last resort
 	} else {
-		// For TikTok and YouTube without cookies, skip proxies and try direct connection first
-		if strings.Contains(url, "tiktok.com") || strings.Contains(url, "youtube.com") || strings.Contains(url, "youtu.be") {
-			proxies = []string{} // Start with no proxy for these platforms
+		// For other platforms with cookies, prioritize direct connection
+		if hasAuthCookies {
+			log.Printf("Authentication cookies available - trying direct connection first")
+			proxies = append([]string{""}, proxies...) // Direct connection first
+		} else {
+			// Add direct connection as fallback
+			proxies = append(proxies, "")
 		}
-		// Add empty string to try without proxy as fallback
-		proxies = append(proxies, "")
 	}
 	
 	var lastErr error
+	proxyManager := config.GetYouTubeProxyManager()
+	isYouTube := strings.Contains(url, "youtube.com") || strings.Contains(url, "youtu.be")
+	
 	for i, proxy := range proxies {
 		if proxy == "" {
 			log.Printf("Attempt %d/%d: Trying without proxy", i+1, len(proxies))
@@ -243,11 +259,20 @@ func (yd *YtDlpDownloader) DownloadMedia(url string) ([]*MediaInfo, error) {
 		// Try download with current proxy
 		result, err := yd.attemptDownload(url, outputTemplate, proxy)
 		if err == nil {
+			// Mark proxy as successful if it's YouTube
+			if isYouTube && proxy != "" {
+				proxyManager.MarkProxySuccess(proxy)
+			}
 			return result, nil
 		}
 		
 		lastErr = err
 		log.Printf("Download failed with proxy '%s': %v", proxy, err)
+		
+		// Mark proxy as failed if it's YouTube
+		if isYouTube && proxy != "" {
+			proxyManager.MarkProxyFailed(proxy)
+		}
 	}
 	
 	// Return the last error from yt-dlp attempts
@@ -269,8 +294,13 @@ func (yd *YtDlpDownloader) attemptDownload(url string, outputTemplate string, pr
 	safeArgs := make([]string, len(args))
 	copy(safeArgs, args)
 	for i := range safeArgs {
-		if i > 0 && (args[i-1] == "--password" || args[i-1] == "--username") {
-			safeArgs[i] = "***"
+		if i > 0 && (args[i-1] == "--password" || args[i-1] == "--username" || args[i-1] == "--proxy") {
+			if args[i-1] == "--proxy" && strings.Contains(args[i], "@") {
+				// Mask proxy credentials
+				safeArgs[i] = config.MaskProxyURL(args[i])
+			} else {
+				safeArgs[i] = "***"
+			}
 		}
 	}
 	log.Printf("Executing command: %s %v", yd.BinaryPath, safeArgs)
@@ -283,6 +313,29 @@ func (yd *YtDlpDownloader) attemptDownload(url string, outputTemplate string, pr
 	// yt-dlp can return error codes for non-critical failures like missing ffmpeg
 	downloadSuccess := false
 	if err != nil {
+		// Check for YouTube-specific errors that indicate proxy issues
+		isYouTube := strings.Contains(url, "youtube.com") || strings.Contains(url, "youtu.be")
+		if isYouTube {
+			// Bot detection errors
+			if strings.Contains(outputStr, "Sign in to confirm your age") ||
+			   strings.Contains(outputStr, "bot detection") ||
+			   strings.Contains(outputStr, "CAPTCHA") ||
+			   strings.Contains(outputStr, "429") || // Too Many Requests
+			   strings.Contains(outputStr, "403") { // Forbidden
+				log.Printf("🤖 YouTube bot detection or rate limit with proxy: %s", proxy)
+				return nil, fmt.Errorf("YouTube bot detection or rate limit")
+			}
+			
+			// Connection errors that might be proxy-related
+			if strings.Contains(outputStr, "Connection reset") ||
+			   strings.Contains(outputStr, "Connection refused") ||
+			   strings.Contains(outputStr, "timed out") ||
+			   strings.Contains(outputStr, "ProxyError") {
+				log.Printf("🔌 Connection error with proxy: %s", proxy)
+				return nil, fmt.Errorf("proxy connection error")
+			}
+		}
+		
 		// Check if the error is only due to missing ffmpeg (post-processing failure)
 		if (strings.Contains(outputStr, "ffmpeg not found") || 
 		    strings.Contains(outputStr, "Postprocessing: ffmpeg not found")) && 
@@ -1135,20 +1188,61 @@ func (yd *YtDlpDownloader) buildDownloadArgs(url string, outputTemplate string) 
 		
 		baseArgs = append(baseArgs, twitterArgs...)
 	} else if strings.Contains(url, "youtube.com") || strings.Contains(url, "youtu.be") {
-		// YouTube Shorts-specific args
+		// YouTube-specific args with enhanced cookie handling
 		youtubeArgs := []string{
-			"--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
 			"--referer", "https://www.youtube.com/",
 		}
 		
-		// Check for YouTube-specific cookies file
-		youtubeCookiesPath := yd.getFilePath("youtube_cookies.txt")
-		if _, err := os.Stat(youtubeCookiesPath); err == nil {
-			youtubeArgs = append(youtubeArgs, "--cookies", youtubeCookiesPath)
-			log.Printf("Using YouTube cookies for authentication: %s", youtubeCookiesPath)
+		// Try multiple cookie strategies based on yt-dlp FAQ recommendations
+		cookieSuccess := false
+		
+		// Strategy 1: Try browser cookie extraction (recommended by yt-dlp FAQ)
+		log.Printf("🍪 Trying browser cookie extraction for YouTube...")
+		browsers := []string{"chrome", "firefox", "edge", "safari"}
+		for _, browser := range browsers {
+			// Test if browser cookies are available
+			testCmd := exec.Command(yd.BinaryPath, "--cookies-from-browser", browser, "--dump-json", "--no-download", "https://www.youtube.com/watch?v=dQw4w9WgXcQ")
+			if err := testCmd.Run(); err == nil {
+				youtubeArgs = append(youtubeArgs, "--cookies-from-browser", browser)
+				log.Printf("✅ Using %s browser cookies for YouTube", browser)
+				cookieSuccess = true
+				break
+			}
+		}
+		
+		// Strategy 2: Fallback to cookie file if browser extraction fails
+		if !cookieSuccess {
+			youtubeCookiesPath := yd.getFilePath("youtube_cookies.txt")
+			if _, err := os.Stat(youtubeCookiesPath); err == nil {
+				youtubeArgs = append(youtubeArgs, "--cookies", youtubeCookiesPath)
+				log.Printf("📁 Using YouTube cookies file: %s", youtubeCookiesPath)
+				cookieSuccess = true
+			}
+		}
+		
+		// Strategy 3: Enhanced User-Agent matching
+		if cookieSuccess {
+			// Use a recent Chrome User-Agent that matches cookie source
+			youtubeArgs = append(youtubeArgs, "--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
 		} else {
-			log.Printf("⚠️ YouTube cookies not found at %s. YouTube downloads may fail due to bot detection.", youtubeCookiesPath)
-			log.Printf("To fix: Export YouTube cookies to youtube_cookies.txt file")
+			log.Printf("⚠️ No YouTube cookies available. Downloads may fail due to bot detection.")
+			log.Printf("💡 Recommended fixes:")
+			log.Printf("   1. Export fresh cookies: yt-dlp --cookies-from-browser chrome --cookies youtube_cookies.txt 'https://www.youtube.com'")
+			log.Printf("   2. Or use browser extension 'Get cookies.txt LOCALLY' after solving any CAPTCHA")
+			// Use basic User-Agent without cookies
+			youtubeArgs = append(youtubeArgs, "--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+		}
+		
+		// Strategy 4: IP address consistency (yt-dlp FAQ recommendation)
+		if sourceAddress := config.GetSourceAddress(); sourceAddress != "" {
+			youtubeArgs = append(youtubeArgs, "--source-address", sourceAddress)
+			log.Printf("🌐 Using source address for IP consistency: %s", sourceAddress)
+		}
+		
+		// Strategy 5: Rate limiting (YouTube best practices)
+		if delay := config.GetYouTubeDelay(); delay != "" {
+			youtubeArgs = append(youtubeArgs, "--sleep-interval", delay)
+			log.Printf("⏱️ Using %s second delay between requests for rate limiting", delay)
 		}
 		
 		baseArgs = append(baseArgs, youtubeArgs...)

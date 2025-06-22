@@ -1,0 +1,56 @@
+#!/bin/bash
+
+# Quick YouTube cookie input for CLI servers
+# Simple paste method
+
+echo "🍪 Quick YouTube Cookie Setup"
+echo "============================="
+echo ""
+echo "1. On your local computer:"
+echo "   - Go to YouTube and log in"
+echo "   - Install 'Get cookies.txt LOCALLY' browser extension"
+echo "   - Export cookies and copy the ENTIRE file content"
+echo ""
+echo "2. Paste the cookie data below and press Ctrl+D when done:"
+echo ""
+
+# Get script directory
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+BOT_DIR="$(dirname "$SCRIPT_DIR")"
+
+# Read cookie data from stdin
+cat > "$BOT_DIR/youtube_cookies.txt"
+
+# Validate the cookie file
+if [ -s "$BOT_DIR/youtube_cookies.txt" ]; then
+    echo ""
+    echo "✅ Cookie file created: $BOT_DIR/youtube_cookies.txt"
+    
+    # Check if it looks like a valid cookie file
+    if head -1 "$BOT_DIR/youtube_cookies.txt" | grep -q "Netscape HTTP Cookie File"; then
+        echo "✅ Valid cookie file format detected"
+        
+        # Test the cookies
+        echo "🧪 Testing cookies with YouTube..."
+        if yt-dlp --cookies "$BOT_DIR/youtube_cookies.txt" --dump-json --no-download "https://www.youtube.com/watch?v=dQw4w9WgXcQ" >/dev/null 2>&1; then
+            echo "✅ Cookies are working! YouTube authentication successful"
+            echo ""
+            echo "🎉 Setup complete! The bot can now download YouTube content."
+        else
+            echo "⚠️  Cookie test failed. Possible issues:"
+            echo "   - Cookies may be expired"
+            echo "   - Account may not be logged in"
+            echo "   - YouTube may be blocking the request"
+            echo ""
+            echo "💡 Try refreshing the cookies or using a different account"
+        fi
+    else
+        echo "⚠️  Cookie file format may be incorrect"
+        echo "Expected format: Netscape HTTP Cookie File"
+        echo "Actual first line: $(head -1 "$BOT_DIR/youtube_cookies.txt")"
+    fi
+else
+    echo "❌ No cookie data received. Please try again."
+    rm -f "$BOT_DIR/youtube_cookies.txt"
+    exit 1
+fi

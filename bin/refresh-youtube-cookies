@@ -1,0 +1,123 @@
+#!/bin/bash
+
+# Refresh YouTube cookies script
+# Based on latest yt-dlp recommendations (2025)
+
+echo "🍪 Refreshing YouTube cookies for social-link-bot..."
+echo "⚠️  WARNING: YouTube has strict policies. Use responsibly to avoid account bans."
+
+# Check if yt-dlp is available
+if ! command -v yt-dlp &> /dev/null; then
+    echo "❌ yt-dlp not found. Please install it first."
+    exit 1
+fi
+
+# Get the script directory
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+BOT_DIR="$(dirname "$SCRIPT_DIR")"
+
+echo "🔍 Bot directory: $BOT_DIR"
+
+# First, try the recommended manual incognito method
+echo ""
+echo "🥸 RECOMMENDED: Manual Incognito Cookie Export"
+echo "This is the safest method according to yt-dlp documentation:"
+echo ""
+echo "1. Open a private/incognito browser window"
+echo "2. Go to https://www.youtube.com and log in"
+echo "3. Navigate to https://www.youtube.com/robots.txt"
+echo "4. Install 'Get cookies.txt LOCALLY' extension"
+echo "5. Export cookies from that specific tab"
+echo "6. Save as $BOT_DIR/youtube_cookies.txt"
+echo "7. Close the private browsing window immediately"
+echo ""
+echo "🔗 Extension links:"
+echo "   Chrome: https://chrome.google.com/webstore/detail/get-cookiestxt-locally/cclelndahbckbenkjhflpdbgdldlbecc"
+echo "   Firefox: https://addons.mozilla.org/en-US/firefox/addon/cookies-txt/"
+echo ""
+
+read -p "Have you completed the manual steps above? (y/n): " manual_done
+
+if [ "$manual_done" = "y" ] || [ "$manual_done" = "Y" ]; then
+    if [ -f "$BOT_DIR/youtube_cookies.txt" ]; then
+        echo "🧪 Testing manually exported cookies..."
+        cd "$BOT_DIR"
+        if yt-dlp --cookies "youtube_cookies.txt" --dump-json --no-download "https://www.youtube.com/watch?v=dQw4w9WgXcQ" >/dev/null 2>&1; then
+            echo "✅ Manually exported cookies are working!"
+            echo "🎉 YouTube cookies successfully configured!"
+            exit 0
+        else
+            echo "❌ Manually exported cookies failed test"
+        fi
+    else
+        echo "❌ youtube_cookies.txt not found in $BOT_DIR"
+    fi
+fi
+
+echo ""
+echo "🔄 Trying automatic browser cookie extraction as fallback..."
+
+# Try to extract from different browsers (less reliable)
+browsers=("chrome" "firefox" "edge" "safari")
+success=false
+
+for browser in "${browsers[@]}"; do
+    echo "🌐 Trying to extract cookies from $browser..."
+    
+    # Test if browser cookies are available
+    if yt-dlp --cookies-from-browser "$browser" --dump-json --no-download "https://www.youtube.com/watch?v=dQw4w9WgXcQ" >/dev/null 2>&1; then
+        echo "✅ Found $browser cookies! Extracting to file..."
+        
+        # Extract cookies to file
+        cd "$BOT_DIR"
+        if yt-dlp --cookies-from-browser "$browser" --cookies "youtube_cookies_new.txt" "https://www.youtube.com/watch?v=dQw4w9WgXcQ" --dump-json --no-download >/dev/null 2>&1; then
+            # Backup old cookies if they exist
+            if [ -f "youtube_cookies.txt" ]; then
+                mv "youtube_cookies.txt" "youtube_cookies_backup.txt"
+                echo "📦 Backed up old cookies to youtube_cookies_backup.txt"
+            fi
+            
+            # Use new cookies
+            mv "youtube_cookies_new.txt" "youtube_cookies.txt"
+            echo "✅ Successfully updated YouTube cookies from $browser"
+            echo "📁 Cookie file: $BOT_DIR/youtube_cookies.txt"
+            
+            # Test the new cookies
+            echo "🧪 Testing new cookies..."
+            if yt-dlp --cookies "youtube_cookies.txt" --dump-json --no-download "https://www.youtube.com/watch?v=dQw4w9WgXcQ" >/dev/null 2>&1; then
+                echo "✅ New cookies are working!"
+                success=true
+                break
+            else
+                echo "⚠️ New cookies failed test, restoring backup..."
+                if [ -f "youtube_cookies_backup.txt" ]; then
+                    mv "youtube_cookies_backup.txt" "youtube_cookies.txt"
+                fi
+            fi
+        else
+            echo "❌ Failed to extract cookies from $browser"
+        fi
+    else
+        echo "❌ $browser cookies not available or not logged in"
+    fi
+done
+
+if [ "$success" = false ]; then
+    echo ""
+    echo "❌ All authentication methods failed"
+    echo ""
+    echo "💡 Troubleshooting:"
+    echo "1. Use a dedicated throwaway YouTube account to minimize ban risk"
+    echo "2. Ensure you're logged into YouTube in your browser"
+    echo "3. Try the manual incognito method (most reliable)"
+    echo "4. Check that you're not blocked by CAPTCHA"
+    echo ""
+    echo "⚠️  Note: YouTube aggressively blocks bot-like behavior"
+    echo "🛡️  The bot will still work without authentication for public videos"
+    exit 1
+fi
+
+echo ""
+echo "🎉 YouTube cookies successfully refreshed!"
+echo "⚠️  Remember: Use responsibly to avoid account penalties"
+echo "🤖 The bot will now use these fresh cookies for YouTube downloads"
