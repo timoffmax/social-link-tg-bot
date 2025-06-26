@@ -10,7 +10,6 @@ import (
 	"log"
 	"net"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -85,7 +84,8 @@ func (ube *UniversalBrowserExtractor) extractInstagramMedia(mediaURL string) ([]
 	// Extract username from URL
 	username := ExtractInstagramUsername(mediaURL)
 
-	html, err := ube.renderPageWithBrowser(mediaURL, 8*time.Second)
+	// Use longer timeout for Instagram carousels
+	html, err := ube.renderPageWithBrowserTimeout(mediaURL, 15*time.Second, 45*time.Second)
 	if err != nil {
 		return nil, err
 	}
@@ -100,11 +100,15 @@ func (ube *UniversalBrowserExtractor) extractInstagramMedia(mediaURL string) ([]
 
 	// Instagram image patterns (photos and carousels)
 	imagePatterns := []string{
-		// Main post images
+		// Modern Instagram image patterns with query parameters
+		`<img[^>]*src="(https://scontent[^"]*\.cdninstagram\.com/v/t51\.2885-15/[^"]+)"[^>]*>`,
+		`<img[^>]*src="(https://[^"]*\.cdninstagram\.com/v/t51\.2885-15/[^"]+)"[^>]*>`,
+		// Patterns with alt text (carousel images often have these)
+		`<img[^>]*alt="[^"]*"[^>]*src="(https://scontent[^"]*\.cdninstagram\.com/[^"]+)"`,
+		`<img[^>]*src="(https://scontent[^"]*\.cdninstagram\.com/[^"]+)"[^>]*alt="[^"]*"`,
+		// Legacy patterns with .jpg extension
 		`<img[^>]*src="(https://[^"]*\.cdninstagram\.com/[^"]*\.jpg[^"]*)"[^>]*alt="[^"]*"`,
 		`<img[^>]*alt="[^"]*"[^>]*src="(https://[^"]*\.cdninstagram\.com/[^"]*\.jpg[^"]*)"`,
-		// Carousel images
-		`img[^>]*src="(https://scontent[^"]*\.cdninstagram\.com[^"]*\.jpg[^"]*)"`,
 		// Alternative CDN patterns
 		`<img[^>]*src="(https://[^"]*instagram[^"]*\.com/[^"]*\.jpg[^"]*)"`,
 	}
@@ -1207,15 +1211,8 @@ func (ube *UniversalBrowserExtractor) is9GAGVideoHigherQuality(newURL, existingU
 
 // URL cleaning methods
 func (ube *UniversalBrowserExtractor) cleanInstagramURL(rawURL string) string {
-	// Remove Instagram URL parameters that might cause issues
-	if u, err := url.Parse(rawURL); err == nil {
-		q := u.Query()
-		q.Del("_nc_ht")
-		q.Del("_nc_cat")
-		q.Del("_nc_ohc")
-		u.RawQuery = q.Encode()
-		return u.String()
-	}
+	// For Instagram carousel images, we need to keep all parameters
+	// These parameters are often required for the image to load correctly
 	return rawURL
 }
 

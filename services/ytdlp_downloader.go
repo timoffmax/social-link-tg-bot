@@ -1,8 +1,10 @@
 package services
 
 import (
+	"compress/gzip"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -213,19 +215,19 @@ func (yd *YtDlpDownloader) DownloadMedia(url string) ([]*MediaInfo, error) {
 	// Check if we have authentication cookies for this platform
 	hasAuthCookies := false
 	if strings.Contains(url, "twitter.com") || strings.Contains(url, "x.com") {
-		twitterCookiesPath := yd.getFilePath("twitter_cookies.txt")
+		twitterCookiesPath := yd.getFilePath("cookies/twitter_cookies.txt")
 		if _, err := os.Stat(twitterCookiesPath); err == nil {
 			hasAuthCookies = true
 		}
 		proxies = config.GetYtDlpProxies()
 	} else if strings.Contains(url, "tiktok.com") {
-		tiktokCookiesPath := yd.getFilePath("tiktok_cookies.txt")
+		tiktokCookiesPath := yd.getFilePath("cookies/tiktok_cookies.txt")
 		if _, err := os.Stat(tiktokCookiesPath); err == nil {
 			hasAuthCookies = true
 		}
 		proxies = config.GetYtDlpProxies()
 	} else if strings.Contains(url, "youtube.com") || strings.Contains(url, "youtu.be") {
-		youtubeCookiesPath := yd.getFilePath("youtube_cookies.txt")
+		youtubeCookiesPath := yd.getFilePath("cookies/youtube_cookies.txt")
 		if _, err := os.Stat(youtubeCookiesPath); err == nil {
 			hasAuthCookies = true
 		}
@@ -669,25 +671,49 @@ func (yd *YtDlpDownloader) attemptDownload(url string, outputTemplate string, pr
 }
 
 func (yd *YtDlpDownloader) DownloadInstagramMedia(url string) ([]*MediaInfo, error) {
-	// For Instagram, try multiple strategies for different content types
+	// For Instagram carousels, prioritize browser extraction over direct download
 	
-	// Strategy 1: Try normal download first 
+	// Strategy 1: Try normal yt-dlp download for videos/single posts first
+	log.Printf("Trying yt-dlp for Instagram video/single posts")
 	mediaInfos, err := yd.DownloadMedia(url)
 	if err == nil && len(mediaInfos) > 0 {
 		return mediaInfos, nil
 	}
 	
-	// Strategy 2: Try thumbnails-only approach for image posts/carousels
-	log.Printf("Normal download failed, trying thumbnails-only approach for Instagram")
+	// Strategy 2: Universal headless browser for carousel images (prioritize over text-only)
+	log.Printf("yt-dlp failed, trying universal headless browser for Instagram carousels")
+	browserExtractor := NewUniversalBrowserExtractor(yd.WorkingDir, yd.TempDir)
+	browserMediaInfos, err := browserExtractor.ExtractMedia(url)
+	if err == nil && len(browserMediaInfos) > 0 {
+		// Check if we got actual media files (not just text)
+		hasActualMedia := false
+		for _, media := range browserMediaInfos {
+			if media.Type != "text" && media.Filename != "" {
+				hasActualMedia = true
+				break
+			}
+		}
+		if hasActualMedia {
+			return browserMediaInfos, nil
+		}
+		log.Printf("Browser extraction only returned text content, continuing to other strategies")
+	}
+	
+	// Strategy 3: Try thumbnails-only approach for metadata/description
+	log.Printf("Browser extraction failed, trying thumbnails-only approach for Instagram")
 	mediaInfos, err = yd.downloadThumbnailsOnly(url, "Instagram")
 	if err == nil && len(mediaInfos) > 0 {
 		return mediaInfos, nil
 	}
 	
-	// Strategy 3: Universal headless browser fallback
-	log.Printf("yt-dlp failed completely, trying universal headless browser for Instagram")
-	browserExtractor := NewUniversalBrowserExtractor(yd.WorkingDir, yd.TempDir)
-	return browserExtractor.ExtractMedia(url)
+	// Strategy 4: Try direct HTTP Instagram extraction as last resort for text
+	log.Printf("Browser extraction failed, trying direct Instagram text extraction")
+	directMediaInfos, err := yd.downloadInstagramDirect(url)
+	if err == nil && len(directMediaInfos) > 0 {
+		return directMediaInfos, nil
+	}
+	
+	return nil, fmt.Errorf("all Instagram extraction strategies failed")
 }
 
 func (yd *YtDlpDownloader) DownloadTikTokMedia(url string) ([]*MediaInfo, error) {
@@ -874,28 +900,28 @@ func (yd *YtDlpDownloader) downloadThumbnailsOnly(url string, platform string) (
 	// Add platform-specific authentication for thumbnails download
 	if strings.Contains(url, "twitter.com") || strings.Contains(url, "x.com") {
 		// Check for Twitter-specific cookies file
-		twitterCookiesPath := yd.getFilePath("twitter_cookies.txt")
+		twitterCookiesPath := yd.getFilePath("cookies/twitter_cookies.txt")
 		if _, err := os.Stat(twitterCookiesPath); err == nil {
 			args = append(args, "--cookies", twitterCookiesPath)
 			log.Printf("Using Twitter cookies for thumbnails download: %s", twitterCookiesPath)
 		}
 	} else if strings.Contains(url, "tiktok.com") {
 		// Check for TikTok-specific cookies file
-		tiktokCookiesPath := yd.getFilePath("tiktok_cookies.txt")
+		tiktokCookiesPath := yd.getFilePath("cookies/tiktok_cookies.txt")
 		if _, err := os.Stat(tiktokCookiesPath); err == nil {
 			args = append(args, "--cookies", tiktokCookiesPath)
 			log.Printf("Using TikTok cookies for thumbnails download: %s", tiktokCookiesPath)
 		}
 	} else if strings.Contains(url, "instagram.com") {
 		// Use general cookies file for Instagram
-		cookiesPath := yd.getFilePath("cookies.txt")
+		cookiesPath := yd.getFilePath("cookies/instagram_cookies.txt")
 		if _, err := os.Stat(cookiesPath); err == nil {
 			args = append(args, "--cookies", cookiesPath)
 			log.Printf("Using Instagram cookies for thumbnails download: %s", cookiesPath)
 		}
 	} else if strings.Contains(url, "reddit.com") {
 		// Check for Reddit-specific cookies file
-		redditCookiesPath := yd.getFilePath("reddit_cookies.txt")
+		redditCookiesPath := yd.getFilePath("cookies/reddit_cookies.txt")
 		if _, err := os.Stat(redditCookiesPath); err == nil {
 			args = append(args, "--cookies", redditCookiesPath)
 			log.Printf("Using Reddit cookies for thumbnails download: %s", redditCookiesPath)
@@ -1021,11 +1047,17 @@ func (yd *YtDlpDownloader) downloadThumbnailsOnly(url string, platform string) (
 	if len(mediaInfos) == 0 && tweetDescription != "" {
 		log.Printf("No media found, returning %s text content: %s", platform, tweetDescription)
 		
+		// For Instagram carousels, indicate that images are available via fixed-link
+		caption := tweetDescription
+		if strings.Contains(strings.ToLower(platform), "instagram") && strings.Contains(url, "/p/") {
+			caption = tweetDescription + "\n\n📸 View images: " + strings.Replace(url, "instagram.com", "instagramez.com", 1)
+		}
+		
 		// Create a text-only media item
 		textMediaInfo := &MediaInfo{
 			Type:     "text",
 			URL:      url,
-			Caption:  tweetDescription,
+			Caption:  caption,
 			Filename: "", // No file for text-only content
 		}
 		
@@ -1098,7 +1130,7 @@ func (yd *YtDlpDownloader) buildDownloadArgs(url string, outputTemplate string) 
 	}
 	
 	// Add cookies if available
-	cookiesPath := yd.getFilePath("cookies.txt")
+	cookiesPath := yd.getFilePath("cookies/instagram_cookies.txt")
 	if yd.cookiesExist() {
 		baseArgs = append(baseArgs, "--cookies", cookiesPath)
 	}
@@ -1138,7 +1170,7 @@ func (yd *YtDlpDownloader) buildDownloadArgs(url string, outputTemplate string) 
 		}
 		
 		// Check for TikTok-specific cookies file first
-		tiktokCookiesPath := yd.getFilePath("tiktok_cookies.txt")
+		tiktokCookiesPath := yd.getFilePath("cookies/tiktok_cookies.txt")
 		if _, err := os.Stat(tiktokCookiesPath); err == nil {
 			tiktokArgs = append(tiktokArgs, "--cookies", tiktokCookiesPath)
 			log.Printf("Using TikTok cookies for authentication: %s", tiktokCookiesPath)
@@ -1181,7 +1213,7 @@ func (yd *YtDlpDownloader) buildDownloadArgs(url string, outputTemplate string) 
 		baseArgs = newBaseArgs
 		
 		// Check for Twitter-specific cookies file first
-		twitterCookiesPath := yd.getFilePath("twitter_cookies.txt")
+		twitterCookiesPath := yd.getFilePath("cookies/twitter_cookies.txt")
 		if _, err := os.Stat(twitterCookiesPath); err == nil {
 			twitterArgs = append(twitterArgs, "--cookies", twitterCookiesPath)
 			log.Printf("Using Twitter cookies for authentication: %s", twitterCookiesPath)
@@ -1205,7 +1237,7 @@ func (yd *YtDlpDownloader) buildDownloadArgs(url string, outputTemplate string) 
 		
 		// Strategy 1: Use server-IP authenticated cookie file (highest priority)
 		cookieSuccess := false
-		youtubeCookiesPath := yd.getFilePath("youtube_cookies.txt")
+		youtubeCookiesPath := yd.getFilePath("cookies/youtube_cookies.txt")
 		if _, err := os.Stat(youtubeCookiesPath); err == nil {
 			youtubeArgs = append(youtubeArgs, "--cookies", youtubeCookiesPath)
 			log.Printf("🔥 Using server-IP authenticated YouTube cookies: %s", youtubeCookiesPath)
@@ -1275,7 +1307,7 @@ func (yd *YtDlpDownloader) buildDownloadArgs(url string, outputTemplate string) 
 		redditArgs = append(redditArgs, "--format", "fallback/dash-4+dash-7/dash-3+dash-7/dash-2+dash-7/best[filesize<50M]/best")
 		
 		// Check for Reddit-specific cookies file
-		redditCookiesPath := yd.getFilePath("reddit_cookies.txt")
+		redditCookiesPath := yd.getFilePath("cookies/reddit_cookies.txt")
 		if _, err := os.Stat(redditCookiesPath); err == nil {
 			redditArgs = append(redditArgs, "--cookies", redditCookiesPath)
 			log.Printf("Using Reddit cookies for authentication: %s", redditCookiesPath)
@@ -1295,7 +1327,7 @@ func (yd *YtDlpDownloader) buildDownloadArgs(url string, outputTemplate string) 
 		}
 		
 		// Check for Facebook-specific cookies file
-		facebookCookiesPath := yd.getFilePath("facebook_cookies.txt")
+		facebookCookiesPath := yd.getFilePath("cookies/facebook_cookies.txt")
 		if _, err := os.Stat(facebookCookiesPath); err == nil {
 			facebookArgs = append(facebookArgs, "--cookies", facebookCookiesPath)
 			log.Printf("Using Facebook cookies for authentication: %s", facebookCookiesPath)
@@ -1314,7 +1346,7 @@ func (yd *YtDlpDownloader) buildDownloadArgs(url string, outputTemplate string) 
 
 // cookiesExist checks if cookies file exists
 func (yd *YtDlpDownloader) cookiesExist() bool {
-	cookiesPath := yd.getFilePath("cookies.txt")
+	cookiesPath := yd.getFilePath("cookies/instagram_cookies.txt")
 	_, err := os.Stat(cookiesPath)
 	return err == nil
 }
@@ -1518,4 +1550,294 @@ func (yd *YtDlpDownloader) downloadRedditImagesDirectly(imageURLs []string, orig
 	}
 	
 	return mediaInfos, nil
+}
+
+// downloadInstagramDirect extracts Instagram content using direct HTTP requests to mobile Instagram
+func (yd *YtDlpDownloader) downloadInstagramDirect(url string) ([]*MediaInfo, error) {
+	log.Printf("🔍 Attempting direct Instagram extraction for: %s", url)
+	
+	// Try regular Instagram URL first (simpler approach)
+	log.Printf("📱 Trying direct Instagram URL: %s", url)
+	
+	// Create HTTP client with Instagram-compatible headers
+	client := &http.Client{
+		Timeout: 15 * time.Second,
+	}
+	
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %v", err)
+	}
+	
+	// Add Instagram mobile headers
+	req.Header.Set("User-Agent", "Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.0 Mobile/15E148 Safari/604.1")
+	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+	req.Header.Set("Accept-Language", "en-US,en;q=0.9")
+	req.Header.Set("Referer", "https://www.instagram.com/")
+	req.Header.Set("Sec-Fetch-Dest", "document")
+	req.Header.Set("Sec-Fetch-Mode", "navigate")
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	
+	// Add cookies if available
+	if cookieData, err := os.ReadFile(yd.getFilePath("cookies/instagram_cookies.txt")); err == nil {
+		// Parse cookies and add them to request
+		lines := strings.Split(string(cookieData), "\n")
+		for _, line := range lines {
+			if strings.HasPrefix(line, "#") || strings.TrimSpace(line) == "" {
+				continue
+			}
+			parts := strings.Split(line, "\t")
+			if len(parts) >= 7 {
+				cookieName := parts[5]
+				cookieValue := parts[6]
+				// Clean cookie value - remove quotes and handle escape sequences
+				cookieValue = strings.Trim(cookieValue, `"`)
+				cookieValue = strings.ReplaceAll(cookieValue, `\"`, `"`)
+				cookieValue = strings.ReplaceAll(cookieValue, `\054`, `,`)
+				cookieValue = strings.ReplaceAll(cookieValue, `\\`, `\`)
+				// Skip problematic cookie values that still contain invalid characters
+				if cookieName != "" && cookieValue != "" && !strings.Contains(cookieValue, `\`) {
+					req.AddCookie(&http.Cookie{Name: cookieName, Value: cookieValue})
+				}
+			}
+		}
+	}
+	
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch Instagram page: %v", err)
+	}
+	defer resp.Body.Close()
+	
+	if resp.StatusCode != 200 {
+		log.Printf("❌ Instagram HTTP error: %d %s", resp.StatusCode, resp.Status)
+		return nil, fmt.Errorf("Instagram returned HTTP %d", resp.StatusCode)
+	}
+	
+	log.Printf("✅ Successfully fetched Instagram page, Content-Length: %s", resp.Header.Get("Content-Length"))
+	
+	// Read response body - handle gzip compression
+	var body []byte
+	
+	if resp.Header.Get("Content-Encoding") == "gzip" {
+		gzipReader, err := gzip.NewReader(resp.Body)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create gzip reader: %v", err)
+		}
+		defer gzipReader.Close()
+		body, err = io.ReadAll(gzipReader)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read gzip response body: %v", err)
+		}
+		log.Printf("🗜️ Decompressed gzip content")
+	} else {
+		body, err = io.ReadAll(resp.Body)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read response body: %v", err)
+		}
+	}
+	
+	html := string(body)
+	log.Printf("📄 Retrieved HTML content: %d bytes", len(html))
+	
+	// Extract Instagram images using regex patterns
+	return yd.extractInstagramImagesFromHTML(html, url)
+}
+
+// extractInstagramImagesFromHTML extracts image URLs from Instagram HTML content
+func (yd *YtDlpDownloader) extractInstagramImagesFromHTML(html, originalURL string) ([]*MediaInfo, error) {
+	var mediaInfos []*MediaInfo
+	
+	// Modern Instagram image patterns for carousels
+	imagePatterns := []string{
+		// Instagram JSON embedded data patterns
+		`"display_url":"(https://[^"]*\.cdninstagram\.com/[^"]*)"`,
+		`"display_resources":\[.*?"src":"(https://[^"]*\.cdninstagram\.com/[^"]*)"`,
+		`"edge_sidecar_to_children".*?"display_url":"(https://[^"]*\.cdninstagram\.com/[^"]*)"`,
+		// Script tag patterns where Instagram embeds JSON
+		`window\._sharedData.*?"display_url":"(https://[^"]*\.cdninstagram\.com/[^"]*)"`,
+		// Meta tag patterns
+		`<meta property="og:image" content="(https://[^"]*\.cdninstagram\.com/[^"]*)"`,
+		// IMG tag patterns (backup)
+		`<img[^>]*src="(https://scontent[^"]*\.cdninstagram\.com/[^"]*)"`,
+		`<img[^>]*src="(https://[^"]*\.cdninstagram\.com/[^"]*)"`,
+		// Alternative CDN patterns
+		`"src":"(https://scontent[^"]*\.cdninstagram\.com/v/t51\.2885-15/[^"]*)"`,
+	}
+	
+	imageURLs := make(map[string]bool) // Use map to avoid duplicates
+	
+	for _, pattern := range imagePatterns {
+		re := regexp.MustCompile(pattern)
+		matches := re.FindAllStringSubmatch(html, -1)
+		for _, match := range matches {
+			if len(match) > 1 {
+				imageURL := strings.ReplaceAll(match[1], `\u0026`, "&")
+				if !imageURLs[imageURL] {
+					imageURLs[imageURL] = true
+				}
+			}
+		}
+	}
+	
+	if len(imageURLs) == 0 {
+		// Show a snippet of HTML for debugging
+		htmlSnippet := html
+		if len(html) > 500 {
+			htmlSnippet = html[:500]
+		}
+		log.Printf("❌ No Instagram images found with patterns. HTML snippet: %s", htmlSnippet)
+		return nil, fmt.Errorf("no Instagram images found in HTML")
+	}
+	
+	// Extract username and caption
+	username := yd.extractInstagramUsernameFromHTML(html)
+	caption := yd.extractInstagramCaptionFromHTML(html)
+	
+	log.Printf("🎯 Found %d Instagram images, but skipping direct download (Instagram blocks CDN access)", len(imageURLs))
+	
+	// Instead of downloading images (which Instagram blocks), return description as text content
+	// The browser extraction step will handle actual image extraction
+	
+	if len(imageURLs) > 0 && caption != "" {
+		// Return description as text content for Instagram carousels
+		textMediaInfo := &MediaInfo{
+			Type:     "text",
+			URL:      originalURL,
+			Caption:  FormatAuthorCaption("instagram", username, username, caption),
+			Filename: "", // No file for text-only content
+		}
+		mediaInfos = append(mediaInfos, textMediaInfo)
+		log.Printf("✅ Extracted Instagram carousel description: %s", caption)
+	}
+	
+	if len(mediaInfos) == 0 {
+		return nil, fmt.Errorf("no Instagram content found")
+	}
+	
+	log.Printf("🎉 Successfully downloaded %d Instagram images", len(mediaInfos))
+	return mediaInfos, nil
+}
+
+// extractInstagramUsernameFromHTML extracts username from Instagram HTML
+func (yd *YtDlpDownloader) extractInstagramUsernameFromHTML(html string) string {
+	patterns := []string{
+		`"username":"([^"]+)"`,
+		`@([a-zA-Z0-9._]+)`,
+	}
+	
+	for _, pattern := range patterns {
+		re := regexp.MustCompile(pattern)
+		if match := re.FindStringSubmatch(html); len(match) > 1 {
+			return match[1]
+		}
+	}
+	
+	return "unknown"
+}
+
+// extractInstagramCaptionFromHTML extracts caption from Instagram HTML
+func (yd *YtDlpDownloader) extractInstagramCaptionFromHTML(html string) string {
+	patterns := []string{
+		`"caption":"([^"]*)"`,
+		`"edge_media_to_caption":\{"edges":\[\{"node":\{"text":"([^"]*)"`,
+	}
+	
+	for _, pattern := range patterns {
+		re := regexp.MustCompile(pattern)
+		if match := re.FindStringSubmatch(html); len(match) > 1 {
+			// Unescape common escape sequences
+			caption := strings.ReplaceAll(match[1], `\"`, `"`)
+			caption = strings.ReplaceAll(caption, `\\`, `\`)
+			caption = strings.ReplaceAll(caption, `\n`, "\n")
+			return caption
+		}
+	}
+	
+	return ""
+}
+
+// downloadImageFromURL downloads an image from a direct URL
+func (yd *YtDlpDownloader) downloadImageFromURL(imageURL string, timestamp int64, index int) (string, error) {
+	// Create HTTP client with Instagram headers
+	client := &http.Client{
+		Timeout: 30 * time.Second,
+	}
+	
+	req, err := http.NewRequest("GET", imageURL, nil)
+	if err != nil {
+		return "", err
+	}
+	
+	// Add Instagram-compatible headers that match browser requests exactly
+	req.Header.Set("User-Agent", "Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.0 Mobile/15E148 Safari/604.1")
+	req.Header.Set("Referer", "https://www.instagram.com/")
+	req.Header.Set("Accept", "image/webp,image/apng,image/*,*/*;q=0.8")
+	req.Header.Set("Accept-Language", "en-US,en;q=0.9")
+	req.Header.Set("Accept-Encoding", "gzip, deflate, br")
+	req.Header.Set("Cache-Control", "no-cache")
+	req.Header.Set("Pragma", "no-cache")
+	req.Header.Set("Sec-Fetch-Dest", "image")
+	req.Header.Set("Sec-Fetch-Mode", "no-cors")
+	req.Header.Set("Sec-Fetch-Site", "cross-site")
+	
+	// Add Instagram cookies for authentication
+	if cookieData, err := os.ReadFile(yd.getFilePath("cookies/instagram_cookies.txt")); err == nil {
+		// Parse cookies and add them to request
+		lines := strings.Split(string(cookieData), "\n")
+		for _, line := range lines {
+			if strings.HasPrefix(line, "#") || strings.TrimSpace(line) == "" {
+				continue
+			}
+			parts := strings.Split(line, "\t")
+			if len(parts) >= 7 {
+				cookieName := parts[5]
+				cookieValue := parts[6]
+				// Clean cookie value - remove quotes and handle escape sequences
+				cookieValue = strings.Trim(cookieValue, `"`)
+				cookieValue = strings.ReplaceAll(cookieValue, `\"`, `"`)
+				cookieValue = strings.ReplaceAll(cookieValue, `\054`, `,`)
+				cookieValue = strings.ReplaceAll(cookieValue, `\\`, `\`)
+				// Skip problematic cookie values that still contain invalid characters
+				if cookieName != "" && cookieValue != "" && !strings.Contains(cookieValue, `\`) {
+					req.AddCookie(&http.Cookie{Name: cookieName, Value: cookieValue})
+				}
+			}
+		}
+	}
+	
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	
+	if resp.StatusCode != 200 {
+		// Try to read response body for more detailed error info
+		body, _ := io.ReadAll(resp.Body)
+		bodyPreview := string(body)
+		if len(bodyPreview) > 200 {
+			bodyPreview = bodyPreview[:200]
+		}
+		log.Printf("🔍 Instagram image download failed - Status: %d, Headers: %v, Body preview: %s", 
+			resp.StatusCode, resp.Header, bodyPreview)
+		return "", fmt.Errorf("HTTP %d: %s", resp.StatusCode, resp.Status)
+	}
+	
+	// Generate filename
+	filename := filepath.Join(yd.TempDir, fmt.Sprintf("%d_instagram_carousel_%d.jpg", timestamp, index))
+	
+	// Create and write file
+	file, err := os.Create(filename)
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+	
+	_, err = io.Copy(file, resp.Body)
+	if err != nil {
+		return "", err
+	}
+	
+	return filename, nil
 }

@@ -141,11 +141,13 @@ func (sc *StartupChecker) checkAuthFiles() {
 	log.Printf("\n🍪 Checking authentication files...")
 	
 	authFiles := map[string]string{
-		"Instagram":  "cookies.txt",
-		"Twitter/X":  "twitter_cookies.txt",
-		"TikTok":    "tiktok_cookies.txt",
-		"YouTube":   "youtube_cookies.txt",
-		"9GAG":      "9gag_cookies.txt",
+		"Instagram":  "cookies/instagram_cookies.txt",
+		"Twitter/X":  "cookies/twitter_cookies.txt",
+		"TikTok":    "cookies/tiktok_cookies.txt",
+		"YouTube":   "cookies/youtube_cookies.txt",
+		"Reddit":    "cookies/reddit_cookies.txt",
+		"Facebook":  "cookies/facebook_cookies.txt",
+		"9GAG":      "cookies/9gag_cookies.txt",
 	}
 	
 	for platform, filename := range authFiles {

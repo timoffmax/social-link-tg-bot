@@ -213,13 +213,14 @@ if [ "$PLATFORM" = "all" ]; then
         " > "$PLATFORM_TEMP"
         
         if [ -s "$PLATFORM_TEMP" ]; then
-            cat > "$BOT_DIR/${p}_cookies.txt" << EOF
+            mkdir -p "$BOT_DIR/cookies"
+            cat > "$BOT_DIR/cookies/${p}_cookies.txt" << EOF
 # Netscape HTTP Cookie File
 # ${p^} cookies extracted from Firefox on server - authenticated from server IP
 EOF
-            cat "$PLATFORM_TEMP" >> "$BOT_DIR/${p}_cookies.txt"
-            COOKIE_COUNT=$(grep -v '^#' "$BOT_DIR/${p}_cookies.txt" | wc -l)
-            echo "✅ ${p^}: $COOKIE_COUNT cookies extracted to ${p}_cookies.txt"
+            cat "$PLATFORM_TEMP" >> "$BOT_DIR/cookies/${p}_cookies.txt"
+            COOKIE_COUNT=$(grep -v '^#' "$BOT_DIR/cookies/${p}_cookies.txt" | wc -l)
+            echo "✅ ${p^}: $COOKIE_COUNT cookies extracted to cookies/${p}_cookies.txt"
         else
             echo "⚠️ ${p^}: No cookies found (not logged in?)"
         fi
@@ -228,12 +229,13 @@ EOF
     done
 else
     # Extract for specific platform
-    cat > "$BOT_DIR/${PLATFORM}_cookies.txt" << EOF
+    mkdir -p "$BOT_DIR/cookies"
+    cat > "$BOT_DIR/cookies/${PLATFORM}_cookies.txt" << EOF
 # Netscape HTTP Cookie File
 # ${PLATFORM^} cookies extracted from Firefox on server - authenticated from server IP
 EOF
-    cat "$TEMP_COOKIES" >> "$BOT_DIR/${PLATFORM}_cookies.txt"
-    echo "✅ ${PLATFORM^} cookies extracted to: $BOT_DIR/${PLATFORM}_cookies.txt"
+    cat "$TEMP_COOKIES" >> "$BOT_DIR/cookies/${PLATFORM}_cookies.txt"
+    echo "✅ ${PLATFORM^} cookies extracted to: $BOT_DIR/cookies/${PLATFORM}_cookies.txt"
 fi
 
 # Clean up
@@ -241,15 +243,15 @@ rm "$TEMP_COOKIES"
 
 # Show total cookie count
 if [ "$PLATFORM" != "all" ]; then
-    COOKIE_COUNT=$(grep -v '^#' "$BOT_DIR/${PLATFORM}_cookies.txt" | wc -l)
+    COOKIE_COUNT=$(grep -v '^#' "$BOT_DIR/cookies/${PLATFORM}_cookies.txt" | wc -l)
     echo "📊 Extracted $COOKIE_COUNT cookies"
 fi
 
 # Test the cookies
 if [ "$PLATFORM" = "youtube" ] || [ "$PLATFORM" = "all" ]; then
-    if [ -f "$BOT_DIR/youtube_cookies.txt" ] && [ -s "$BOT_DIR/youtube_cookies.txt" ]; then
+    if [ -f "$BOT_DIR/cookies/youtube_cookies.txt" ] && [ -s "$BOT_DIR/cookies/youtube_cookies.txt" ]; then
         echo "🧪 Testing YouTube cookies..."
-        if yt-dlp --cookies "$BOT_DIR/youtube_cookies.txt" --dump-json --no-download "https://www.youtube.com/watch?v=dQw4w9WgXcQ" >/dev/null 2>&1; then
+        if yt-dlp --cookies "$BOT_DIR/cookies/youtube_cookies.txt" --dump-json --no-download "https://www.youtube.com/watch?v=dQw4w9WgXcQ" >/dev/null 2>&1; then
             echo "✅ YouTube cookies are working!"
         else
             echo "⚠️ YouTube cookie test failed"

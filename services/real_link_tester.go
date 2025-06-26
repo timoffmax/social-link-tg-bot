@@ -37,6 +37,18 @@ func (rlt *RealLinkTester) GetRealTestLinks() []TestLink {
 			URL:         "https://www.instagram.com/reel/DKWY4HNM9RE/",
 			ExpectedTypes: []string{"video"},
 		},
+		{
+			Platform:    "Instagram",
+			Description: "Photo carousel/slideshow (User example 1)",
+			URL:         "https://www.instagram.com/p/DLPiKlmIxkU/?igsh=REDACTED",
+			ExpectedTypes: []string{"photo"},
+		},
+		{
+			Platform:    "Instagram",
+			Description: "Photo carousel/slideshow (User example 2)",
+			URL:         "https://www.instagram.com/p/DLCzxffM_yw/?igsh=REDACTED&img_index=4",
+			ExpectedTypes: []string{"photo"},
+		},
 		
 		// TikTok tests
 		{

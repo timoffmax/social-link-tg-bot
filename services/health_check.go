@@ -263,7 +263,7 @@ func (hc *HealthChecker) RunQuickCheck() bool {
 	log.Printf("✅ yt-dlp is available")
 	
 	// Check if we have cookies for major platforms
-	platforms := []string{"twitter_cookies.txt", "tiktok_cookies.txt", "youtube_cookies.txt"}
+	platforms := []string{"cookies/instagram_cookies.txt", "cookies/twitter_cookies.txt", "cookies/tiktok_cookies.txt", "cookies/youtube_cookies.txt", "cookies/reddit_cookies.txt", "cookies/facebook_cookies.txt", "cookies/9gag_cookies.txt"}
 	for _, cookieFile := range platforms {
 		if _, err := os.Stat(cookieFile); err == nil {
 			log.Printf("✅ Found %s", cookieFile)
