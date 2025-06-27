@@ -1723,6 +1723,9 @@ func (yd *YtDlpDownloader) extractInstagramImagesFromHTML(html, originalURL stri
 	seenURLs := make(map[string]bool)
 	foundHighQuality := false
 	
+	// Track unique media IDs to detect carousels vs single photos
+	uniqueMediaIDs := make(map[string]bool)
+	
 	for patternIndex, pattern := range imagePatterns {
 		re := regexp.MustCompile(pattern)
 		matches := re.FindAllStringSubmatch(html, -1)
@@ -1736,6 +1739,14 @@ func (yd *YtDlpDownloader) extractInstagramImagesFromHTML(html, originalURL stri
 				imageURL = strings.ReplaceAll(imageURL, `\u002F`, "/")
 				imageURL = strings.ReplaceAll(imageURL, `\u003D`, "=")
 				imageURL = strings.ReplaceAll(imageURL, `\u003F`, "?")
+				
+				// Extract media ID from cache key to detect unique images
+				mediaIDRe := regexp.MustCompile(`ig_cache_key=([^\\&]+)`)
+				if mediaIDMatch := mediaIDRe.FindStringSubmatch(imageURL); len(mediaIDMatch) > 1 {
+					mediaID := strings.TrimSuffix(mediaIDMatch[1], `\u00253D\u00253D`)
+					mediaID = strings.TrimSuffix(mediaID, `%3D%3D`)
+					uniqueMediaIDs[mediaID] = true
+				}
 				
 				// Add to slice if not seen before (preserves order)
 				if !seenURLs[imageURL] {
@@ -1787,6 +1798,45 @@ func (yd *YtDlpDownloader) extractInstagramImagesFromHTML(html, originalURL stri
 		return nil, fmt.Errorf("no Instagram images found in HTML")
 	}
 	
+	// Detect if this is a single photo or carousel based on unique media IDs
+	log.Printf("🔍 Found %d unique media IDs from %d total URLs", len(uniqueMediaIDs), len(imageURLs))
+	
+	// If we have multiple URLs but only 1-2 unique media IDs, it's likely a single photo with different sizes
+	if len(uniqueMediaIDs) <= 2 && len(imageURLs) > 5 {
+		log.Printf("📷 Detected single photo post with %d size variants, selecting best quality image", len(imageURLs))
+		
+		// Keep only the highest quality version
+		var bestImage string
+		for _, url := range imageURLs {
+			// Prefer high-res jpegr images
+			if strings.Contains(url, "dst-jpegr") && strings.Contains(url, "1440x") {
+				bestImage = url
+				break
+			}
+		}
+		
+		// Fallback to first high-quality image if no jpegr found
+		if bestImage == "" {
+			for _, url := range imageURLs {
+				if strings.Contains(url, "t51.2885-15") {
+					bestImage = url
+					break
+				}
+			}
+		}
+		
+		// Use first image as last resort
+		if bestImage == "" && len(imageURLs) > 0 {
+			bestImage = imageURLs[0]
+		}
+		
+		// Replace the array with just the best image
+		if bestImage != "" {
+			imageURLs = []string{bestImage}
+			log.Printf("✅ Selected best quality image from %d variants", len(seenURLs))
+		}
+	}
+	
 	// Extract username and caption
 	username := yd.extractInstagramUsernameFromHTML(html)
 	caption := yd.extractInstagramCaptionFromHTML(html)
@@ -1829,7 +1879,15 @@ func (yd *YtDlpDownloader) extractInstagramImagesFromHTML(html, originalURL stri
 	// Use the ordered slice directly (already in correct sequence)
 	imageURLSlice := imageURLs
 	
-	log.Printf("📊 Found %d Instagram images in correct order", len(imageURLs))
+	// Telegram has a limit of 10 images per media group
+	const telegramMediaGroupLimit = 10
+	if len(imageURLSlice) > telegramMediaGroupLimit {
+		log.Printf("⚠️ Instagram post has %d images, but Telegram only supports %d per message. Truncating.", 
+			len(imageURLSlice), telegramMediaGroupLimit)
+		imageURLSlice = imageURLSlice[:telegramMediaGroupLimit]
+	}
+	
+	log.Printf("📊 Found %d Instagram images in correct order", len(imageURLSlice))
 	
 	// Download each image directly from CDN
 	// Create unique timestamp + URL hash to prevent filename collisions between concurrent posts
@@ -1989,12 +2047,40 @@ func (yd *YtDlpDownloader) extractInstagramCaptionFromHTML(html string) string {
 	return ""
 }
 
-// decodeUnicodeEscapes converts Unicode escape sequences like \u26f5 to actual characters
+// decodeUnicodeEscapes converts Unicode escape sequences like \u26f5 and surrogate pairs like \ud83d\udcb0 to actual characters
 func (yd *YtDlpDownloader) decodeUnicodeEscapes(text string) string {
-	// Use regexp to find all \uXXXX patterns
+	// First handle surrogate pairs (\ud83d\udcb0 -> 💰)
+	surrogatePairRe := regexp.MustCompile(`\\u([dD][8-9a-bA-B][0-9a-fA-F]{2})\\u([dD][c-fC-F][0-9a-fA-F]{2})`)
+	
+	result := surrogatePairRe.ReplaceAllStringFunc(text, func(match string) string {
+		// Extract high and low surrogate hex codes
+		parts := strings.Split(match, `\u`)
+		if len(parts) != 3 {
+			return match
+		}
+		
+		highHex := parts[1]
+		lowHex := parts[2]
+		
+		// Convert to integers
+		high, err1 := strconv.ParseInt(highHex, 16, 32)
+		low, err2 := strconv.ParseInt(lowHex, 16, 32)
+		
+		if err1 != nil || err2 != nil {
+			return match
+		}
+		
+		// Convert surrogate pair to Unicode code point
+		// Formula: 0x10000 + ((high & 0x3FF) << 10) + (low & 0x3FF)
+		codePoint := 0x10000 + ((high&0x3FF)<<10) + (low&0x3FF)
+		
+		return string(rune(codePoint))
+	})
+	
+	// Then handle regular 4-digit Unicode escapes
 	re := regexp.MustCompile(`\\u([0-9a-fA-F]{4})`)
 	
-	result := re.ReplaceAllStringFunc(text, func(match string) string {
+	result = re.ReplaceAllStringFunc(result, func(match string) string {
 		// Extract the hex code (skip the \u prefix)
 		hexCode := match[2:]
 		
