@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 	
@@ -1961,6 +1962,9 @@ func (yd *YtDlpDownloader) extractInstagramCaptionFromHTML(html string) string {
 			tagRe := regexp.MustCompile(`<[^>]*>`)
 			caption = tagRe.ReplaceAllString(caption, "")
 			
+			// Decode Unicode escape sequences first (e.g., \u26f5 -> ⛵)
+			caption = yd.decodeUnicodeEscapes(caption)
+			
 			// Unescape HTML entities and escape sequences
 			caption = strings.ReplaceAll(caption, `&quot;`, `"`)
 			caption = strings.ReplaceAll(caption, `&#x26f5;`, `⛵`)
@@ -1983,6 +1987,28 @@ func (yd *YtDlpDownloader) extractInstagramCaptionFromHTML(html string) string {
 	}
 	
 	return ""
+}
+
+// decodeUnicodeEscapes converts Unicode escape sequences like \u26f5 to actual characters
+func (yd *YtDlpDownloader) decodeUnicodeEscapes(text string) string {
+	// Use regexp to find all \uXXXX patterns
+	re := regexp.MustCompile(`\\u([0-9a-fA-F]{4})`)
+	
+	result := re.ReplaceAllStringFunc(text, func(match string) string {
+		// Extract the hex code (skip the \u prefix)
+		hexCode := match[2:]
+		
+		// Convert hex string to integer
+		if codePoint, err := strconv.ParseInt(hexCode, 16, 32); err == nil {
+			// Convert to rune and then to string
+			return string(rune(codePoint))
+		}
+		
+		// If conversion fails, return the original match
+		return match
+	})
+	
+	return result
 }
 
 // downloadImageFromURL downloads an image from a direct URL with retry logic
