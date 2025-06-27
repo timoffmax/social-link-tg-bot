@@ -54,6 +54,38 @@ func GetNineGagPassword() string {
 	return os.Getenv("NINEGAG_PASSWORD")
 }
 
+// Proxy configuration with global and per-platform disable options
+func IsProxyEnabled() bool {
+	return getBoolEnv("ENABLE_PROXIES", true)
+}
+
+func IsProxyEnabledForPlatform(platform string) bool {
+	// Check global proxy setting first
+	if !IsProxyEnabled() {
+		return false
+	}
+	
+	// Check platform-specific proxy settings
+	switch platform {
+	case "youtube":
+		return getBoolEnv("ENABLE_YOUTUBE_PROXY", false) // YouTube defaults to no proxy
+	case "twitter":
+		return getBoolEnv("ENABLE_TWITTER_PROXY", true)
+	case "tiktok":
+		return getBoolEnv("ENABLE_TIKTOK_PROXY", true)
+	case "instagram":
+		return getBoolEnv("ENABLE_INSTAGRAM_PROXY", true)
+	case "facebook":
+		return getBoolEnv("ENABLE_FACEBOOK_PROXY", true)
+	case "reddit":
+		return getBoolEnv("ENABLE_REDDIT_PROXY", true)
+	case "9gag":
+		return getBoolEnv("ENABLE_9GAG_PROXY", true)
+	default:
+		return true // Default to enabled for unknown platforms
+	}
+}
+
 // Unified proxy configuration for all platforms except YouTube
 // YouTube uses direct connection with server-IP authenticated cookies
 func GetYtDlpProxies() []string {

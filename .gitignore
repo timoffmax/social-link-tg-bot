@@ -39,6 +39,8 @@ temp/
 
 # Authentication cookies (never commit these!)
 cookies.txt
+/cookies/
+cookies/*_cookies.txt
 
 /youtube_cookies.txt
 /9gag_cookies.txt

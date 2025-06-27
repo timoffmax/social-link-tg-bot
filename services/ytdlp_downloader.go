@@ -2,6 +2,7 @@ package services
 
 import (
 	"compress/gzip"
+	"crypto/md5"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -203,55 +204,91 @@ func (yd *YtDlpDownloader) DownloadMedia(url string) ([]*MediaInfo, error) {
 		return nil, fmt.Errorf("failed to create temp directory: %v", err)
 	}
 	
-	// Create unique filename with timestamp
+	// Create unique filename with timestamp + URL hash to prevent collisions between concurrent downloads
 	timestamp := time.Now().Unix()
-	outputTemplate := filepath.Join(yd.TempDir, fmt.Sprintf("%d_%%(title)s.%%(ext)s", timestamp))
+	urlHash := strings.ToUpper(fmt.Sprintf("%x", md5.Sum([]byte(url))))[:8]
+	outputTemplate := filepath.Join(yd.TempDir, fmt.Sprintf("%d_%s_%%(title)s.%%(ext)s", timestamp, urlHash))
 	
 	log.Printf("Using output template: %s", outputTemplate)
 	
 	// Get list of proxies to try based on platform
 	var proxies []string
 	
-	// Check if we have authentication cookies for this platform
+	// Determine platform
+	platform := ""
 	hasAuthCookies := false
+	
 	if strings.Contains(url, "twitter.com") || strings.Contains(url, "x.com") {
+		platform = "twitter"
 		twitterCookiesPath := yd.getFilePath("cookies/twitter_cookies.txt")
 		if _, err := os.Stat(twitterCookiesPath); err == nil {
 			hasAuthCookies = true
 		}
-		proxies = config.GetYtDlpProxies()
 	} else if strings.Contains(url, "tiktok.com") {
+		platform = "tiktok"
 		tiktokCookiesPath := yd.getFilePath("cookies/tiktok_cookies.txt")
 		if _, err := os.Stat(tiktokCookiesPath); err == nil {
 			hasAuthCookies = true
 		}
-		proxies = config.GetYtDlpProxies()
 	} else if strings.Contains(url, "youtube.com") || strings.Contains(url, "youtu.be") {
+		platform = "youtube"
 		youtubeCookiesPath := yd.getFilePath("cookies/youtube_cookies.txt")
 		if _, err := os.Stat(youtubeCookiesPath); err == nil {
 			hasAuthCookies = true
 		}
-		// For YouTube, use direct connection only (no proxies)
-		// Proxies cause more issues than they solve for YouTube
-		log.Printf("🎯 YouTube detected: Using direct connection with server-IP authenticated cookies")
-		proxies = []string{""} // Only direct connection
-	} else {
-		// For other platforms, use general proxy configuration
-		proxies = config.GetYtDlpProxies()
+	} else if strings.Contains(url, "instagram.com") {
+		platform = "instagram"
+		instagramCookiesPath := yd.getFilePath("cookies/instagram_cookies.txt")
+		if _, err := os.Stat(instagramCookiesPath); err == nil {
+			hasAuthCookies = true
+		}
+	} else if strings.Contains(url, "facebook.com") || strings.Contains(url, "fb.com") {
+		platform = "facebook"
+		facebookCookiesPath := yd.getFilePath("cookies/facebook_cookies.txt")
+		if _, err := os.Stat(facebookCookiesPath); err == nil {
+			hasAuthCookies = true
+		}
+	} else if strings.Contains(url, "reddit.com") {
+		platform = "reddit"
+		redditCookiesPath := yd.getFilePath("cookies/reddit_cookies.txt")
+		if _, err := os.Stat(redditCookiesPath); err == nil {
+			hasAuthCookies = true
+		}
+	} else if strings.Contains(url, "9gag.com") {
+		platform = "9gag"
+		ninegagCookiesPath := yd.getFilePath("cookies/9gag_cookies.txt")
+		if _, err := os.Stat(ninegagCookiesPath); err == nil {
+			hasAuthCookies = true
+		}
 	}
 	
-	// For YouTube, always add direct connection as final fallback
-	if strings.Contains(url, "youtube.com") || strings.Contains(url, "youtu.be") {
-		proxies = append(proxies, "") // Direct connection as last resort
+	// Check if proxies are enabled for this platform
+	useProxies := platform != "" && config.IsProxyEnabledForPlatform(platform)
+	
+	if useProxies {
+		proxies = config.GetYtDlpProxies()
+		log.Printf("🔄 Proxies enabled for %s", platform)
 	} else {
-		// For other platforms with cookies, prioritize direct connection
-		if hasAuthCookies {
-			log.Printf("Authentication cookies available - trying direct connection first")
-			proxies = append([]string{""}, proxies...) // Direct connection first
-		} else {
-			// Add direct connection as fallback
-			proxies = append(proxies, "")
+		proxies = []string{}
+		if platform != "" {
+			log.Printf("🚫 Proxies disabled for %s", platform)
 		}
+	}
+	
+	// Add direct connection strategy based on platform and cookies
+	if platform == "youtube" {
+		// YouTube always uses direct connection
+		log.Printf("🎯 YouTube detected: Using direct connection with server-IP authenticated cookies")
+		if len(proxies) == 0 {
+			proxies = []string{""} // Only direct connection
+		}
+	} else if hasAuthCookies {
+		// For other platforms with cookies, prioritize direct connection
+		log.Printf("Authentication cookies available for %s - trying direct connection first", platform)
+		proxies = append([]string{""}, proxies...) // Direct connection first
+	} else {
+		// Add direct connection as fallback
+		proxies = append(proxies, "")
 	}
 	
 	var lastErr error
@@ -878,9 +915,10 @@ func (yd *YtDlpDownloader) downloadThumbnailsOnly(url string, platform string) (
 		return nil, fmt.Errorf("failed to create temp directory: %v", err)
 	}
 	
-	// Create unique filename with timestamp
+	// Create unique filename with timestamp + URL hash to prevent collisions between concurrent downloads
 	timestamp := time.Now().Unix()
-	outputTemplate := filepath.Join(yd.TempDir, fmt.Sprintf("%d_%%(title)s.%%(ext)s", timestamp))
+	urlHash := strings.ToUpper(fmt.Sprintf("%x", md5.Sum([]byte(url))))[:8]
+	outputTemplate := filepath.Join(yd.TempDir, fmt.Sprintf("%d_%s_%%(title)s.%%(ext)s", timestamp, urlHash))
 	
 	log.Printf("Trying thumbnails-only download for %s with template: %s", platform, outputTemplate)
 	
@@ -1044,20 +1082,21 @@ func (yd *YtDlpDownloader) downloadThumbnailsOnly(url string, platform string) (
 	}
 	
 	// If no images found but we have text content, return it as a text media item
+	// EXCEPT for Instagram posts - let them fall through to direct HTML extraction
 	if len(mediaInfos) == 0 && tweetDescription != "" {
-		log.Printf("No media found, returning %s text content: %s", platform, tweetDescription)
-		
-		// For Instagram carousels, indicate that images are available via fixed-link
-		caption := tweetDescription
-		if strings.Contains(strings.ToLower(platform), "instagram") && strings.Contains(url, "/p/") {
-			caption = tweetDescription + "\n\n📸 View images: " + strings.Replace(url, "instagram.com", "instagramez.com", 1)
+		// For Instagram posts, don't create text-only content - let direct extraction try instead
+		if strings.Contains(strings.ToLower(platform), "instagram") {
+			log.Printf("No media found for Instagram, skipping text-only to allow direct extraction")
+			return nil, fmt.Errorf("no media found, letting direct extraction handle it")
 		}
 		
-		// Create a text-only media item
+		log.Printf("No media found, returning %s text content: %s", platform, tweetDescription)
+		
+		// Create a text-only media item for non-Instagram platforms
 		textMediaInfo := &MediaInfo{
 			Type:     "text",
 			URL:      url,
-			Caption:  caption,
+			Caption:  tweetDescription,
 			Filename: "", // No file for text-only content
 		}
 		
@@ -1640,6 +1679,12 @@ func (yd *YtDlpDownloader) downloadInstagramDirect(url string) ([]*MediaInfo, er
 	html := string(body)
 	log.Printf("📄 Retrieved HTML content: %d bytes", len(html))
 	
+	// DEBUG: Save HTML to file for inspection
+	htmlFile := filepath.Join(yd.TempDir, fmt.Sprintf("instagram_debug_%d.html", time.Now().Unix()))
+	if err := os.WriteFile(htmlFile, []byte(html), 0644); err == nil {
+		log.Printf("🔍 DEBUG: Saved HTML to %s for inspection", htmlFile)
+	}
+	
 	// Extract Instagram images using regex patterns
 	return yd.extractInstagramImagesFromHTML(html, url)
 }
@@ -1648,35 +1693,86 @@ func (yd *YtDlpDownloader) downloadInstagramDirect(url string) ([]*MediaInfo, er
 func (yd *YtDlpDownloader) extractInstagramImagesFromHTML(html, originalURL string) ([]*MediaInfo, error) {
 	var mediaInfos []*MediaInfo
 	
-	// Modern Instagram image patterns for carousels
+	// Simple Instagram image patterns - prioritize JSON script data over meta tags
 	imagePatterns := []string{
-		// Instagram JSON embedded data patterns
-		`"display_url":"(https://[^"]*\.cdninstagram\.com/[^"]*)"`,
-		`"display_resources":\[.*?"src":"(https://[^"]*\.cdninstagram\.com/[^"]*)"`,
-		`"edge_sidecar_to_children".*?"display_url":"(https://[^"]*\.cdninstagram\.com/[^"]*)"`,
-		// Script tag patterns where Instagram embeds JSON
-		`window\._sharedData.*?"display_url":"(https://[^"]*\.cdninstagram\.com/[^"]*)"`,
-		// Meta tag patterns
-		`<meta property="og:image" content="(https://[^"]*\.cdninstagram\.com/[^"]*)"`,
-		// IMG tag patterns (backup)
+		// HIGHEST PRIORITY: JSON script with image candidates array (contains all sizes including full-size)
+		// Note: URLs in JSON have escaped forward slashes (\/)
+		`"candidates":\[.*?"url":"(https:\\?/\\?/scontent[^"]*\.cdninstagram\.com\\?/v\\?/t51\.2885-15\\?/[^"]*)"`,
+		`"candidates":\[.*?"url":"(https:\\?/\\?/[^"]*\.cdninstagram\.com\\?/v\\?/t51\.2885-15\\?/[^"]*)"`,
+		// IMG tags (good quality)
 		`<img[^>]*src="(https://scontent[^"]*\.cdninstagram\.com/[^"]*)"`,
 		`<img[^>]*src="(https://[^"]*\.cdninstagram\.com/[^"]*)"`,
-		// Alternative CDN patterns
-		`"src":"(https://scontent[^"]*\.cdninstagram\.com/v/t51\.2885-15/[^"]*)"`,
+		// JSON patterns for display URLs
+		`"display_url":"(https://scontent[^"]*\.cdninstagram\.com/[^"]*)"`,
+		`"display_url":"(https://[^"]*\.cdninstagram\.com/[^"]*)"`,
+		`"url":"(https://scontent[^"]*\.cdninstagram\.com/[^"]*)"`,
+		`"src":"(https://scontent[^"]*\.cdninstagram\.com/[^"]*)"`,
+		`"display_src":"(https://scontent[^"]*\.cdninstagram\.com/[^"]*)"`,
+		// Additional JSON patterns
+		`"edge_sidecar_to_children".*?"display_url":"(https://[^"]*\.cdninstagram\.com/[^"]*)"`,
+		`window\._sharedData.*?"display_url":"(https://[^"]*\.cdninstagram\.com/[^"]*)"`,
+		`"display_resources":\[.*?"src":"(https://[^"]*\.cdninstagram\.com/[^"]*)"`,
+		// LOWEST PRIORITY: Meta tag (usually cropped)
+		`<meta property="og:image" content="(https://[^"]*\.cdninstagram\.com/[^"]*)"`,
+		`"thumbnail_src":"(https://scontent[^"]*\.cdninstagram\.com/[^"]*)"`,
 	}
 	
-	imageURLs := make(map[string]bool) // Use map to avoid duplicates
+	// Use slice to preserve order while avoiding duplicates
+	var imageURLs []string
+	seenURLs := make(map[string]bool)
+	foundHighQuality := false
 	
-	for _, pattern := range imagePatterns {
+	for patternIndex, pattern := range imagePatterns {
 		re := regexp.MustCompile(pattern)
 		matches := re.FindAllStringSubmatch(html, -1)
 		for _, match := range matches {
 			if len(match) > 1 {
-				imageURL := strings.ReplaceAll(match[1], `\u0026`, "&")
-				if !imageURLs[imageURL] {
-					imageURLs[imageURL] = true
+				imageURL := match[1]
+				// Decode HTML entities and Unicode escapes
+				imageURL = strings.ReplaceAll(imageURL, `\/`, "/") // JSON escaped forward slashes
+				imageURL = strings.ReplaceAll(imageURL, `\u0026`, "&")
+				imageURL = strings.ReplaceAll(imageURL, `&amp;`, "&")
+				imageURL = strings.ReplaceAll(imageURL, `\u002F`, "/")
+				imageURL = strings.ReplaceAll(imageURL, `\u003D`, "=")
+				imageURL = strings.ReplaceAll(imageURL, `\u003F`, "?")
+				
+				// Add to slice if not seen before (preserves order)
+				if !seenURLs[imageURL] {
+					seenURLs[imageURL] = true
+					imageURLs = append(imageURLs, imageURL)
+					
+					// Log which pattern found this URL and analyze quality
+					qualityType := "unknown"
+					if patternIndex < 2 {
+						// IMG tags are likely higher quality
+						qualityType = "HIGH (IMG tag)"
+						foundHighQuality = true
+					} else if strings.Contains(imageURL, "t51.2885-15") && strings.Contains(imageURL, "dst-jpegr") {
+						qualityType = "HIGH (t51.2885-15 + dst-jpegr)"
+						foundHighQuality = true
+					} else if strings.Contains(imageURL, "t51.2885-15") {
+						qualityType = "MEDIUM (t51.2885-15)"
+					} else if strings.Contains(imageURL, "t51.75761-15") {
+						qualityType = "LOW (t51.75761-15)"
+					} else if strings.Contains(imageURL, "display_url") || patternIndex < 7 {
+						qualityType = "MEDIUM (JSON)"
+					}
+					
+					log.Printf("🔍 Pattern %d found: %s | Quality: %s | URL: %s", patternIndex, imagePatterns[patternIndex][:50], qualityType, imageURL)
+					
+					// Mark if we found high quality URLs (first 8 patterns)
+					if patternIndex < 8 {
+						foundHighQuality = true
+					}
 				}
 			}
+		}
+		
+		// For Instagram carousels, we need to search through all high-priority patterns (0-4) 
+		// to find all images before stopping early
+		if foundHighQuality && len(imageURLs) > 0 && patternIndex >= 4 {
+			log.Printf("✅ Found %d high-quality image(s), stopping search at pattern %d", len(imageURLs), patternIndex)
+			break
 		}
 	}
 	
@@ -1694,28 +1790,121 @@ func (yd *YtDlpDownloader) extractInstagramImagesFromHTML(html, originalURL stri
 	username := yd.extractInstagramUsernameFromHTML(html)
 	caption := yd.extractInstagramCaptionFromHTML(html)
 	
-	log.Printf("🎯 Found %d Instagram images, but skipping direct download (Instagram blocks CDN access)", len(imageURLs))
-	
-	// Instead of downloading images (which Instagram blocks), return description as text content
-	// The browser extraction step will handle actual image extraction
-	
-	if len(imageURLs) > 0 && caption != "" {
-		// Return description as text content for Instagram carousels
-		textMediaInfo := &MediaInfo{
-			Type:     "text",
-			URL:      originalURL,
-			Caption:  FormatAuthorCaption("instagram", username, username, caption),
-			Filename: "", // No file for text-only content
+	// Try to get caption from yt-dlp description file (now with unique filenames to prevent collisions)
+	urlHash := strings.ToUpper(fmt.Sprintf("%x", md5.Sum([]byte(originalURL))))[:8]
+	descriptionPattern := filepath.Join(yd.TempDir, fmt.Sprintf("*_%s_*.description", urlHash))
+	if descFiles, err := filepath.Glob(descriptionPattern); err == nil && len(descFiles) > 0 {
+		if content, err := os.ReadFile(descFiles[0]); err == nil {
+			ytdlpCaption := strings.TrimSpace(string(content))
+			if len(ytdlpCaption) > 0 && len(ytdlpCaption) > len(caption) {
+				log.Printf("📝 Using yt-dlp description (%d chars) over HTML caption (%d chars)", len(ytdlpCaption), len(caption))
+				caption = ytdlpCaption
+			} else {
+				log.Printf("📝 HTML caption (%d chars) is better than yt-dlp description (%d chars)", len(caption), len(ytdlpCaption))
+			}
 		}
-		mediaInfos = append(mediaInfos, textMediaInfo)
-		log.Printf("✅ Extracted Instagram carousel description: %s", caption)
+	} else {
+		log.Printf("📝 No yt-dlp description file found for URL hash %s, using HTML caption", urlHash)
+	}
+	
+	log.Printf("📝 Using final caption: %.100s...", caption)
+	
+	log.Printf("🎯 Found %d Instagram images, attempting to download", len(imageURLs))
+	log.Printf("📝 Final caption length: %d chars", len(caption))
+	
+	// Debug: show all found URLs with quality assessment (now in correct order)
+	for idx, url := range imageURLs {
+		qualityType := "unknown"
+		if strings.Contains(url, "t51.2885-15") && strings.Contains(url, "dst-jpegr") {
+			qualityType = "HIGH (t51.2885-15 + dst-jpegr)"
+		} else if strings.Contains(url, "t51.2885-15") {
+			qualityType = "MEDIUM (t51.2885-15)"
+		} else if strings.Contains(url, "t51.75761-15") {
+			qualityType = "LOW (t51.75761-15)"
+		}
+		log.Printf("🔍 Image %d: %s | Quality: %s", idx+1, url, qualityType)
+	}
+	
+	// Use the ordered slice directly (already in correct sequence)
+	imageURLSlice := imageURLs
+	
+	log.Printf("📊 Found %d Instagram images in correct order", len(imageURLs))
+	
+	// Download each image directly from CDN
+	// Create unique timestamp + URL hash to prevent filename collisions between concurrent posts
+	timestamp := time.Now().Unix()
+	uniquePrefix := fmt.Sprintf("%d_%s", timestamp, urlHash)
+	
+	for i, imageURL := range imageURLSlice {
+		log.Printf("📥 Downloading Instagram image %d/%d: %s", i+1, len(imageURLSlice), imageURL)
+		
+		filename, err := yd.downloadImageFromURL(imageURL, uniquePrefix, i)
+		if err != nil {
+			log.Printf("❌ Failed to download Instagram image %d: %v", i+1, err)
+			// Continue with other images instead of failing completely
+			continue
+		}
+		
+		log.Printf("✅ Successfully downloaded Instagram image %d: %s", i+1, filename)
+		
+		// Create MediaInfo for downloaded image
+		mediaType := "photo"
+		mediaCaption := ""
+		if i == 0 && caption != "" {
+			// Add caption only to the first image to avoid repetition
+			mediaCaption = FormatAuthorCaption("instagram", username, username, caption)
+		}
+		
+		mediaInfo := &MediaInfo{
+			Type:     mediaType,
+			URL:      originalURL,
+			Caption:  mediaCaption,
+			Filename: filename,
+		}
+		mediaInfos = append(mediaInfos, mediaInfo)
+	}
+	
+	// If all downloads failed but we have caption or image URLs, return as fallback
+	if len(mediaInfos) == 0 {
+		if len(imageURLSlice) > 0 {
+			log.Printf("⚠️ All image downloads failed due to Instagram protection, returning URLs as text")
+			// Create a message with the direct image URLs for manual access
+			fallbackText := ""
+			if username != "" {
+				fallbackText += fmt.Sprintf("📷 @%s\n\n", username)
+			}
+			if caption != "" {
+				fallbackText += caption + "\n\n"
+			}
+			fallbackText += "📸 Instagram blocked direct download. Image URLs:\n"
+			for i, imageURL := range imageURLSlice {
+				fallbackText += fmt.Sprintf("%d. %s\n", i+1, imageURL)
+			}
+			
+			textMediaInfo := &MediaInfo{
+				Type:     "text",
+				URL:      originalURL,
+				Caption:  fallbackText,
+				Filename: "", // No file for text-only content
+			}
+			mediaInfos = append(mediaInfos, textMediaInfo)
+		} else if caption != "" {
+			log.Printf("⚠️ No images found, returning caption as text fallback")
+			textMediaInfo := &MediaInfo{
+				Type:     "text",
+				URL:      originalURL,
+				Caption:  FormatAuthorCaption("instagram", username, username, caption),
+				Filename: "", // No file for text-only content
+			}
+			mediaInfos = append(mediaInfos, textMediaInfo)
+		}
 	}
 	
 	if len(mediaInfos) == 0 {
-		return nil, fmt.Errorf("no Instagram content found")
+		return nil, fmt.Errorf("no Instagram content found and no images could be downloaded")
 	}
 	
-	log.Printf("🎉 Successfully downloaded %d Instagram images", len(mediaInfos))
+	log.Printf("🎉 Successfully processed %d Instagram media items", len(mediaInfos))
 	return mediaInfos, nil
 }
 
@@ -1739,27 +1928,89 @@ func (yd *YtDlpDownloader) extractInstagramUsernameFromHTML(html string) string 
 // extractInstagramCaptionFromHTML extracts caption from Instagram HTML
 func (yd *YtDlpDownloader) extractInstagramCaptionFromHTML(html string) string {
 	patterns := []string{
-		`"caption":"([^"]*)"`,
+		// HIGHEST PRIORITY: Author's first comment (the actual post caption)
+		// Pattern for the span containing the first author comment
+		`<span[^>]*><a[^>]*href="/[^/]+/"[^>]*>@[^<]+</a>\s*([^<]+(?:<br>[^<]*)*)</span>`,
+		`<span[^>]*><a[^>]*>@[^<]+</a>\s*([^<]+(?:<br>[^<]*)*)</span>`,
+		// JSON patterns for actual caption content
 		`"edge_media_to_caption":\{"edges":\[\{"node":\{"text":"([^"]*)"`,
+		`"caption":\{"text":"([^"]*)"`,
+		// Try meta description (often contains the full caption)
+		`<meta name="description" content="[^"]*: &quot;([^&]*?)&quot;`,
+		`<meta name="description" content="[^"]*: \"([^\"]*?)\"`,
+		// Fallback patterns
+		`"caption":"([^"]*)"`,
+		`"text":"([^"]*)".*"shortcode"`,
+		// LOWEST PRIORITY: Accessibility caption (usually generic)
+		`"accessibility_caption":"([^"]*)"`,
 	}
 	
 	for _, pattern := range patterns {
 		re := regexp.MustCompile(pattern)
 		if match := re.FindStringSubmatch(html); len(match) > 1 {
-			// Unescape common escape sequences
-			caption := strings.ReplaceAll(match[1], `\"`, `"`)
+			caption := match[1]
+			
+			// Clean up HTML tags and convert to readable text
+			caption = strings.ReplaceAll(caption, `<br>`, "\n")
+			caption = strings.ReplaceAll(caption, `<br/>`, "\n")
+			caption = strings.ReplaceAll(caption, `<br />`, "\n")
+			
+			// Remove remaining HTML tags but preserve content
+			linkRe := regexp.MustCompile(`<a[^>]*href="/([^/]+)/"[^>]*>@[^<]+</a>`)
+			caption = linkRe.ReplaceAllString(caption, "@$1")
+			tagRe := regexp.MustCompile(`<[^>]*>`)
+			caption = tagRe.ReplaceAllString(caption, "")
+			
+			// Unescape HTML entities and escape sequences
+			caption = strings.ReplaceAll(caption, `&quot;`, `"`)
+			caption = strings.ReplaceAll(caption, `&#x26f5;`, `⛵`)
+			caption = strings.ReplaceAll(caption, `&#x2013;`, `–`)
+			caption = strings.ReplaceAll(caption, `&#x2022;`, `•`)
+			caption = strings.ReplaceAll(caption, `&#064;`, `@`)
+			caption = strings.ReplaceAll(caption, `&amp;`, `&`)
+			caption = strings.ReplaceAll(caption, `&lt;`, `<`)
+			caption = strings.ReplaceAll(caption, `&gt;`, `>`)
+			caption = strings.ReplaceAll(caption, `\"`, `"`)
 			caption = strings.ReplaceAll(caption, `\\`, `\`)
 			caption = strings.ReplaceAll(caption, `\n`, "\n")
-			return caption
+			
+			// Clean up and return if we have substantial content
+			caption = strings.TrimSpace(caption)
+			if len(caption) > 5 { // Lower threshold for author comments
+				return caption
+			}
 		}
 	}
 	
 	return ""
 }
 
-// downloadImageFromURL downloads an image from a direct URL
-func (yd *YtDlpDownloader) downloadImageFromURL(imageURL string, timestamp int64, index int) (string, error) {
-	// Create HTTP client with Instagram headers
+// downloadImageFromURL downloads an image from a direct URL with retry logic
+func (yd *YtDlpDownloader) downloadImageFromURL(imageURL string, uniquePrefix string, index int) (string, error) {
+	const maxRetries = 3
+	var lastErr error
+	
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		if attempt > 1 {
+			log.Printf("🔄 Retry %d/%d for Instagram image download", attempt, maxRetries)
+			time.Sleep(time.Duration(attempt) * time.Second) // Progressive delay
+		}
+		
+		filename, err := yd.attemptImageDownload(imageURL, uniquePrefix, index)
+		if err == nil {
+			return filename, nil
+		}
+		
+		lastErr = err
+		log.Printf("❌ Download attempt %d failed: %v", attempt, err)
+	}
+	
+	return "", fmt.Errorf("failed after %d attempts: %v", maxRetries, lastErr)
+}
+
+// attemptImageDownload performs a single download attempt
+func (yd *YtDlpDownloader) attemptImageDownload(imageURL string, uniquePrefix string, index int) (string, error) {
+	// Create HTTP client that exactly mimics browser behavior
 	client := &http.Client{
 		Timeout: 30 * time.Second,
 	}
@@ -1769,17 +2020,14 @@ func (yd *YtDlpDownloader) downloadImageFromURL(imageURL string, timestamp int64
 		return "", err
 	}
 	
-	// Add Instagram-compatible headers that match browser requests exactly
-	req.Header.Set("User-Agent", "Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.0 Mobile/15E148 Safari/604.1")
-	req.Header.Set("Referer", "https://www.instagram.com/")
-	req.Header.Set("Accept", "image/webp,image/apng,image/*,*/*;q=0.8")
+	// Use minimal headers that browsers actually send for direct image requests
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+	req.Header.Set("Accept", "image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8")
 	req.Header.Set("Accept-Language", "en-US,en;q=0.9")
+	req.Header.Set("Referer", "https://www.instagram.com/")
 	req.Header.Set("Accept-Encoding", "gzip, deflate, br")
 	req.Header.Set("Cache-Control", "no-cache")
 	req.Header.Set("Pragma", "no-cache")
-	req.Header.Set("Sec-Fetch-Dest", "image")
-	req.Header.Set("Sec-Fetch-Mode", "no-cors")
-	req.Header.Set("Sec-Fetch-Site", "cross-site")
 	
 	// Add Instagram cookies for authentication
 	if cookieData, err := os.ReadFile(yd.getFilePath("cookies/instagram_cookies.txt")); err == nil {
@@ -1825,7 +2073,7 @@ func (yd *YtDlpDownloader) downloadImageFromURL(imageURL string, timestamp int64
 	}
 	
 	// Generate filename
-	filename := filepath.Join(yd.TempDir, fmt.Sprintf("%d_instagram_carousel_%d.jpg", timestamp, index))
+	filename := filepath.Join(yd.TempDir, fmt.Sprintf("%s_instagram_carousel_%d.jpg", uniquePrefix, index))
 	
 	// Create and write file
 	file, err := os.Create(filename)
