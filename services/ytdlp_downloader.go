@@ -739,8 +739,17 @@ func (yd *YtDlpDownloader) DownloadInstagramMedia(url string) ([]*MediaInfo, err
 		log.Printf("Browser extraction only returned text content, continuing to other strategies")
 	}
 	
-	// Strategy 3: Try Instagram oEmbed API (works without authentication)
-	log.Printf("Browser extraction failed, trying Instagram oEmbed API")
+	// Strategy 3: Try Instagram GraphQL API (sometimes works without authentication)
+	log.Printf("Browser extraction failed, trying Instagram GraphQL API")
+	graphqlExtractor := NewInstagramGraphQLExtractor(yd.TempDir)
+	graphqlMediaInfos, err := graphqlExtractor.ExtractViaGraphQL(url)
+	if err == nil && len(graphqlMediaInfos) > 0 {
+		return graphqlMediaInfos, nil
+	}
+	log.Printf("GraphQL extraction failed: %v", err)
+	
+	// Strategy 4: Try Instagram oEmbed API (often blocked now)
+	log.Printf("GraphQL failed, trying Instagram oEmbed API")
 	embedExtractor := NewInstagramEmbedExtractor(yd.TempDir)
 	embedMediaInfos, err := embedExtractor.ExtractViaEmbed(url)
 	if err == nil && len(embedMediaInfos) > 0 {
@@ -748,14 +757,14 @@ func (yd *YtDlpDownloader) DownloadInstagramMedia(url string) ([]*MediaInfo, err
 	}
 	log.Printf("oEmbed extraction failed: %v", err)
 	
-	// Strategy 4: Try thumbnails-only approach for metadata/description
+	// Strategy 5: Try thumbnails-only approach for metadata/description
 	log.Printf("oEmbed failed, trying thumbnails-only approach for Instagram")
 	mediaInfos, err = yd.downloadThumbnailsOnly(url, "Instagram")
 	if err == nil && len(mediaInfos) > 0 {
 		return mediaInfos, nil
 	}
 	
-	// Strategy 5: Try direct HTTP Instagram extraction only for non-video content
+	// Strategy 6: Try direct HTTP Instagram extraction only for non-video content
 	// Skip for reels/videos as they can't be extracted via HTML scraping
 	if !strings.Contains(url, "/reel/") && !strings.Contains(url, "/tv/") {
 		log.Printf("Thumbnails failed, trying direct Instagram text extraction")
