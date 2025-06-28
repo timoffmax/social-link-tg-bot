@@ -248,6 +248,22 @@ func processMediaDownload(url string, origChat *response.TgChat, origMessage *re
 			return
 		}
 		
+		// For Instagram, TikTok, and Twitter - try fixed link fallback
+		fixedUrl := getFixedUrl(url)
+		if fixedUrl != "" {
+			log.Printf("📎 Falling back to fixed link for %s", url)
+			fixedLinkMsg := payload.TgPlSendMessage{
+				ChatId:              origChat.Id,
+				ParseMode:           payload.ParseModeHTML,
+				Text:                fixedUrl,
+				ReplyToMessageId:    origMessage.MessageId,
+				DisableNotification: true,
+			}
+			response := message.NewSendMessage(fixedLinkMsg)
+			services.LogTelegramMessage(origChat.Id, "fixed-link-fallback", response != nil, "")
+			return
+		}
+		
 		// Send error message for other platforms
 		errorText := getErrorMessage(url)
 		if errorText != "" {

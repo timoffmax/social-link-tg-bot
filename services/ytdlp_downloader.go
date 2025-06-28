@@ -239,9 +239,11 @@ func (yd *YtDlpDownloader) DownloadMedia(url string) ([]*MediaInfo, error) {
 		}
 	} else if strings.Contains(url, "instagram.com") {
 		platform = "instagram"
-		instagramCookiesPath := yd.getFilePath("cookies/instagram_cookies.txt")
-		if _, err := os.Stat(instagramCookiesPath); err == nil {
-			hasAuthCookies = true
+		if config.IsCookiesEnabledForPlatform("instagram") {
+			instagramCookiesPath := yd.getFilePath("cookies/instagram_cookies.txt")
+			if _, err := os.Stat(instagramCookiesPath); err == nil {
+				hasAuthCookies = true
+			}
 		}
 	} else if strings.Contains(url, "facebook.com") || strings.Contains(url, "fb.com") {
 		platform = "facebook"
@@ -744,11 +746,16 @@ func (yd *YtDlpDownloader) DownloadInstagramMedia(url string) ([]*MediaInfo, err
 		return mediaInfos, nil
 	}
 	
-	// Strategy 4: Try direct HTTP Instagram extraction as last resort for text
-	log.Printf("Browser extraction failed, trying direct Instagram text extraction")
-	directMediaInfos, err := yd.downloadInstagramDirect(url)
-	if err == nil && len(directMediaInfos) > 0 {
-		return directMediaInfos, nil
+	// Strategy 4: Try direct HTTP Instagram extraction only for non-video content
+	// Skip for reels/videos as they can't be extracted via HTML scraping
+	if !strings.Contains(url, "/reel/") && !strings.Contains(url, "/tv/") {
+		log.Printf("Browser extraction failed, trying direct Instagram text extraction")
+		directMediaInfos, err := yd.downloadInstagramDirect(url)
+		if err == nil && len(directMediaInfos) > 0 {
+			return directMediaInfos, nil
+		}
+	} else {
+		log.Printf("Skipping direct extraction for Instagram reel/video - not supported")
 	}
 	
 	return nil, fmt.Errorf("all Instagram extraction strategies failed")
@@ -952,11 +959,13 @@ func (yd *YtDlpDownloader) downloadThumbnailsOnly(url string, platform string) (
 			log.Printf("Using TikTok cookies for thumbnails download: %s", tiktokCookiesPath)
 		}
 	} else if strings.Contains(url, "instagram.com") {
-		// Use general cookies file for Instagram
-		cookiesPath := yd.getFilePath("cookies/instagram_cookies.txt")
-		if _, err := os.Stat(cookiesPath); err == nil {
-			args = append(args, "--cookies", cookiesPath)
-			log.Printf("Using Instagram cookies for thumbnails download: %s", cookiesPath)
+		// Use general cookies file for Instagram if enabled
+		if config.IsCookiesEnabledForPlatform("instagram") {
+			cookiesPath := yd.getFilePath("cookies/instagram_cookies.txt")
+			if _, err := os.Stat(cookiesPath); err == nil {
+				args = append(args, "--cookies", cookiesPath)
+				log.Printf("Using Instagram cookies for thumbnails download: %s", cookiesPath)
+			}
 		}
 	} else if strings.Contains(url, "reddit.com") {
 		// Check for Reddit-specific cookies file
@@ -1169,11 +1178,7 @@ func (yd *YtDlpDownloader) buildDownloadArgs(url string, outputTemplate string) 
 		"--write-info-json",               // Write metadata for better handling
 	}
 	
-	// Add cookies if available
-	cookiesPath := yd.getFilePath("cookies/instagram_cookies.txt")
-	if yd.cookiesExist() {
-		baseArgs = append(baseArgs, "--cookies", cookiesPath)
-	}
+	// Note: Platform-specific cookies are added in the platform-specific sections below
 	
 	// Platform-specific optimizations
 	if strings.Contains(url, "instagram.com") {
@@ -1187,11 +1192,30 @@ func (yd *YtDlpDownloader) buildDownloadArgs(url string, outputTemplate string) 
 			"--add-header", "Accept:text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
 		}
 		
-		// Add Instagram credentials if available
-		if username := config.GetInstagramUsername(); username != "" {
-			if password := config.GetInstagramPassword(); password != "" {
-				log.Printf("Using Instagram credentials for user: %s", username)
-				instagramArgs = append(instagramArgs, "--username", username, "--password", password)
+		// Check for Instagram cookies if enabled
+		if config.IsCookiesEnabledForPlatform("instagram") {
+			instagramCookiesPath := yd.getFilePath("cookies/instagram_cookies.txt")
+			if _, err := os.Stat(instagramCookiesPath); err == nil {
+				instagramArgs = append(instagramArgs, "--cookies", instagramCookiesPath)
+				log.Printf("Using Instagram cookies for authentication: %s", instagramCookiesPath)
+			} else {
+				log.Printf("⚠️ Instagram cookies not found at %s. Using credentials if available.", instagramCookiesPath)
+				// Add Instagram credentials if available and cookies not found
+				if username := config.GetInstagramUsername(); username != "" {
+					if password := config.GetInstagramPassword(); password != "" {
+						log.Printf("Using Instagram credentials for user: %s", username)
+						instagramArgs = append(instagramArgs, "--username", username, "--password", password)
+					}
+				}
+			}
+		} else {
+			log.Printf("🚫 Instagram cookies disabled via configuration")
+			// Still try credentials if cookies are disabled
+			if username := config.GetInstagramUsername(); username != "" {
+				if password := config.GetInstagramPassword(); password != "" {
+					log.Printf("Using Instagram credentials for user: %s", username)
+					instagramArgs = append(instagramArgs, "--username", username, "--password", password)
+				}
 			}
 		}
 		
@@ -1618,29 +1642,34 @@ func (yd *YtDlpDownloader) downloadInstagramDirect(url string) ([]*MediaInfo, er
 	req.Header.Set("Sec-Fetch-Mode", "navigate")
 	req.Header.Set("Sec-Fetch-Site", "same-origin")
 	
-	// Add cookies if available
-	if cookieData, err := os.ReadFile(yd.getFilePath("cookies/instagram_cookies.txt")); err == nil {
-		// Parse cookies and add them to request
-		lines := strings.Split(string(cookieData), "\n")
-		for _, line := range lines {
-			if strings.HasPrefix(line, "#") || strings.TrimSpace(line) == "" {
-				continue
-			}
-			parts := strings.Split(line, "\t")
-			if len(parts) >= 7 {
-				cookieName := parts[5]
-				cookieValue := parts[6]
-				// Clean cookie value - remove quotes and handle escape sequences
-				cookieValue = strings.Trim(cookieValue, `"`)
-				cookieValue = strings.ReplaceAll(cookieValue, `\"`, `"`)
-				cookieValue = strings.ReplaceAll(cookieValue, `\054`, `,`)
-				cookieValue = strings.ReplaceAll(cookieValue, `\\`, `\`)
-				// Skip problematic cookie values that still contain invalid characters
-				if cookieName != "" && cookieValue != "" && !strings.Contains(cookieValue, `\`) {
-					req.AddCookie(&http.Cookie{Name: cookieName, Value: cookieValue})
+	// Add cookies if enabled and available
+	if config.IsCookiesEnabledForPlatform("instagram") {
+		if cookieData, err := os.ReadFile(yd.getFilePath("cookies/instagram_cookies.txt")); err == nil {
+			// Parse cookies and add them to request
+			lines := strings.Split(string(cookieData), "\n")
+			for _, line := range lines {
+				if strings.HasPrefix(line, "#") || strings.TrimSpace(line) == "" {
+					continue
+				}
+				parts := strings.Split(line, "\t")
+				if len(parts) >= 7 {
+					cookieName := parts[5]
+					cookieValue := parts[6]
+					// Clean cookie value - remove quotes and handle escape sequences
+					cookieValue = strings.Trim(cookieValue, `"`)
+					cookieValue = strings.ReplaceAll(cookieValue, `\"`, `"`)
+					cookieValue = strings.ReplaceAll(cookieValue, `\054`, `,`)
+					cookieValue = strings.ReplaceAll(cookieValue, `\\`, `\`)
+					// Skip problematic cookie values that still contain invalid characters
+					if cookieName != "" && cookieValue != "" && !strings.Contains(cookieValue, `\`) {
+						req.AddCookie(&http.Cookie{Name: cookieName, Value: cookieValue})
+					}
 				}
 			}
+			log.Printf("📦 Added Instagram cookies to direct HTTP request")
 		}
+	} else {
+		log.Printf("🚫 Instagram cookies disabled for direct extraction")
 	}
 	
 	resp, err := client.Do(req)
