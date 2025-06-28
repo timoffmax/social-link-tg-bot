@@ -739,17 +739,26 @@ func (yd *YtDlpDownloader) DownloadInstagramMedia(url string) ([]*MediaInfo, err
 		log.Printf("Browser extraction only returned text content, continuing to other strategies")
 	}
 	
-	// Strategy 3: Try thumbnails-only approach for metadata/description
-	log.Printf("Browser extraction failed, trying thumbnails-only approach for Instagram")
+	// Strategy 3: Try Instagram oEmbed API (works without authentication)
+	log.Printf("Browser extraction failed, trying Instagram oEmbed API")
+	embedExtractor := NewInstagramEmbedExtractor(yd.TempDir)
+	embedMediaInfos, err := embedExtractor.ExtractViaEmbed(url)
+	if err == nil && len(embedMediaInfos) > 0 {
+		return embedMediaInfos, nil
+	}
+	log.Printf("oEmbed extraction failed: %v", err)
+	
+	// Strategy 4: Try thumbnails-only approach for metadata/description
+	log.Printf("oEmbed failed, trying thumbnails-only approach for Instagram")
 	mediaInfos, err = yd.downloadThumbnailsOnly(url, "Instagram")
 	if err == nil && len(mediaInfos) > 0 {
 		return mediaInfos, nil
 	}
 	
-	// Strategy 4: Try direct HTTP Instagram extraction only for non-video content
+	// Strategy 5: Try direct HTTP Instagram extraction only for non-video content
 	// Skip for reels/videos as they can't be extracted via HTML scraping
 	if !strings.Contains(url, "/reel/") && !strings.Contains(url, "/tv/") {
-		log.Printf("Browser extraction failed, trying direct Instagram text extraction")
+		log.Printf("Thumbnails failed, trying direct Instagram text extraction")
 		directMediaInfos, err := yd.downloadInstagramDirect(url)
 		if err == nil && len(directMediaInfos) > 0 {
 			return directMediaInfos, nil
@@ -1184,12 +1193,22 @@ func (yd *YtDlpDownloader) buildDownloadArgs(url string, outputTemplate string) 
 	if strings.Contains(url, "instagram.com") {
 		// Instagram-specific args with enhanced anti-blocking
 		instagramArgs := []string{
-			"--user-agent", "Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.0 Mobile/15E148 Safari/604.1",
+			// Use a more realistic mobile user agent
+			"--user-agent", "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 Instagram 300.0.0.0.0 (iPhone13,2; iOS 17_0; en_US; en-US; scale=3.00; 1170x2532; 520433936)",
 			"--referer", "https://www.instagram.com/",
 			"--no-check-certificate",
-			"--extractor-args", "instagram:api_version=v1",  // Use older API
+			// Try different API approaches
+			"--extractor-args", "instagram:api=graphql",  // Try GraphQL API
+			// Add more realistic headers
 			"--add-header", "Accept-Language:en-US,en;q=0.9",
-			"--add-header", "Accept:text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+			"--add-header", "Accept:text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+			"--add-header", "X-IG-App-ID:936619743392459",  // Instagram web app ID
+			"--add-header", "X-ASBD-ID:129477",
+			"--add-header", "X-IG-WWW-Claim:0",
+			"--add-header", "X-Requested-With:XMLHttpRequest",
+			// Add delay to avoid rate limiting
+			"--sleep-requests", "2",
+			"--sleep-interval", "3",
 		}
 		
 		// Check for Instagram cookies if enabled
