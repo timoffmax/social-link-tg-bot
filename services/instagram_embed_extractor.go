@@ -75,7 +75,22 @@ func (e *InstagramEmbedExtractor) ExtractViaEmbed(instagramURL string) ([]*Media
 		ThumbnailHeight  int    `json:"thumbnail_height"`
 	}
 	
-	if err := json.NewDecoder(resp.Body).Decode(&embedData); err != nil {
+	// Read the response body
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %v", err)
+	}
+	
+	// Check if response is HTML (login page)
+	if strings.Contains(string(body), "<!DOCTYPE") || strings.Contains(string(body), "<html") {
+		log.Printf("❌ oEmbed API returned HTML instead of JSON (likely login page)")
+		return nil, fmt.Errorf("oEmbed API blocked - returned HTML")
+	}
+	
+	// Try to parse as JSON
+	if err := json.Unmarshal(body, &embedData); err != nil {
+		log.Printf("❌ Failed to parse oEmbed response: %v", err)
+		log.Printf("Response preview: %s", string(body[:min(200, len(body))]))
 		return nil, fmt.Errorf("failed to parse embed data: %v", err)
 	}
 	
@@ -173,6 +188,14 @@ func detectMediaTypeFromURL(url string) string {
 		return "video"
 	}
 	return "photo"
+}
+
+// min returns the minimum of two integers
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 // downloadFile downloads a file from URL and saves it to tempDir
