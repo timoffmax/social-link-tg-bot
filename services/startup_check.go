@@ -196,28 +196,38 @@ func (sc *StartupChecker) printPlatformSupport() {
 		FixedLink   string
 	}{
 		{
-			Name:      "Instagram",
-			Supported: []string{"Photos", "Videos", "Reels", "Carousels", "Stories"},
+			Name:      "📷 Instagram",
+			Supported: []string{"Photos", "Videos", "Albums (limited support)"},
 			FixedLink: "instagramez.com",
 		},
 		{
-			Name:      "TikTok",
-			Supported: []string{"Videos", "Photo slideshows"},
+			Name:      "🎵 TikTok",
+			Supported: []string{"Videos", "Photo Slideshows"},
 			FixedLink: "vxtiktok.com",
 		},
 		{
-			Name:      "Twitter/X",
-			Supported: []string{"Photos", "Videos", "GIFs", "Text"},
+			Name:      "🐦 Twitter/X",
+			Supported: []string{"Photos", "Videos", "GIFs"},
 			FixedLink: "fixupx.com",
 		},
 		{
-			Name:      "YouTube",
-			Supported: []string{"Shorts", "Regular videos (with size limit)"},
+			Name:      "📺 YouTube",
+			Supported: []string{"Videos", "Shorts"},
 			FixedLink: "none",
 		},
 		{
-			Name:      "9GAG",
-			Supported: []string{"Photos", "Videos (WebM → MP4 conversion)"},
+			Name:      "🔴 Reddit",
+			Supported: []string{"Videos", "Images", "Galleries"},
+			FixedLink: "none",
+		},
+		{
+			Name:      "👥 Facebook",
+			Supported: []string{"Videos", "Photos"},
+			FixedLink: "none",
+		},
+		{
+			Name:      "😂 9GAG",
+			Supported: []string{"Videos", "Images", "GIFs"},
 			FixedLink: "none",
 		},
 	}

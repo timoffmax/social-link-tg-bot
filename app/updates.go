@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"github.com/timoffmax/social-link-bot/model/api"
 	"github.com/timoffmax/social-link-bot/model/api/request/message"
 	"github.com/timoffmax/social-link-bot/model/api/request/payload"
 	"github.com/timoffmax/social-link-bot/model/api/response"
@@ -101,7 +102,7 @@ func processRecentUpdates(offset int, isFirstRun bool) *response.TgUpdate {
 func getRecentUpdates(offset int) []*response.TgUpdate {
 	updates := message.NewGetUpdates(payload.TgPlGetUpdates{
 		Offset:         offset,
-		AllowedUpdates: []string{"message"},
+		AllowedUpdates: []string{"message", "callback_query"},
 		Timeout:        5,  // Short polling timeout (5 seconds) for faster response to new messages
 		Limit:          100, // Get up to 100 updates at once
 	})
@@ -127,6 +128,7 @@ func processUpdate(upd *response.TgUpdate) {
 	var origUser response.TgUser
 	var origChat response.TgChat
 
+	// Handle regular messages
 	if 0 != upd.Message.MessageId {
 		origMessage = upd.Message
 		origUser = origMessage.From
@@ -135,7 +137,20 @@ func processUpdate(upd *response.TgUpdate) {
 		log.Printf("Original message text: %s", origMessage.Text)
 	}
 
+	// Handle callback queries (button presses)
+	if upd.CallbackQuery.Id != "" {
+		log.Printf("📱 Processing callback query: %s from user %d", upd.CallbackQuery.Data, upd.CallbackQuery.From.Id)
+		handleCallbackQuery(&upd.CallbackQuery)
+		return
+	}
+
 	if 0 == origUser.Id {
+		return
+	}
+
+	// Handle bot commands first (before processing social media links)
+	if strings.HasPrefix(origMessage.Text, "/") {
+		handleBotCommand(&origMessage, &origChat, &origUser)
 		return
 	}
 
@@ -182,6 +197,11 @@ func processUpdate(upd *response.TgUpdate) {
 		}
 	}
 
+	// Check daily media limit before processing
+	if shouldEnforceLimit(int64(origUser.Id), origChat.Id, origUser.Username, origMessage.MessageId) {
+		return
+	}
+	
 	// Process social media links concurrently for better performance
 	if len(socialLinks) == 1 {
 		// Single link - process directly (no need for goroutine overhead)
@@ -343,14 +363,14 @@ func processMediaDownload(url string, origChat *response.TgChat, origMessage *re
 	// Send photos as a media group if there are multiple photos
 	if len(photos) > 1 {
 		log.Printf("Sending %d photos as media group", len(photos))
-		err := sendPhotosAsMediaGroup(photos, origChat, origMessage)
+		err := sendPhotosAsMediaGroup(photos, origChat, origMessage, url)
 		if err != nil {
 			log.Printf("Failed to send photos as media group: %v", err)
 			// Fallback: send photos individually
 			log.Printf("Fallback: sending photos individually")
 			for i, photoInfo := range photos {
 				log.Printf("Sending photo %d/%d: %s", i+1, len(photos), photoInfo.Filename)
-				err := sendMediaFile(photoInfo, origChat, origMessage)
+				err := sendMediaFile(photoInfo, origChat, origMessage, url)
 				if err != nil {
 					log.Printf("Failed to send photo file %s: %v", photoInfo.Filename, err)
 				} else {
@@ -368,7 +388,7 @@ func processMediaDownload(url string, origChat *response.TgChat, origMessage *re
 	} else if len(photos) == 1 {
 		// Send single photo normally
 		log.Printf("Sending single photo: %s", photos[0].Filename)
-		err := sendMediaFile(photos[0], origChat, origMessage)
+		err := sendMediaFile(photos[0], origChat, origMessage, url)
 		if err != nil {
 			log.Printf("Failed to send photo file %s: %v", photos[0].Filename, err)
 		} else {
@@ -389,7 +409,7 @@ func processMediaDownload(url string, origChat *response.TgChat, origMessage *re
 			}
 		}
 		
-		err := sendMediaFile(mediaInfo, origChat, origMessage)
+		err := sendMediaFile(mediaInfo, origChat, origMessage, url)
 		if err != nil {
 			log.Printf("Failed to send media file %s: %v", mediaInfo.Filename, err)
 			
@@ -407,6 +427,10 @@ func processMediaDownload(url string, origChat *response.TgChat, origMessage *re
 			message.NewSendDocument(documentPayload)
 			// Note: NewSendDocument automatically sends the message
 			log.Printf("✅ Successfully sent video as document: %s", mediaInfo.Filename)
+			
+			// Track document send
+			trackMediaSent(int64(origMessage.From.Id), origMessage.From.Username, origChat.Id, origChat.Title, url, "document")
+			
 			downloader.CleanupFile(mediaInfo.Filename)
 		} else {
 			log.Printf("Successfully sent media file: %s", mediaInfo.Filename)
@@ -417,7 +441,7 @@ func processMediaDownload(url string, origChat *response.TgChat, origMessage *re
 }
 
 
-func sendMediaFile(mediaInfo *services.MediaInfo, origChat *response.TgChat, origMessage *response.TgMessage) error {
+func sendMediaFile(mediaInfo *services.MediaInfo, origChat *response.TgChat, origMessage *response.TgMessage, url string) error {
 	log.Printf("Sending media to chat ID: %d", origChat.Id)
 	
 	// Decode HTML entities
@@ -474,6 +498,9 @@ func sendMediaFile(mediaInfo *services.MediaInfo, origChat *response.TgChat, ori
 		// Check if the photo was sent successfully
 		if response.ResponsePayload != nil && response.ResponsePayload.MessageId != 0 {
 			log.Printf("✅ Photo sent successfully! Message ID: %d", response.ResponsePayload.MessageId)
+			
+			// Track photo send
+			trackMediaSent(int64(origMessage.From.Id), origMessage.From.Username, origChat.Id, origChat.Title, url, "photo")
 		} else {
 			log.Printf("❌ Photo sending failed or no response received")
 			log.Printf("Response details: %+v", response)
@@ -507,6 +534,10 @@ func sendMediaFile(mediaInfo *services.MediaInfo, origChat *response.TgChat, ori
 						DisableNotification: true,
 					}
 					message.NewSendDocument(documentPayload)
+					
+					// Track document send
+					trackMediaSent(int64(origMessage.From.Id), origMessage.From.Username, origChat.Id, origChat.Title, url, "document")
+					
 					return nil
 				} else {
 					log.Printf("✅ Successfully converted WebM to MP4: %s", convertedPath)
@@ -538,6 +569,10 @@ func sendMediaFile(mediaInfo *services.MediaInfo, origChat *response.TgChat, ori
 					DisableNotification: true,
 				}
 				message.NewSendDocument(documentPayload)
+				
+				// Track document send
+				trackMediaSent(int64(origMessage.From.Id), origMessage.From.Username, origChat.Id, origChat.Title, url, "document")
+				
 				return nil
 			}
 		}
@@ -553,6 +588,9 @@ func sendMediaFile(mediaInfo *services.MediaInfo, origChat *response.TgChat, ori
 		}
 		message.NewSendVideo(videoPayload)
 		// Note: NewSendVideo automatically sends the message
+		
+		// Track video send
+		trackMediaSent(int64(origMessage.From.Id), origMessage.From.Username, origChat.Id, origChat.Title, url, "video")
 
 	default:
 		// Determine the document type for better user experience
@@ -583,7 +621,7 @@ func sendMediaFile(mediaInfo *services.MediaInfo, origChat *response.TgChat, ori
 	return nil
 }
 
-func sendPhotosAsMediaGroup(photos []*services.MediaInfo, origChat *response.TgChat, origMessage *response.TgMessage) error {
+func sendPhotosAsMediaGroup(photos []*services.MediaInfo, origChat *response.TgChat, origMessage *response.TgMessage, url string) error {
 	if len(photos) == 0 {
 		return fmt.Errorf("no photos to send")
 	}
@@ -624,6 +662,11 @@ func sendPhotosAsMediaGroup(photos []*services.MediaInfo, origChat *response.TgC
 	
 	// Send the media group
 	message.NewSendMediaGroup(mediaGroupPayload)
+	
+	// Track each photo send
+	for range photos {
+		trackMediaSent(int64(origMessage.From.Id), origMessage.From.Username, origChat.Id, origChat.Title, url, "photo")
+	}
 	
 	return nil
 }
@@ -1448,4 +1491,1289 @@ func parseTwitterThreadURLs(html, authorUsername, originalTweetID string) []stri
 	}
 	
 	return urls
+}
+
+// handleBotCommand handles all bot commands
+func handleBotCommand(origMessage *response.TgMessage, origChat *response.TgChat, origUser *response.TgUser) {
+	command := strings.ToLower(strings.Fields(origMessage.Text)[0])
+	
+	log.Printf("🤖 Processing command: %s from user %d in chat %d", command, origUser.Id, origChat.Id)
+	
+	switch command {
+	case "/start", "/help":
+		handleStartCommand(origMessage, origChat, origUser)
+	case "/stats":
+		handleStatsCommand(origMessage, origChat, origUser)
+	case "/mylimit":
+		handleMyLimitCommand(origMessage, origChat, origUser)
+	case "/setlimit":
+		handleSetLimitCommand(origMessage, origChat, origUser)
+	case "/setgrouplimit":
+		handleSetGroupLimitCommand(origMessage, origChat, origUser)
+	case "/setgrouptimezone":
+		handleSetGroupTimezoneCommand(origMessage, origChat, origUser)
+	default:
+		// Unknown command - send help
+		handleStartCommand(origMessage, origChat, origUser)
+	}
+}
+
+// handleStartCommand handles /start and /help commands with interactive menu
+func handleStartCommand(origMessage *response.TgMessage, origChat *response.TgChat, origUser *response.TgUser) {
+	var menuText strings.Builder
+	isGroupChat := origChat.Type != "private"
+	
+	menuText.WriteString("🤖 <b>Social Link Bot</b>\n\n")
+	menuText.WriteString("I download and send actual media files from social media platforms!\n\n")
+	
+	// Platform support
+	menuText.WriteString("🌐 <b>Supported Platforms:</b>\n")
+	menuText.WriteString("📷 <b>Instagram:</b> Photos, Videos, Albums (limited support)\n")
+	menuText.WriteString("   <i>⚠️ Instagram support is limited due to strict bot limitations</i>\n")
+	menuText.WriteString("🎵 <b>TikTok:</b> Videos, Photo Slideshows\n")
+	menuText.WriteString("🐦 <b>Twitter/X:</b> Photos, Videos, GIFs\n")
+	menuText.WriteString("📺 <b>YouTube:</b> Videos, Shorts\n")
+	menuText.WriteString("🔴 <b>Reddit:</b> Videos, Images, Galleries\n")
+	menuText.WriteString("👥 <b>Facebook:</b> Videos, Photos\n")
+	menuText.WriteString("😂 <b>9GAG:</b> Videos, Images, GIFs\n\n")
+	
+	// How to use
+	menuText.WriteString("📝 <b>How to use:</b>\n")
+	menuText.WriteString("Just send me a link from any supported platform and I'll download the media for you!\n\n")
+	
+	// Commands
+	menuText.WriteString("⚡ <b>Commands:</b>\n")
+	menuText.WriteString("• /start or /help - Show this menu\n")
+	menuText.WriteString("• /stats [period] - View media statistics\n")
+	menuText.WriteString("  <i>Periods: today, week, month, year</i>\n")
+	menuText.WriteString("• /mylimit - Check your daily media limit\n")
+	
+	// Admin commands (only in groups)
+	if isGroupChat {
+		menuText.WriteString("\n👮 <b>Admin Commands:</b>\n")
+		menuText.WriteString("• /setlimit @user [limit] - Set user's daily limit\n")
+		menuText.WriteString("  <i>Reply to message or use user ID</i>\n")
+		menuText.WriteString("  <i>Set to 0 to remove limit</i>\n")
+		menuText.WriteString("• /setgrouplimit [limit] - Set group default limit\n")
+		menuText.WriteString("• /setgrouptimezone [timezone] - Set group timezone\n")
+		menuText.WriteString("  <i>Example: America/New_York, Europe/London</i>\n")
+	}
+	
+	// Footer
+	menuText.WriteString("\n━━━━━━━━━━━━━━━━━━━━\n")
+	menuText.WriteString("💡 <i>Tip: Just paste a link to get started!</i>")
+	
+	// Create interactive keyboard with menu buttons
+	keyboard := createMainMenuKeyboard(isGroupChat)
+	
+	helpMsg := payload.TgPlSendMessage{
+		ChatId:      origChat.Id,
+		ParseMode:   payload.ParseModeHTML,
+		Text:        menuText.String(),
+		ReplyMarkup: keyboard,
+	}
+	
+	message.NewSendMessage(helpMsg)
+	log.Printf("✅ Sent interactive help/start message to user %d", origUser.Id)
+}
+
+// handleStatsCommand handles /stats command with actual database functionality
+func handleStatsCommand(origMessage *response.TgMessage, origChat *response.TgChat, origUser *response.TgUser) {
+	// Parse period from command arguments
+	args := strings.Fields(origMessage.Text)
+	period := "today" // Default period
+	if len(args) > 1 {
+		period = strings.ToLower(args[1])
+	}
+	
+	// Validate period
+	validPeriods := []string{"today", "week", "month", "year"}
+	isValidPeriod := false
+	for _, validPeriod := range validPeriods {
+		if period == validPeriod {
+			isValidPeriod = true
+			break
+		}
+	}
+	
+	if !isValidPeriod {
+		errorMsg := payload.TgPlSendMessage{
+			ChatId:              origChat.Id,
+			ParseMode:           payload.ParseModeHTML,
+			Text:                "❌ Invalid period. Valid options: <code>today</code>, <code>week</code>, <code>month</code>, <code>year</code>",
+			ReplyToMessageId:    origMessage.MessageId,
+			DisableNotification: true,
+		}
+		message.NewSendMessage(errorMsg)
+		return
+	}
+	
+	// Get media statistics
+	stats, err := services.GetMediaStats(origChat.Id, period)
+	if err != nil {
+		log.Printf("Error getting media stats: %v", err)
+		errorMsg := payload.TgPlSendMessage{
+			ChatId:              origChat.Id,
+			ParseMode:           payload.ParseModeHTML,
+			Text:                "❌ Error retrieving statistics. Please try again later.",
+			ReplyToMessageId:    origMessage.MessageId,
+			DisableNotification: true,
+		}
+		message.NewSendMessage(errorMsg)
+		return
+	}
+	
+	// Get user statistics
+	userStats, err := services.GetUserMediaStats(origChat.Id, period)
+	if err != nil {
+		log.Printf("Error getting user media stats: %v", err)
+	}
+	
+	// Build stats message
+	var statsText strings.Builder
+	
+	// Period header
+	periodEmoji := map[string]string{
+		"today": "📅",
+		"week":  "📊", 
+		"month": "📉",
+		"year":  "📋",
+	}
+	
+	statsText.WriteString(fmt.Sprintf("%s <b>%s Statistics</b>\n", periodEmoji[period], strings.Title(period)))
+	statsText.WriteString(fmt.Sprintf("<i>Chat: %s</i>\n\n", html.EscapeString(origChat.Title)))
+	
+	// Overall stats
+	if stats.Total == 0 {
+		statsText.WriteString("📭 No media shared " + period + ".\n")
+	} else {
+		statsText.WriteString(fmt.Sprintf("📊 <b>Total Media:</b> %d\n", stats.Total))
+		statsText.WriteString(fmt.Sprintf("📷 Photos: %d\n", stats.TotalPhotos))
+		statsText.WriteString(fmt.Sprintf("🎥 Videos: %d\n\n", stats.TotalVideos))
+		
+		// Platform breakdown
+		if len(stats.Platforms) > 0 {
+			statsText.WriteString("🌐 <b>By Platform:</b>\n")
+			for _, platform := range stats.Platforms {
+				platformEmoji := map[string]string{
+					"instagram": "📷",
+					"tiktok":    "🎵",
+					"twitter":   "🐦",
+					"youtube":   "📺",
+					"reddit":    "🔴",
+					"facebook":  "👥",
+					"9gag":      "😂",
+				}
+				emoji := platformEmoji[strings.ToLower(platform.Platform)]
+				if emoji == "" {
+					emoji = "🔗"
+				}
+				
+				statsText.WriteString(fmt.Sprintf("%s <b>%s:</b> %d", emoji, strings.Title(platform.Platform), platform.Total))
+				if platform.Photos > 0 && platform.Videos > 0 {
+					statsText.WriteString(fmt.Sprintf(" (📷%d, 🎥%d)", platform.Photos, platform.Videos))
+				}
+				statsText.WriteString("\n")
+			}
+		}
+		
+		// User breakdown (only in group chats)
+		if origChat.Type != "private" && len(userStats) > 0 {
+			statsText.WriteString("\n👥 <b>By User:</b>\n")
+			displayCount := 10 // Show top 10 users
+			if len(userStats) < displayCount {
+				displayCount = len(userStats)
+			}
+			
+			for i := 0; i < displayCount; i++ {
+				user := userStats[i]
+				username := user.Username
+				if username == "" {
+					username = fmt.Sprintf("User %d", user.UserID)
+				}
+				
+				statsText.WriteString(fmt.Sprintf("• <b>%s:</b> %d", html.EscapeString(username), user.Total))
+				if user.Photos > 0 && user.Videos > 0 {
+					statsText.WriteString(fmt.Sprintf(" (📷%d, 🎥%d)", user.Photos, user.Videos))
+				}
+				statsText.WriteString("\n")
+			}
+			
+			if len(userStats) > displayCount {
+				statsText.WriteString(fmt.Sprintf("... and %d more users\n", len(userStats) - displayCount))
+			}
+		}
+	}
+	
+	// Create stats message
+	statsMsg := payload.TgPlSendMessage{
+		ChatId:              origChat.Id,
+		ParseMode:           payload.ParseModeHTML,
+		Text:                statsText.String(),
+		ReplyToMessageId:    origMessage.MessageId,
+		DisableNotification: true,
+	}
+	
+	message.NewSendMessage(statsMsg)
+	log.Printf("📊 Stats command (%s) completed for user %d in chat %d", period, origUser.Id, origChat.Id)
+}
+
+// handleMyLimitCommand handles /mylimit command with actual database functionality
+func handleMyLimitCommand(origMessage *response.TgMessage, origChat *response.TgChat, origUser *response.TgUser) {
+	// Get user's effective limit
+	limit, isGroupDefault, err := services.GetEffectiveUserLimit(int64(origUser.Id), origChat.Id)
+	if err != nil {
+		log.Printf("Error getting user limit: %v", err)
+		errorMsg := payload.TgPlSendMessage{
+			ChatId:              origChat.Id,
+			ParseMode:           payload.ParseModeHTML,
+			Text:                "❌ Error retrieving your limit. Please try again later.",
+			ReplyToMessageId:    origMessage.MessageId,
+			DisableNotification: true,
+		}
+		message.NewSendMessage(errorMsg)
+		return
+	}
+	
+	// Get current daily usage
+	dailyCount, err := services.GetDailyMediaCount(int64(origUser.Id), origChat.Id)
+	if err != nil {
+		log.Printf("Error getting daily media count: %v", err)
+		dailyCount = 0
+	}
+	
+	// Build limit message
+	var limitText strings.Builder
+	
+	// Header
+	limitText.WriteString("🚫 <b>Your Media Limit</b>\n")
+	if origChat.Type != "private" {
+		limitText.WriteString(fmt.Sprintf("<i>Chat: %s</i>\n\n", html.EscapeString(origChat.Title)))
+	} else {
+		limitText.WriteString("\n")
+	}
+	
+	// Current usage
+	limitText.WriteString(fmt.Sprintf("📊 <b>Today's Usage:</b> %d media items\n", dailyCount))
+	
+	// Limit information
+	if limit == 0 {
+		limitText.WriteString("🔓 <b>Daily Limit:</b> No limit set\n")
+		limitText.WriteString("💚 Status: <b>Unlimited</b>\n")
+	} else {
+		limitText.WriteString(fmt.Sprintf("🔒 <b>Daily Limit:</b> %d media items\n", limit))
+		
+		// Status
+		if dailyCount >= limit {
+			limitText.WriteString("🔴 Status: <b>Limit Reached</b>\n")
+		} else {
+			remaining := limit - dailyCount
+			limitText.WriteString(fmt.Sprintf("🟢 Status: <b>%d remaining</b>\n", remaining))
+		}
+		
+		// Limit type
+		if isGroupDefault {
+			limitText.WriteString("ℹ️ <i>Using group default limit</i>\n")
+		} else {
+			limitText.WriteString("👤 <i>Individual limit set</i>\n")
+		}
+	}
+	
+	// Reset time information
+	if limit > 0 {
+		resetTime, timeUntilReset, err := services.GetTimezoneAwareResetTime(origChat.Id)
+		if err == nil {
+			limitText.WriteString(fmt.Sprintf("\n🕐 <b>Limit resets:</b> %s\n", formatDuration(timeUntilReset)))
+			limitText.WriteString(fmt.Sprintf("📅 <b>Reset time:</b> %s\n", resetTime.Format("15:04 MST")))
+		}
+	}
+	
+	// Footer
+	if origChat.Type != "private" {
+		limitText.WriteString("\n💡 <i>Admins can modify limits with /setlimit</i>")
+	}
+	
+	limitMsg := payload.TgPlSendMessage{
+		ChatId:              origChat.Id,
+		ParseMode:           payload.ParseModeHTML,
+		Text:                limitText.String(),
+		ReplyToMessageId:    origMessage.MessageId,
+		DisableNotification: true,
+	}
+	
+	message.NewSendMessage(limitMsg)
+	log.Printf("🚫 MyLimit command completed for user %d in chat %d (limit: %d, used: %d)", origUser.Id, origChat.Id, limit, dailyCount)
+}
+
+// formatDuration formats a duration into a human-readable string
+func formatDuration(d time.Duration) string {
+	if d < time.Hour {
+		return fmt.Sprintf("%d minutes", int(d.Minutes()))
+	} else if d < 24*time.Hour {
+		hours := int(d.Hours())
+		minutes := int(d.Minutes()) % 60
+		if minutes == 0 {
+			return fmt.Sprintf("%d hours", hours)
+		}
+		return fmt.Sprintf("%d hours %d minutes", hours, minutes)
+	} else {
+		days := int(d.Hours()) / 24
+		hours := int(d.Hours()) % 24
+		if hours == 0 {
+			return fmt.Sprintf("%d days", days)
+		}
+		return fmt.Sprintf("%d days %d hours", days, hours)
+	}
+}
+
+// handleSetLimitCommand handles /setlimit command with actual database functionality
+func handleSetLimitCommand(origMessage *response.TgMessage, origChat *response.TgChat, origUser *response.TgUser) {
+	if origChat.Type == "private" {
+		errorMsg := payload.TgPlSendMessage{
+			ChatId:              origChat.Id,
+			Text:                "❌ This command only works in groups, not private chats.",
+			ReplyToMessageId:    origMessage.MessageId,
+			DisableNotification: true,
+		}
+		message.NewSendMessage(errorMsg)
+		return
+	}
+	
+	args := strings.Fields(origMessage.Text)
+	
+	// Parse arguments
+	var targetUserID int64
+	var limitValue int
+	var err error
+	
+	if len(args) == 2 {
+		// Format: /setlimit <limit> (for replied message)
+		limitValue, err = strconv.Atoi(args[1])
+		if err != nil {
+			errorMsg := payload.TgPlSendMessage{
+				ChatId:              origChat.Id,
+				ParseMode:           payload.ParseModeHTML,
+				Text:                "❌ Invalid limit value. Please use a number.\n\n<b>Usage:</b>\n• Reply to user's message + <code>/setlimit 5</code>\n• <code>/setlimit 123456789 10</code>",
+				ReplyToMessageId:    origMessage.MessageId,
+				DisableNotification: true,
+			}
+			message.NewSendMessage(errorMsg)
+			return
+		}
+		
+		// Check if this is a reply to another message
+		if origMessage.ReplyToMessage != nil && origMessage.ReplyToMessage.From.Id != 0 {
+			targetUserID = int64(origMessage.ReplyToMessage.From.Id)
+		} else {
+			errorMsg := payload.TgPlSendMessage{
+				ChatId:              origChat.Id,
+				ParseMode:           payload.ParseModeHTML,
+				Text:                "❌ Please reply to a user's message or provide user ID.\n\n<b>Usage:</b>\n• Reply to user's message + <code>/setlimit 5</code>\n• <code>/setlimit 123456789 10</code>",
+				ReplyToMessageId:    origMessage.MessageId,
+				DisableNotification: true,
+			}
+			message.NewSendMessage(errorMsg)
+			return
+		}
+	} else if len(args) == 3 {
+		// Format: /setlimit <user_id> <limit>
+		targetUserID, err = strconv.ParseInt(args[1], 10, 64)
+		if err != nil {
+			errorMsg := payload.TgPlSendMessage{
+				ChatId:              origChat.Id,
+				ParseMode:           payload.ParseModeHTML,
+				Text:                "❌ Invalid user ID. Please use a valid number.\n\n<b>Usage:</b>\n• Reply to user's message + <code>/setlimit 5</code>\n• <code>/setlimit 123456789 10</code>",
+				ReplyToMessageId:    origMessage.MessageId,
+				DisableNotification: true,
+			}
+			message.NewSendMessage(errorMsg)
+			return
+		}
+		
+		limitValue, err = strconv.Atoi(args[2])
+		if err != nil {
+			errorMsg := payload.TgPlSendMessage{
+				ChatId:              origChat.Id,
+				ParseMode:           payload.ParseModeHTML,
+				Text:                "❌ Invalid limit value. Please use a number.\n\n<b>Usage:</b>\n• Reply to user's message + <code>/setlimit 5</code>\n• <code>/setlimit 123456789 10</code>",
+				ReplyToMessageId:    origMessage.MessageId,
+				DisableNotification: true,
+			}
+			message.NewSendMessage(errorMsg)
+			return
+		}
+	} else {
+		// Invalid format
+		errorMsg := payload.TgPlSendMessage{
+			ChatId:              origChat.Id,
+			ParseMode:           payload.ParseModeHTML,
+			Text:                "❌ Invalid command format.\n\n<b>Usage:</b>\n• Reply to user's message + <code>/setlimit 5</code>\n• <code>/setlimit 123456789 10</code>\n• <code>/setlimit 0</code> (remove limit)",
+			ReplyToMessageId:    origMessage.MessageId,
+			DisableNotification: true,
+		}
+		message.NewSendMessage(errorMsg)
+		return
+	}
+	
+	// Validate limit value
+	if limitValue < 0 {
+		errorMsg := payload.TgPlSendMessage{
+			ChatId:              origChat.Id,
+			ParseMode:           payload.ParseModeHTML,
+			Text:                "❌ Limit value cannot be negative. Use 0 to remove limit.",
+			ReplyToMessageId:    origMessage.MessageId,
+			DisableNotification: true,
+		}
+		message.NewSendMessage(errorMsg)
+		return
+	}
+	
+	// Set the limit
+	err = services.SetUserMediaLimit(targetUserID, origChat.Id, limitValue)
+	if err != nil {
+		log.Printf("Error setting user limit: %v", err)
+		errorMsg := payload.TgPlSendMessage{
+			ChatId:              origChat.Id,
+			ParseMode:           payload.ParseModeHTML,
+			Text:                "❌ Error setting user limit. Please try again later.",
+			ReplyToMessageId:    origMessage.MessageId,
+			DisableNotification: true,
+		}
+		message.NewSendMessage(errorMsg)
+		return
+	}
+	
+	// Get current usage for the user
+	dailyCount, err := services.GetDailyMediaCount(targetUserID, origChat.Id)
+	if err != nil {
+		log.Printf("Error getting daily media count: %v", err)
+		dailyCount = 0
+	}
+	
+	// Build success message
+	var successText strings.Builder
+	successText.WriteString("✅ <b>User Limit Updated</b>\n\n")
+	
+	if limitValue == 0 {
+		successText.WriteString(fmt.Sprintf("🔓 <b>User %d:</b> Limit removed\n", targetUserID))
+		successText.WriteString("💚 Status: <b>Unlimited</b>\n")
+	} else {
+		successText.WriteString(fmt.Sprintf("🔒 <b>User %d:</b> Limit set to %d\n", targetUserID, limitValue))
+		successText.WriteString(fmt.Sprintf("📊 <b>Today's Usage:</b> %d media items\n", dailyCount))
+		
+		if dailyCount >= limitValue {
+			successText.WriteString("🔴 Status: <b>Limit Reached</b>\n")
+		} else {
+			remaining := limitValue - dailyCount
+			successText.WriteString(fmt.Sprintf("🟢 Status: <b>%d remaining</b>\n", remaining))
+		}
+	}
+	
+	successText.WriteString(fmt.Sprintf("\n👮 <i>Set by admin: %s</i>", html.EscapeString(origUser.Username)))
+	
+	successMsg := payload.TgPlSendMessage{
+		ChatId:              origChat.Id,
+		ParseMode:           payload.ParseModeHTML,
+		Text:                successText.String(),
+		ReplyToMessageId:    origMessage.MessageId,
+		DisableNotification: true,
+	}
+	
+	message.NewSendMessage(successMsg)
+	log.Printf("👮 SetLimit command completed by user %d in chat %d (target: %d, limit: %d)", origUser.Id, origChat.Id, targetUserID, limitValue)
+}
+
+// handleSetGroupLimitCommand handles /setgrouplimit command with actual database functionality
+func handleSetGroupLimitCommand(origMessage *response.TgMessage, origChat *response.TgChat, origUser *response.TgUser) {
+	if origChat.Type == "private" {
+		errorMsg := payload.TgPlSendMessage{
+			ChatId:              origChat.Id,
+			Text:                "❌ Group limit commands only work in groups, not private chats.",
+			ReplyToMessageId:    origMessage.MessageId,
+			DisableNotification: true,
+		}
+		message.NewSendMessage(errorMsg)
+		return
+	}
+	
+	args := strings.Fields(origMessage.Text)
+	
+	// Check if limit value is provided
+	if len(args) != 2 {
+		errorMsg := payload.TgPlSendMessage{
+			ChatId:              origChat.Id,
+			ParseMode:           payload.ParseModeHTML,
+			Text:                "❌ Invalid command format.\n\n<b>Usage:</b>\n• <code>/setgrouplimit 5</code> (set limit to 5)\n• <code>/setgrouplimit 0</code> (remove limit)",
+			ReplyToMessageId:    origMessage.MessageId,
+			DisableNotification: true,
+		}
+		message.NewSendMessage(errorMsg)
+		return
+	}
+	
+	// Parse limit value
+	limitValue, err := strconv.Atoi(args[1])
+	if err != nil {
+		errorMsg := payload.TgPlSendMessage{
+			ChatId:              origChat.Id,
+			ParseMode:           payload.ParseModeHTML,
+			Text:                "❌ Invalid limit value. Please use a number.\n\n<b>Usage:</b>\n• <code>/setgrouplimit 5</code> (set limit to 5)\n• <code>/setgrouplimit 0</code> (remove limit)",
+			ReplyToMessageId:    origMessage.MessageId,
+			DisableNotification: true,
+		}
+		message.NewSendMessage(errorMsg)
+		return
+	}
+	
+	// Validate limit value
+	if limitValue < 0 {
+		errorMsg := payload.TgPlSendMessage{
+			ChatId:              origChat.Id,
+			ParseMode:           payload.ParseModeHTML,
+			Text:                "❌ Limit value cannot be negative. Use 0 to remove limit.",
+			ReplyToMessageId:    origMessage.MessageId,
+			DisableNotification: true,
+		}
+		message.NewSendMessage(errorMsg)
+		return
+	}
+	
+	// Set the group limit
+	err = services.SetGroupMediaLimit(origChat.Id, origChat.Title, limitValue)
+	if err != nil {
+		log.Printf("Error setting group limit: %v", err)
+		errorMsg := payload.TgPlSendMessage{
+			ChatId:              origChat.Id,
+			ParseMode:           payload.ParseModeHTML,
+			Text:                "❌ Error setting group limit. Please try again later.",
+			ReplyToMessageId:    origMessage.MessageId,
+			DisableNotification: true,
+		}
+		message.NewSendMessage(errorMsg)
+		return
+	}
+	
+	// Build success message
+	var successText strings.Builder
+	successText.WriteString("✅ <b>Group Default Limit Updated</b>\n\n")
+	
+	if limitValue == 0 {
+		successText.WriteString("🔓 <b>Group Limit:</b> Removed\n")
+		successText.WriteString("💚 <b>Status:</b> No default limit for new users\n")
+	} else {
+		successText.WriteString(fmt.Sprintf("🔒 <b>Group Limit:</b> %d media items per day\n", limitValue))
+		successText.WriteString("📋 <b>Status:</b> Applied to all users without individual limits\n")
+	}
+	
+	// Get current timezone
+	timezone, err := services.GetGroupTimezone(origChat.Id)
+	if err == nil && timezone != "" {
+		successText.WriteString(fmt.Sprintf("🌍 <b>Timezone:</b> %s\n", timezone))
+	}
+	
+	successText.WriteString(fmt.Sprintf("\n👮 <i>Set by admin: %s</i>", html.EscapeString(origUser.Username)))
+	successText.WriteString("\n\n💡 <i>Individual user limits override group default</i>")
+	
+	successMsg := payload.TgPlSendMessage{
+		ChatId:              origChat.Id,
+		ParseMode:           payload.ParseModeHTML,
+		Text:                successText.String(),
+		ReplyToMessageId:    origMessage.MessageId,
+		DisableNotification: true,
+	}
+	
+	message.NewSendMessage(successMsg)
+	log.Printf("🏢 SetGroupLimit command completed by user %d in chat %d (limit: %d)", origUser.Id, origChat.Id, limitValue)
+}
+
+// handleSetGroupTimezoneCommand handles /setgrouptimezone command with actual database functionality
+func handleSetGroupTimezoneCommand(origMessage *response.TgMessage, origChat *response.TgChat, origUser *response.TgUser) {
+	if origChat.Type == "private" {
+		errorMsg := payload.TgPlSendMessage{
+			ChatId:              origChat.Id,
+			Text:                "❌ Group timezone commands only work in groups, not private chats.",
+			ReplyToMessageId:    origMessage.MessageId,
+			DisableNotification: true,
+		}
+		message.NewSendMessage(errorMsg)
+		return
+	}
+	
+	args := strings.Fields(origMessage.Text)
+	
+	// Check if timezone is provided
+	if len(args) != 2 {
+		errorMsg := payload.TgPlSendMessage{
+			ChatId:              origChat.Id,
+			ParseMode:           payload.ParseModeHTML,
+			Text:                "❌ Invalid command format.\n\n<b>Usage:</b>\n• <code>/setgrouptimezone America/New_York</code>\n• <code>/setgrouptimezone Europe/London</code>\n• <code>/setgrouptimezone UTC</code>\n\n<b>Common timezones:</b>\n• UTC, GMT\n• America/New_York, America/Los_Angeles\n• Europe/London, Europe/Paris, Europe/Berlin\n• Asia/Tokyo, Asia/Shanghai, Asia/Dubai\n• Australia/Sydney, Australia/Melbourne",
+			ReplyToMessageId:    origMessage.MessageId,
+			DisableNotification: true,
+		}
+		message.NewSendMessage(errorMsg)
+		return
+	}
+	
+	// Parse timezone
+	timezone := args[1]
+	
+	// Validate timezone
+	_, err := time.LoadLocation(timezone)
+	if err != nil {
+		errorMsg := payload.TgPlSendMessage{
+			ChatId:              origChat.Id,
+			ParseMode:           payload.ParseModeHTML,
+			Text:                fmt.Sprintf("❌ Invalid timezone: <code>%s</code>\n\n<b>Usage:</b>\n• <code>/setgrouptimezone America/New_York</code>\n• <code>/setgrouptimezone Europe/London</code>\n• <code>/setgrouptimezone UTC</code>\n\n<b>Common timezones:</b>\n• UTC, GMT\n• America/New_York, America/Los_Angeles\n• Europe/London, Europe/Paris, Europe/Berlin\n• Asia/Tokyo, Asia/Shanghai, Asia/Dubai\n• Australia/Sydney, Australia/Melbourne", html.EscapeString(timezone)),
+			ReplyToMessageId:    origMessage.MessageId,
+			DisableNotification: true,
+		}
+		message.NewSendMessage(errorMsg)
+		return
+	}
+	
+	// Set the group timezone
+	err = services.SetGroupTimezone(origChat.Id, origChat.Title, timezone)
+	if err != nil {
+		log.Printf("Error setting group timezone: %v", err)
+		errorMsg := payload.TgPlSendMessage{
+			ChatId:              origChat.Id,
+			ParseMode:           payload.ParseModeHTML,
+			Text:                "❌ Error setting group timezone. Please try again later.",
+			ReplyToMessageId:    origMessage.MessageId,
+			DisableNotification: true,
+		}
+		message.NewSendMessage(errorMsg)
+		return
+	}
+	
+	// Get current time in the new timezone
+	loc, _ := time.LoadLocation(timezone)
+	currentTime := time.Now().In(loc)
+	
+	// Calculate next reset time
+	_, timeUntilReset, err := services.GetTimezoneAwareResetTime(origChat.Id)
+	if err != nil {
+		log.Printf("Error getting reset time: %v", err)
+	}
+	
+	// Build success message
+	var successText strings.Builder
+	successText.WriteString("✅ <b>Group Timezone Updated</b>\n\n")
+	successText.WriteString(fmt.Sprintf("🌍 <b>Timezone:</b> %s\n", timezone))
+	successText.WriteString(fmt.Sprintf("🕐 <b>Current time:</b> %s\n", currentTime.Format("15:04:05 MST")))
+	
+	if timeUntilReset > 0 {
+		successText.WriteString(fmt.Sprintf("⏰ <b>Next limit reset:</b> %s\n", formatDuration(timeUntilReset)))
+	}
+	
+	// Get current group limit
+	groupLimit, err := services.GetGroupMediaLimit(origChat.Id)
+	if err == nil && groupLimit > 0 {
+		successText.WriteString(fmt.Sprintf("🔒 <b>Group Limit:</b> %d media items per day\n", groupLimit))
+	}
+	
+	successText.WriteString(fmt.Sprintf("\n👮 <i>Set by admin: %s</i>", html.EscapeString(origUser.Username)))
+	successText.WriteString("\n\n💡 <i>Daily limits now reset at midnight in this timezone</i>")
+	
+	successMsg := payload.TgPlSendMessage{
+		ChatId:              origChat.Id,
+		ParseMode:           payload.ParseModeHTML,
+		Text:                successText.String(),
+		ReplyToMessageId:    origMessage.MessageId,
+		DisableNotification: true,
+	}
+	
+	message.NewSendMessage(successMsg)
+	log.Printf("🌍 SetGroupTimezone command completed by user %d in chat %d (timezone: %s)", origUser.Id, origChat.Id, timezone)
+}
+
+// createMainMenuKeyboard creates the interactive main menu keyboard
+func createMainMenuKeyboard(isGroupChat bool) *api.TgInlineKeyboardMarkup {
+	// First row - Today and Week stats
+	buttons := [][]api.TgInlineKeyboardButton{
+		{
+			{Text: "📅 Today Stats", CallbackData: "/stats today"},
+			{Text: "📊 Week Stats", CallbackData: "/stats week"},
+		},
+	}
+	
+	// Second row - Month and Year stats
+	buttons = append(buttons, []api.TgInlineKeyboardButton{
+		{Text: "📉 Month Stats", CallbackData: "/stats month"},
+		{Text: "📋 Year Stats", CallbackData: "/stats year"},
+	})
+	
+	// Third row - User actions
+	if isGroupChat {
+		// Group chat - show user limit check
+		buttons = append(buttons, []api.TgInlineKeyboardButton{
+			{Text: "🚫 My Limit", CallbackData: "/mylimit"},
+		})
+		
+		// Fourth row - Admin actions
+		buttons = append(buttons, []api.TgInlineKeyboardButton{
+			{Text: "👮 Set User Limit", CallbackData: "/setlimit_start"},
+			{Text: "🏢 Group Settings", CallbackData: "/group_settings"},
+		})
+	} else {
+		// Private chat - only show user limit
+		buttons = append(buttons, []api.TgInlineKeyboardButton{
+			{Text: "🚫 My Limit", CallbackData: "/mylimit"},
+		})
+	}
+	
+	// Fifth row - Help (refresh menu)
+	buttons = append(buttons, []api.TgInlineKeyboardButton{
+		{Text: "🔄 Refresh Menu", CallbackData: "/help"},
+	})
+	
+	return &api.TgInlineKeyboardMarkup{
+		InlineKeyboard: buttons,
+	}
+}
+
+// handleCallbackQuery handles button presses from inline keyboards
+func handleCallbackQuery(callbackQuery *response.TgCallbackQuery) {
+	log.Printf("📱 Handling callback query: %s from user %d", callbackQuery.Data, callbackQuery.From.Id)
+	
+	// Create a fake message object to reuse existing command handlers
+	fakeMessage := response.TgMessage{
+		MessageId: callbackQuery.Message.MessageId,
+		From:      callbackQuery.From,
+		Chat:      callbackQuery.Message.Chat,
+		Text:      callbackQuery.Data,
+		Date:      int(time.Now().Unix()),
+	}
+	
+	// Process the command based on callback data
+	if strings.HasPrefix(callbackQuery.Data, "/stats") {
+		handleStatsCommand(&fakeMessage, &callbackQuery.Message.Chat, &callbackQuery.From)
+	} else if strings.HasPrefix(callbackQuery.Data, "/mylimit") {
+		handleMyLimitCommand(&fakeMessage, &callbackQuery.Message.Chat, &callbackQuery.From)
+	} else if strings.HasPrefix(callbackQuery.Data, "/help") {
+		handleStartCommand(&fakeMessage, &callbackQuery.Message.Chat, &callbackQuery.From)
+	} else if callbackQuery.Data == "/setlimit_start" {
+		handleSetLimitStartCallback(&callbackQuery.Message.Chat, &callbackQuery.From, callbackQuery.Message.MessageId)
+	} else if callbackQuery.Data == "/group_settings" {
+		handleGroupSettingsCallback(&callbackQuery.Message.Chat, &callbackQuery.From, callbackQuery.Message.MessageId)
+	} else if strings.HasPrefix(callbackQuery.Data, "/setgrouplimit_") {
+		handleSetGroupLimitCallback(callbackQuery)
+	} else if callbackQuery.Data == "/timezone_menu" {
+		handleTimezoneMenuCallback(&callbackQuery.Message.Chat, &callbackQuery.From)
+	} else if strings.HasPrefix(callbackQuery.Data, "/tz_") {
+		handleTimezoneRegionCallback(callbackQuery)
+	} else if strings.HasPrefix(callbackQuery.Data, "/setgrouptimezone_") {
+		handleSetTimezoneCallback(callbackQuery)
+	} else {
+		log.Printf("🤷 Unknown callback query: %s", callbackQuery.Data)
+	}
+	
+	// Answer the callback query to remove the loading state
+	answerCallbackQuery(callbackQuery.Id)
+}
+
+// handleSetLimitStartCallback handles the "Set User Limit" button press
+func handleSetLimitStartCallback(origChat *response.TgChat, origUser *response.TgUser, messageId int) {
+	log.Printf("👮 Admin %d initiated set limit process in chat %d", origUser.Id, origChat.Id)
+	
+	instructionMsg := payload.TgPlSendMessage{
+		ChatId:    origChat.Id,
+		ParseMode: payload.ParseModeHTML,
+		Text:      "👮 <b>Set User Media Limit</b>\n\n📝 <b>How to set limits:</b>\n\n🔹 <b>Reply to user's message + send:</b>\n   <code>/setlimit [number]</code>\n\n🔹 <b>Or use user ID:</b>\n   <code>/setlimit [user_id] [number]</code>\n\n📋 <b>Examples:</b>\n• <code>/setlimit 5</code> (reply to user)\n• <code>/setlimit 123456789 10</code> (user ID)\n• <code>/setlimit 0</code> (remove limit)\n\n💡 <i>Tip: Reply to someone's message, then send the command for easiest setup!</i>",
+	}
+	
+	message.NewSendMessage(instructionMsg)
+}
+
+// handleGroupSettingsCallback handles the "Group Settings" button press
+func handleGroupSettingsCallback(origChat *response.TgChat, origUser *response.TgUser, messageId int) {
+	log.Printf("🏢 Admin %d opened group settings in chat %d", origUser.Id, origChat.Id)
+	
+	// Get current group settings
+	groupInfo, err := services.GetGroupLimitInfo(origChat.Id)
+	if err != nil {
+		log.Printf("Error getting group limit info: %v", err)
+		errorMsg := payload.TgPlSendMessage{
+			ChatId:    origChat.Id,
+			ParseMode: payload.ParseModeHTML,
+			Text:      "❌ Error retrieving group settings. Please try again later.",
+		}
+		message.NewSendMessage(errorMsg)
+		return
+	}
+	
+	// Build settings message
+	var settingsText strings.Builder
+	settingsText.WriteString("🏢 <b>Group Settings</b>\n")
+	settingsText.WriteString(fmt.Sprintf("<i>Chat: %s</i>\n\n", html.EscapeString(origChat.Title)))
+	
+	// Group limit settings
+	settingsText.WriteString("📊 <b>Group Default Limit:</b>\n")
+	if groupInfo.DefaultDailyLimit == 0 {
+		settingsText.WriteString("🔓 No default limit set\n")
+		settingsText.WriteString("💚 <b>Status:</b> Users have unlimited access\n")
+	} else {
+		settingsText.WriteString(fmt.Sprintf("🔒 %d media items per day\n", groupInfo.DefaultDailyLimit))
+		settingsText.WriteString("📋 <b>Status:</b> Applied to users without individual limits\n")
+	}
+	
+	// Timezone settings
+	settingsText.WriteString(fmt.Sprintf("\n🌍 <b>Timezone:</b> %s\n", groupInfo.Timezone))
+	
+	// Get current time in group timezone
+	loc, err := time.LoadLocation(groupInfo.Timezone)
+	if err == nil {
+		currentTime := time.Now().In(loc)
+		settingsText.WriteString(fmt.Sprintf("🕐 <b>Current time:</b> %s\n", currentTime.Format("15:04:05 MST")))
+		
+		// Calculate next reset time
+		_, timeUntilReset, err := services.GetTimezoneAwareResetTime(origChat.Id)
+		if err == nil && timeUntilReset > 0 {
+			settingsText.WriteString(fmt.Sprintf("⏰ <b>Next limit reset:</b> %s\n", formatDuration(timeUntilReset)))
+		}
+	}
+	
+	// Management commands
+	settingsText.WriteString("\n⚙️ <b>Management Commands:</b>\n")
+	settingsText.WriteString("• <code>/setgrouplimit [number]</code> - Set group default limit\n")
+	settingsText.WriteString("• <code>/setgrouptimezone [timezone]</code> - Set group timezone\n")
+	settingsText.WriteString("• <code>/setlimit @user [number]</code> - Set individual user limit\n")
+	
+	// Examples
+	settingsText.WriteString("\n💡 <b>Examples:</b>\n")
+	settingsText.WriteString("• <code>/setgrouplimit 5</code> (5 items per day)\n")
+	settingsText.WriteString("• <code>/setgrouplimit 0</code> (remove limit)\n")
+	settingsText.WriteString("• <code>/setgrouptimezone Europe/London</code>\n")
+	settingsText.WriteString("• <code>/setgrouptimezone America/New_York</code>\n")
+	
+	// Footer
+	settingsText.WriteString("\n━━━━━━━━━━━━━━━━━━━━\n")
+	settingsText.WriteString("📈 Use buttons below to configure settings")
+	
+	// Create interactive keyboard for group settings
+	keyboard := createGroupSettingsKeyboard()
+	
+	settingsMsg := payload.TgPlSendMessage{
+		ChatId:      origChat.Id,
+		ParseMode:   payload.ParseModeHTML,
+		Text:        settingsText.String(),
+		ReplyMarkup: keyboard,
+	}
+	
+	message.NewSendMessage(settingsMsg)
+}
+
+// createGroupSettingsKeyboard creates the interactive keyboard for group settings
+func createGroupSettingsKeyboard() *api.TgInlineKeyboardMarkup {
+	buttons := [][]api.TgInlineKeyboardButton{
+		// First row - Set limits
+		{
+			{Text: "🔒 Set Limit: 5/day", CallbackData: "/setgrouplimit_5"},
+			{Text: "🔒 Set Limit: 10/day", CallbackData: "/setgrouplimit_10"},
+		},
+		// Second row - More limit options
+		{
+			{Text: "🔒 Set Limit: 20/day", CallbackData: "/setgrouplimit_20"},
+			{Text: "🔓 Remove Limit", CallbackData: "/setgrouplimit_0"},
+		},
+		// Third row - Custom limit
+		{
+			{Text: "⚙️ Set Custom Limit", CallbackData: "/setgrouplimit_custom"},
+		},
+		// Fourth row - Timezone settings
+		{
+			{Text: "🌍 Change Timezone", CallbackData: "/timezone_menu"},
+		},
+		// Fifth row - Back to main menu
+		{
+			{Text: "⬅️ Back to Main Menu", CallbackData: "/help"},
+		},
+	}
+	
+	return &api.TgInlineKeyboardMarkup{
+		InlineKeyboard: buttons,
+	}
+}
+
+// createTimezoneMenuKeyboard creates the timezone selection menu
+func createTimezoneMenuKeyboard() *api.TgInlineKeyboardMarkup {
+	buttons := [][]api.TgInlineKeyboardButton{
+		// Continent selection
+		{
+			{Text: "🌎 Americas", CallbackData: "/tz_americas"},
+			{Text: "🌍 Europe", CallbackData: "/tz_europe"},
+		},
+		{
+			{Text: "🌏 Asia", CallbackData: "/tz_asia"},
+			{Text: "🌏 Australia", CallbackData: "/tz_australia"},
+		},
+		{
+			{Text: "🌍 Africa", CallbackData: "/tz_africa"},
+			{Text: "⏰ UTC/GMT", CallbackData: "/setgrouptimezone_UTC"},
+		},
+		// Back button
+		{
+			{Text: "⬅️ Back to Settings", CallbackData: "/group_settings"},
+		},
+	}
+	
+	return &api.TgInlineKeyboardMarkup{
+		InlineKeyboard: buttons,
+	}
+}
+
+// createAmericasTimezoneKeyboard creates timezone selection for Americas
+func createAmericasTimezoneKeyboard() *api.TgInlineKeyboardMarkup {
+	buttons := [][]api.TgInlineKeyboardButton{
+		{
+			{Text: "🗽 New York", CallbackData: "/setgrouptimezone_America/New_York"},
+			{Text: "🌁 Los Angeles", CallbackData: "/setgrouptimezone_America/Los_Angeles"},
+		},
+		{
+			{Text: "🏔️ Denver", CallbackData: "/setgrouptimezone_America/Denver"},
+			{Text: "🌆 Chicago", CallbackData: "/setgrouptimezone_America/Chicago"},
+		},
+		{
+			{Text: "🏙️ Toronto", CallbackData: "/setgrouptimezone_America/Toronto"},
+			{Text: "🌮 Mexico City", CallbackData: "/setgrouptimezone_America/Mexico_City"},
+		},
+		{
+			{Text: "🌴 São Paulo", CallbackData: "/setgrouptimezone_America/Sao_Paulo"},
+			{Text: "🏔️ Buenos Aires", CallbackData: "/setgrouptimezone_America/Buenos_Aires"},
+		},
+		{
+			{Text: "⬅️ Back", CallbackData: "/timezone_menu"},
+		},
+	}
+	
+	return &api.TgInlineKeyboardMarkup{
+		InlineKeyboard: buttons,
+	}
+}
+
+// createEuropeTimezoneKeyboard creates timezone selection for Europe
+func createEuropeTimezoneKeyboard() *api.TgInlineKeyboardMarkup {
+	buttons := [][]api.TgInlineKeyboardButton{
+		{
+			{Text: "🇬🇧 London", CallbackData: "/setgrouptimezone_Europe/London"},
+			{Text: "🇫🇷 Paris", CallbackData: "/setgrouptimezone_Europe/Paris"},
+		},
+		{
+			{Text: "🇩🇪 Berlin", CallbackData: "/setgrouptimezone_Europe/Berlin"},
+			{Text: "🇮🇹 Rome", CallbackData: "/setgrouptimezone_Europe/Rome"},
+		},
+		{
+			{Text: "🇪🇸 Madrid", CallbackData: "/setgrouptimezone_Europe/Madrid"},
+			{Text: "🇳🇱 Amsterdam", CallbackData: "/setgrouptimezone_Europe/Amsterdam"},
+		},
+		{
+			{Text: "🇷🇺 Moscow", CallbackData: "/setgrouptimezone_Europe/Moscow"},
+			{Text: "🇺🇦 Kiev", CallbackData: "/setgrouptimezone_Europe/Kiev"},
+		},
+		{
+			{Text: "⬅️ Back", CallbackData: "/timezone_menu"},
+		},
+	}
+	
+	return &api.TgInlineKeyboardMarkup{
+		InlineKeyboard: buttons,
+	}
+}
+
+// createAsiaTimezoneKeyboard creates timezone selection for Asia
+func createAsiaTimezoneKeyboard() *api.TgInlineKeyboardMarkup {
+	buttons := [][]api.TgInlineKeyboardButton{
+		{
+			{Text: "🇯🇵 Tokyo", CallbackData: "/setgrouptimezone_Asia/Tokyo"},
+			{Text: "🇨🇳 Shanghai", CallbackData: "/setgrouptimezone_Asia/Shanghai"},
+		},
+		{
+			{Text: "🇮🇳 Kolkata", CallbackData: "/setgrouptimezone_Asia/Kolkata"},
+			{Text: "🇦🇪 Dubai", CallbackData: "/setgrouptimezone_Asia/Dubai"},
+		},
+		{
+			{Text: "🇸🇬 Singapore", CallbackData: "/setgrouptimezone_Asia/Singapore"},
+			{Text: "🇭🇰 Hong Kong", CallbackData: "/setgrouptimezone_Asia/Hong_Kong"},
+		},
+		{
+			{Text: "🇰🇷 Seoul", CallbackData: "/setgrouptimezone_Asia/Seoul"},
+			{Text: "🇮🇩 Jakarta", CallbackData: "/setgrouptimezone_Asia/Jakarta"},
+		},
+		{
+			{Text: "⬅️ Back", CallbackData: "/timezone_menu"},
+		},
+	}
+	
+	return &api.TgInlineKeyboardMarkup{
+		InlineKeyboard: buttons,
+	}
+}
+
+// handleSetGroupLimitCallback handles group limit button presses
+func handleSetGroupLimitCallback(callbackQuery *response.TgCallbackQuery) {
+	// Extract limit value from callback data
+	parts := strings.Split(callbackQuery.Data, "_")
+	if len(parts) != 2 {
+		return
+	}
+	
+	limitStr := parts[1]
+	
+	// Handle custom limit
+	if limitStr == "custom" {
+		customMsg := payload.TgPlSendMessage{
+			ChatId:    callbackQuery.Message.Chat.Id,
+			ParseMode: payload.ParseModeHTML,
+			Text:      "⚙️ <b>Set Custom Group Limit</b>\n\nTo set a custom limit, use the command:\n\n<code>/setgrouplimit [number]</code>\n\n<b>Examples:</b>\n• <code>/setgrouplimit 15</code> (15 items per day)\n• <code>/setgrouplimit 50</code> (50 items per day)\n• <code>/setgrouplimit 100</code> (100 items per day)",
+		}
+		message.NewSendMessage(customMsg)
+		return
+	}
+	
+	// Parse limit value
+	limitValue, err := strconv.Atoi(limitStr)
+	if err != nil {
+		return
+	}
+	
+	// Set the group limit
+	err = services.SetGroupMediaLimit(callbackQuery.Message.Chat.Id, callbackQuery.Message.Chat.Title, limitValue)
+	if err != nil {
+		log.Printf("Error setting group limit: %v", err)
+		return
+	}
+	
+	// Send success message
+	var successText string
+	if limitValue == 0 {
+		successText = "✅ <b>Group limit removed!</b>\n\n🔓 Users now have unlimited access to send media."
+	} else {
+		successText = fmt.Sprintf("✅ <b>Group limit updated!</b>\n\n🔒 New limit: %d media items per day\n📋 Applied to all users without individual limits", limitValue)
+	}
+	
+	// Send success message with updated keyboard
+	newMsg := payload.TgPlSendMessage{
+		ChatId:      callbackQuery.Message.Chat.Id,
+		ParseMode:   payload.ParseModeHTML,
+		Text:        successText,
+		ReplyMarkup: createGroupSettingsKeyboard(),
+	}
+	message.NewSendMessage(newMsg)
+}
+
+// handleTimezoneMenuCallback shows the timezone selection menu
+func handleTimezoneMenuCallback(origChat *response.TgChat, origUser *response.TgUser) {
+	timezoneMsg := payload.TgPlSendMessage{
+		ChatId:      origChat.Id,
+		ParseMode:   payload.ParseModeHTML,
+		Text:        "🌍 <b>Select Timezone Region</b>\n\nChoose your region to set the group timezone:",
+		ReplyMarkup: createTimezoneMenuKeyboard(),
+	}
+	
+	message.NewSendMessage(timezoneMsg)
+}
+
+// handleTimezoneRegionCallback shows timezones for a specific region
+func handleTimezoneRegionCallback(callbackQuery *response.TgCallbackQuery) {
+	region := strings.TrimPrefix(callbackQuery.Data, "/tz_")
+	
+	var keyboard *api.TgInlineKeyboardMarkup
+	var regionName string
+	
+	switch region {
+	case "americas":
+		keyboard = createAmericasTimezoneKeyboard()
+		regionName = "Americas"
+	case "europe":
+		keyboard = createEuropeTimezoneKeyboard()
+		regionName = "Europe"
+	case "asia":
+		keyboard = createAsiaTimezoneKeyboard()
+		regionName = "Asia"
+	case "australia":
+		// Create Australia keyboard (simplified for now)
+		keyboard = &api.TgInlineKeyboardMarkup{
+			InlineKeyboard: [][]api.TgInlineKeyboardButton{
+				{
+					{Text: "🇦🇺 Sydney", CallbackData: "/setgrouptimezone_Australia/Sydney"},
+					{Text: "🇦🇺 Melbourne", CallbackData: "/setgrouptimezone_Australia/Melbourne"},
+				},
+				{
+					{Text: "🇦🇺 Perth", CallbackData: "/setgrouptimezone_Australia/Perth"},
+					{Text: "🇦🇺 Brisbane", CallbackData: "/setgrouptimezone_Australia/Brisbane"},
+				},
+				{
+					{Text: "⬅️ Back", CallbackData: "/timezone_menu"},
+				},
+			},
+		}
+		regionName = "Australia"
+	case "africa":
+		// Create Africa keyboard (simplified for now)
+		keyboard = &api.TgInlineKeyboardMarkup{
+			InlineKeyboard: [][]api.TgInlineKeyboardButton{
+				{
+					{Text: "🇿🇦 Johannesburg", CallbackData: "/setgrouptimezone_Africa/Johannesburg"},
+					{Text: "🇪🇬 Cairo", CallbackData: "/setgrouptimezone_Africa/Cairo"},
+				},
+				{
+					{Text: "🇳🇬 Lagos", CallbackData: "/setgrouptimezone_Africa/Lagos"},
+					{Text: "🇰🇪 Nairobi", CallbackData: "/setgrouptimezone_Africa/Nairobi"},
+				},
+				{
+					{Text: "⬅️ Back", CallbackData: "/timezone_menu"},
+				},
+			},
+		}
+		regionName = "Africa"
+	default:
+		return
+	}
+	
+	regionMsg := payload.TgPlSendMessage{
+		ChatId:      callbackQuery.Message.Chat.Id,
+		ParseMode:   payload.ParseModeHTML,
+		Text:        fmt.Sprintf("🌍 <b>%s Timezones</b>\n\nSelect your timezone:", regionName),
+		ReplyMarkup: keyboard,
+	}
+	
+	message.NewSendMessage(regionMsg)
+}
+
+// handleSetTimezoneCallback sets the group timezone
+func handleSetTimezoneCallback(callbackQuery *response.TgCallbackQuery) {
+	// Extract timezone from callback data
+	timezone := strings.TrimPrefix(callbackQuery.Data, "/setgrouptimezone_")
+	
+	// Set the group timezone
+	err := services.SetGroupTimezone(callbackQuery.Message.Chat.Id, callbackQuery.Message.Chat.Title, timezone)
+	if err != nil {
+		log.Printf("Error setting group timezone: %v", err)
+		return
+	}
+	
+	// Get current time in the new timezone
+	loc, _ := time.LoadLocation(timezone)
+	currentTime := time.Now().In(loc)
+	
+	// Send success message
+	successText := fmt.Sprintf("✅ <b>Timezone Updated!</b>\n\n🌍 New timezone: %s\n🕐 Current time: %s\n\n⏰ Daily limits will now reset at midnight in this timezone.",
+		timezone,
+		currentTime.Format("15:04:05 MST"))
+	
+	successMsg := payload.TgPlSendMessage{
+		ChatId:      callbackQuery.Message.Chat.Id,
+		ParseMode:   payload.ParseModeHTML,
+		Text:        successText,
+		ReplyMarkup: createGroupSettingsKeyboard(),
+	}
+	
+	message.NewSendMessage(successMsg)
+}
+
+// answerCallbackQuery sends an answer to a callback query
+func answerCallbackQuery(callbackQueryId string) {
+	// For now, we'll just log this since we need to implement the answerCallbackQuery API method
+	log.Printf("📱 Answering callback query: %s", callbackQueryId)
+	// TODO: Implement message.NewAnswerCallbackQuery when the API method is available
+}
+
+// shouldEnforceLimit checks if a user has exceeded their daily media limit
+func shouldEnforceLimit(userID int64, chatID int64, username string, messageID int) bool {
+	// Get user's effective limit
+	limit, _, err := services.GetEffectiveUserLimit(userID, chatID)
+	if err != nil {
+		log.Printf("Error getting user limit: %v", err)
+		return false // Don't block on error
+	}
+	
+	// No limit set - allow processing
+	if limit == 0 {
+		return false
+	}
+	
+	// Check current usage
+	dailyCount, err := services.GetDailyMediaCount(userID, chatID)
+	if err != nil {
+		log.Printf("Error getting daily media count: %v", err)
+		return false // Don't block on error
+	}
+	
+	// User has exceeded limit
+	if dailyCount >= limit {
+		log.Printf("🚫 User %d has exceeded daily limit (%d/%d)", userID, dailyCount, limit)
+		
+		// Delete the message that triggered the limit
+		deletePayload := payload.TgPlDeleteMessage{
+			ChatId:    chatID,
+			MessageId: messageID,
+		}
+		message.NewDeleteMessage(deletePayload)
+		
+		// Get reset time information
+		resetTime, timeUntilReset, err := services.GetTimezoneAwareResetTime(chatID)
+		if err != nil {
+			log.Printf("Error getting reset time: %v", err)
+			timeUntilReset = 0
+		}
+		
+		// Build notification message
+		var notificationText strings.Builder
+		notificationText.WriteString(fmt.Sprintf("🚫 @%s, you've reached your daily media limit!\n\n", username))
+		notificationText.WriteString(fmt.Sprintf("📊 <b>Daily Limit:</b> %d media items\n", limit))
+		notificationText.WriteString(fmt.Sprintf("🔴 <b>Status:</b> Limit reached (%d/%d)\n", dailyCount, limit))
+		
+		if timeUntilReset > 0 {
+			notificationText.WriteString(fmt.Sprintf("⏰ <b>Resets in:</b> %s\n", formatDuration(timeUntilReset)))
+			notificationText.WriteString(fmt.Sprintf("📅 <b>Reset time:</b> %s\n", resetTime.Format("15:04 MST")))
+		}
+		
+		// Send notification
+		notificationMsg := payload.TgPlSendMessage{
+			ChatId:              chatID,
+			ParseMode:           payload.ParseModeHTML,
+			Text:                notificationText.String(),
+			DisableNotification: true,
+		}
+		message.NewSendMessage(notificationMsg)
+		
+		return true // Block processing
+	}
+	
+	return false // Allow processing
+}
+
+// trackMediaSent records that a media item was successfully sent
+func trackMediaSent(userID int64, username string, chatID int64, chatTitle string, url string, mediaType string) {
+	// Determine platform from URL
+	platform := getPlatformFromURL(url)
+	
+	// Record the media stat
+	err := services.RecordMediaStat(userID, username, chatID, chatTitle, platform, mediaType, url)
+	if err != nil {
+		log.Printf("Error recording media stat: %v", err)
+	} else {
+		log.Printf("📊 Recorded media stat: user=%d, platform=%s, type=%s", userID, platform, mediaType)
+	}
+}
+
+// getPlatformFromURL determines the platform from a URL
+func getPlatformFromURL(url string) string {
+	if strings.Contains(url, "instagram.com") {
+		return "instagram"
+	} else if strings.Contains(url, "tiktok.com") {
+		return "tiktok"
+	} else if strings.Contains(url, "twitter.com") || strings.Contains(url, "x.com") {
+		return "twitter"
+	} else if strings.Contains(url, "youtube.com") || strings.Contains(url, "youtu.be") {
+		return "youtube"
+	} else if strings.Contains(url, "reddit.com") {
+		return "reddit"
+	} else if strings.Contains(url, "facebook.com") {
+		return "facebook"
+	} else if strings.Contains(url, "9gag.com") {
+		return "9gag"
+	} else {
+		return "unknown"
+	}
 }

@@ -3,10 +3,21 @@ package config
 import (
 	"github.com/joho/godotenv"
 	"os"
+	"strconv"
 	"strings"
 )
 
 const tgBotTokenKey = "TG_BOT_TOKEN"
+
+// Database configuration
+const (
+	dbHostKey     = "DB_HOST"
+	dbPortKey     = "DB_PORT"
+	dbNameKey     = "DB_NAME"
+	dbUserKey     = "DB_USER"
+	dbPasswordKey = "DB_PASSWORD"
+	dbSSLModeKey  = "DB_SSLMODE"
+)
 
 func init() {
 	loadConfig()
@@ -165,6 +176,57 @@ func IsCookiesEnabledForPlatform(platform string) bool {
 	default:
 		return true // Default to enabled for unknown platforms
 	}
+}
+
+// Database configuration functions
+func GetDBHost() string {
+	if host := os.Getenv(dbHostKey); host != "" {
+		return host
+	}
+	return "localhost"
+}
+
+func GetDBPort() string {
+	if port := os.Getenv(dbPortKey); port != "" {
+		return port
+	}
+	return "5432"
+}
+
+func GetDBName() string {
+	if name := os.Getenv(dbNameKey); name != "" {
+		return name
+	}
+	return "social_link_bot"
+}
+
+func GetDBUser() string {
+	if user := os.Getenv(dbUserKey); user != "" {
+		return user
+	}
+	return "postgres"
+}
+
+func GetDBPassword() string {
+	return os.Getenv(dbPasswordKey)
+}
+
+func GetDBSSLMode() string {
+	if sslMode := os.Getenv(dbSSLModeKey); sslMode != "" {
+		return sslMode
+	}
+	return "disable"
+}
+
+// Media tracking configuration
+func GetDefaultDailyMediaLimit() int {
+	if limit := os.Getenv("DEFAULT_DAILY_MEDIA_LIMIT"); limit != "" {
+		// Parse the limit, default to 0 if invalid
+		if parsed, err := strconv.Atoi(limit); err == nil {
+			return parsed
+		}
+	}
+	return 0 // 0 means no limit
 }
 
 // Helper function to parse boolean environment variables

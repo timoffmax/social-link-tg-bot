@@ -12,9 +12,11 @@ import (
 func Run() {
 	initApp()
 	initLogging()
+	initDatabase()
 	runStartupChecks()
 	startCleanupTask()
 	defer services.CloseLogger()
+	defer services.CloseDatabase()
 	listenForUpdates()
 }
 
@@ -45,6 +47,11 @@ func runStartupChecks() {
 	checker := services.NewStartupChecker()
 	checker.RunStartupChecks()
 	
+	// Set bot commands for Telegram menu
+	if err := services.SetBotCommands(); err != nil {
+		log.Printf("⚠️ Warning: Failed to set bot commands: %v", err)
+	}
+	
 	// Startup testing removed - tests can be run on-demand via services.NewRealLinkTester().RunQuickTest()
 	log.Printf("✅ Startup complete. Use services.NewRealLinkTester().RunQuickTest() for on-demand testing")
 }
@@ -54,6 +61,13 @@ func loadEnvFile() {
 
 	if err != nil {
 		log.Fatal("Error loading .env file")
+	}
+}
+
+func initDatabase() {
+	err := services.InitDatabase()
+	if err != nil {
+		log.Fatalf("Failed to initialize database: %v", err)
 	}
 }
 
