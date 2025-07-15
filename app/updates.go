@@ -2468,7 +2468,7 @@ func createEuropeTimezoneKeyboard() *api.TgInlineKeyboardMarkup {
 		},
 		{
 			{Text: "🇷🇺 Moscow", CallbackData: "/setgrouptimezone_Europe/Moscow"},
-			{Text: "🇺🇦 Kiev", CallbackData: "/setgrouptimezone_Europe/Kiev"},
+			{Text: "🇺🇦 Kyiv", CallbackData: "/setgrouptimezone_Europe/Kyiv"},
 		},
 		{
 			{Text: "⬅️ Back", CallbackData: "/timezone_menu"},
