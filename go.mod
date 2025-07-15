@@ -1,12 +1,10 @@
 module github.com/timoffmax/social-link-bot
 
-go 1.23.0
-
-toolchain go1.23.11
+go 1.22
 
 require (
 	github.com/chromedp/chromedp v0.9.3
-	github.com/golang-migrate/migrate/v4 v4.18.3
+	github.com/golang-migrate/migrate/v4 v4.17.0
 	github.com/google/go-querystring v1.1.0
 	github.com/joho/godotenv v1.3.0
 	github.com/lib/pq v1.10.9
