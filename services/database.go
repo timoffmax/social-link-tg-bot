@@ -13,6 +13,37 @@ import (
 	"github.com/timoffmax/social-link-bot/config"
 )
 
+// loadTimezoneWithFallback loads a timezone with fallback support for common issues
+func loadTimezoneWithFallback(timezoneStr string, chatID int64) *time.Location {
+	// Try primary timezone first
+	loc, err := time.LoadLocation(timezoneStr)
+	if err == nil {
+		return loc
+	}
+	
+	// Handle Europe/Kyiv -> Europe/Kiev fallback
+	if timezoneStr == "Europe/Kyiv" {
+		loc, err = time.LoadLocation("Europe/Kiev")
+		if err == nil {
+			log.Printf("Timezone Europe/Kyiv not available for chat %d, using Europe/Kiev fallback", chatID)
+			return loc
+		}
+	}
+	
+	// Handle Europe/Kiev -> Europe/Kyiv fallback (for future compatibility)
+	if timezoneStr == "Europe/Kiev" {
+		loc, err = time.LoadLocation("Europe/Kyiv")
+		if err == nil {
+			log.Printf("Timezone Europe/Kiev not available for chat %d, using Europe/Kyiv fallback", chatID)
+			return loc
+		}
+	}
+	
+	// Final fallback to UTC
+	log.Printf("Invalid timezone %s for chat %d, falling back to UTC", timezoneStr, chatID)
+	return time.UTC
+}
+
 type DatabaseService struct {
 	db *sql.DB
 }
@@ -421,12 +452,8 @@ func GetTimezoneAwareResetTime(chatID int64) (time.Time, time.Duration, error) {
 		return time.Time{}, 0, err
 	}
 	
-	// Load timezone
-	loc, err := time.LoadLocation(timezoneStr)
-	if err != nil {
-		log.Printf("Invalid timezone %s for chat %d, falling back to UTC", timezoneStr, chatID)
-		loc = time.UTC
-	}
+	// Load timezone with fallback support
+	loc := loadTimezoneWithFallback(timezoneStr, chatID)
 	
 	// Get current time in group's timezone
 	now := time.Now().In(loc)

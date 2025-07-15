@@ -25,6 +25,57 @@ var (
 	updatesMutex     sync.RWMutex
 )
 
+// isTimezoneValid checks if a timezone is valid with fallback support
+func isTimezoneValid(timezoneStr string) bool {
+	// Try primary timezone first
+	_, err := time.LoadLocation(timezoneStr)
+	if err == nil {
+		return true
+	}
+	
+	// Handle Europe/Kyiv -> Europe/Kiev fallback
+	if timezoneStr == "Europe/Kyiv" {
+		_, err = time.LoadLocation("Europe/Kiev")
+		return err == nil
+	}
+	
+	// Handle Europe/Kiev -> Europe/Kyiv fallback
+	if timezoneStr == "Europe/Kiev" {
+		_, err = time.LoadLocation("Europe/Kyiv")
+		return err == nil
+	}
+	
+	return false
+}
+
+// loadTimezoneWithFallback loads a timezone with fallback support for UI display
+func loadTimezoneWithFallback(timezoneStr string) *time.Location {
+	// Try primary timezone first
+	loc, err := time.LoadLocation(timezoneStr)
+	if err == nil {
+		return loc
+	}
+	
+	// Handle Europe/Kyiv -> Europe/Kiev fallback
+	if timezoneStr == "Europe/Kyiv" {
+		loc, err = time.LoadLocation("Europe/Kiev")
+		if err == nil {
+			return loc
+		}
+	}
+	
+	// Handle Europe/Kiev -> Europe/Kyiv fallback
+	if timezoneStr == "Europe/Kiev" {
+		loc, err = time.LoadLocation("Europe/Kyiv")
+		if err == nil {
+			return loc
+		}
+	}
+	
+	// Final fallback to UTC
+	return time.UTC
+}
+
 func listenForUpdates() {
 	var offset int
 	isFirstRun := true
@@ -2118,8 +2169,7 @@ func handleSetGroupTimezoneCommand(origMessage *response.TgMessage, origChat *re
 	timezone := args[1]
 	
 	// Validate timezone
-	_, err := time.LoadLocation(timezone)
-	if err != nil {
+	if !isTimezoneValid(timezone) {
 		errorMsg := payload.TgPlSendMessage{
 			ChatId:              origChat.Id,
 			ParseMode:           payload.ParseModeHTML,
@@ -2132,7 +2182,7 @@ func handleSetGroupTimezoneCommand(origMessage *response.TgMessage, origChat *re
 	}
 	
 	// Set the group timezone
-	err = services.SetGroupTimezone(origChat.Id, origChat.Title, timezone)
+	err := services.SetGroupTimezone(origChat.Id, origChat.Title, timezone)
 	if err != nil {
 		log.Printf("Error setting group timezone: %v", err)
 		errorMsg := payload.TgPlSendMessage{
@@ -2147,7 +2197,7 @@ func handleSetGroupTimezoneCommand(origMessage *response.TgMessage, origChat *re
 	}
 	
 	// Get current time in the new timezone
-	loc, _ := time.LoadLocation(timezone)
+	loc := loadTimezoneWithFallback(timezone)
 	currentTime := time.Now().In(loc)
 	
 	// Calculate next reset time
@@ -2653,7 +2703,7 @@ func handleSetTimezoneCallback(callbackQuery *response.TgCallbackQuery) {
 	}
 	
 	// Get current time in the new timezone
-	loc, _ := time.LoadLocation(timezone)
+	loc := loadTimezoneWithFallback(timezone)
 	currentTime := time.Now().In(loc)
 	
 	// Send success message
