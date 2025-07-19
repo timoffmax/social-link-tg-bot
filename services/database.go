@@ -153,7 +153,7 @@ func runMigrations(db *sql.DB) error {
 
 func GetDB() *sql.DB {
 	if dbService == nil {
-		log.Fatal("Database service not initialized")
+		return nil
 	}
 	return dbService.db
 }
@@ -163,6 +163,11 @@ func CloseDatabase() error {
 		return dbService.db.Close()
 	}
 	return nil
+}
+
+// IsDBInitialized returns true if database is successfully initialized
+func IsDBInitialized() bool {
+	return dbService != nil && dbService.db != nil
 }
 
 type MediaStat struct {
@@ -188,6 +193,10 @@ type UserMediaLimit struct {
 
 // RecordMediaStat records a media send event
 func RecordMediaStat(userID int64, username string, chatID int64, chatTitle string, platform string, mediaType string, url string) error {
+	if !IsDBInitialized() {
+		// Silently skip if database is not available
+		return nil
+	}
 	query := `
 		INSERT INTO media_stats (user_id, username, chat_id, chat_title, platform, media_type, url)
 		VALUES ($1, $2, $3, $4, $5, $6, $7)
@@ -198,6 +207,10 @@ func RecordMediaStat(userID int64, username string, chatID int64, chatTitle stri
 
 // GetDailyMediaCount returns the number of media items sent by a user today
 func GetDailyMediaCount(userID int64, chatID int64) (int, error) {
+	if !IsDBInitialized() {
+		// Return 0 if database is not available
+		return 0, nil
+	}
 	query := `
 		SELECT COUNT(*) FROM media_stats 
 		WHERE user_id = $1 AND chat_id = $2 AND DATE(created_at AT TIME ZONE 'UTC') = DATE(NOW() AT TIME ZONE 'UTC')
@@ -209,6 +222,9 @@ func GetDailyMediaCount(userID int64, chatID int64) (int, error) {
 
 // GetUserMediaLimit returns the daily media limit for a user in a chat
 func GetUserMediaLimit(userID int64, chatID int64) (int, error) {
+	if !IsDBInitialized() {
+		return config.GetDefaultDailyMediaLimit(), nil
+	}
 	query := `SELECT daily_limit FROM user_media_limits WHERE user_id = $1 AND chat_id = $2`
 	var limit int
 	err := GetDB().QueryRow(query, userID, chatID).Scan(&limit)
@@ -220,6 +236,9 @@ func GetUserMediaLimit(userID int64, chatID int64) (int, error) {
 
 // SetUserMediaLimit sets the daily media limit for a user in a chat
 func SetUserMediaLimit(userID int64, chatID int64, limit int) error {
+	if !IsDBInitialized() {
+		return nil
+	}
 	query := `
 		INSERT INTO user_media_limits (user_id, chat_id, daily_limit, updated_at)
 		VALUES ($1, $2, $3, NOW())
@@ -246,6 +265,9 @@ type MediaStats struct {
 
 // GetMediaStats returns media statistics for a given time period
 func GetMediaStats(chatID int64, period string) (*MediaStats, error) {
+	if !IsDBInitialized() {
+		return &MediaStats{}, nil
+	}
 	var whereClause string
 	switch period {
 	case "today":
@@ -323,9 +345,8 @@ type GroupLimitInfo struct {
 
 // SetGroupMediaLimit sets the default daily media limit for a group
 func SetGroupMediaLimit(chatID int64, chatTitle string, limit int) error {
-	db := GetDB()
-	if db == nil {
-		return fmt.Errorf("database not initialized")
+	if !IsDBInitialized() {
+		return nil
 	}
 
 	query := `
@@ -338,20 +359,19 @@ func SetGroupMediaLimit(chatID int64, chatTitle string, limit int) error {
 			updated_at = CURRENT_TIMESTAMP
 	`
 
-	_, err := db.Exec(query, chatID, chatTitle, limit)
+	_, err := GetDB().Exec(query, chatID, chatTitle, limit)
 	return err
 }
 
 // GetGroupMediaLimit gets the default daily media limit for a group
 func GetGroupMediaLimit(chatID int64) (int, error) {
-	db := GetDB()
-	if db == nil {
-		return 0, fmt.Errorf("database not initialized")
+	if !IsDBInitialized() {
+		return 0, nil
 	}
 
 	var limit int
 	query := `SELECT default_daily_limit FROM group_media_limits WHERE chat_id = $1`
-	err := db.QueryRow(query, chatID).Scan(&limit)
+	err := GetDB().QueryRow(query, chatID).Scan(&limit)
 	
 	if err == sql.ErrNoRows {
 		return 0, nil // No group limit set
@@ -362,9 +382,8 @@ func GetGroupMediaLimit(chatID int64) (int, error) {
 
 // SetGroupTimezone sets the timezone for a group
 func SetGroupTimezone(chatID int64, chatTitle string, timezone string) error {
-	db := GetDB()
-	if db == nil {
-		return fmt.Errorf("database not initialized")
+	if !IsDBInitialized() {
+		return nil
 	}
 
 	query := `
@@ -377,20 +396,19 @@ func SetGroupTimezone(chatID int64, chatTitle string, timezone string) error {
 			updated_at = CURRENT_TIMESTAMP
 	`
 
-	_, err := db.Exec(query, chatID, chatTitle, timezone)
+	_, err := GetDB().Exec(query, chatID, chatTitle, timezone)
 	return err
 }
 
 // GetGroupTimezone gets the timezone for a group
 func GetGroupTimezone(chatID int64) (string, error) {
-	db := GetDB()
-	if db == nil {
-		return "UTC", fmt.Errorf("database not initialized")
+	if !IsDBInitialized() {
+		return "UTC", nil
 	}
 
 	var timezone string
 	query := `SELECT timezone FROM group_media_limits WHERE chat_id = $1`
-	err := db.QueryRow(query, chatID).Scan(&timezone)
+	err := GetDB().QueryRow(query, chatID).Scan(&timezone)
 	
 	if err == sql.ErrNoRows {
 		return "UTC", nil // Default to UTC if no timezone set
@@ -401,14 +419,19 @@ func GetGroupTimezone(chatID int64) (string, error) {
 
 // GetGroupLimitInfo gets complete group limit information
 func GetGroupLimitInfo(chatID int64) (*GroupLimitInfo, error) {
-	db := GetDB()
-	if db == nil {
-		return nil, fmt.Errorf("database not initialized")
+	if !IsDBInitialized() {
+		// Return default values if database not available
+		return &GroupLimitInfo{
+			ChatID:            chatID,
+			ChatTitle:         "",
+			DefaultDailyLimit: 0,
+			Timezone:          "UTC",
+		}, nil
 	}
 
 	var info GroupLimitInfo
 	query := `SELECT chat_id, chat_title, default_daily_limit, timezone FROM group_media_limits WHERE chat_id = $1`
-	err := db.QueryRow(query, chatID).Scan(&info.ChatID, &info.ChatTitle, &info.DefaultDailyLimit, &info.Timezone)
+	err := GetDB().QueryRow(query, chatID).Scan(&info.ChatID, &info.ChatTitle, &info.DefaultDailyLimit, &info.Timezone)
 	
 	if err == sql.ErrNoRows {
 		// Return default values if no group settings exist
@@ -425,6 +448,11 @@ func GetGroupLimitInfo(chatID int64) (*GroupLimitInfo, error) {
 
 // GetEffectiveUserLimit gets the effective limit for a user (individual limit or group default)
 func GetEffectiveUserLimit(userID int64, chatID int64) (int, bool, error) {
+	if !IsDBInitialized() {
+		// Return 0 (no limit) if database is not available
+		return 0, false, nil
+	}
+	
 	// First check if user has an individual limit
 	userLimit, err := GetUserMediaLimit(userID, chatID)
 	if err != nil {
@@ -512,7 +540,7 @@ func GetUserMediaStats(chatID int64, period string) ([]UserStats, error) {
 		ORDER BY user_id, platform, media_type
 	`, whereClause)
 
-	rows, err := db.Query(query, chatID)
+	rows, err := GetDB().Query(query, chatID)
 	if err != nil {
 		return nil, err
 	}

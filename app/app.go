@@ -16,7 +16,12 @@ func Run() {
 	runStartupChecks()
 	startCleanupTask()
 	defer services.CloseLogger()
-	defer services.CloseDatabase()
+	defer func() {
+		// Only try to close database if it was initialized
+		if services.IsDBInitialized() {
+			services.CloseDatabase()
+		}
+	}()
 	listenForUpdates()
 }
 
@@ -67,7 +72,11 @@ func loadEnvFile() {
 func initDatabase() {
 	err := services.InitDatabase()
 	if err != nil {
-		log.Fatalf("Failed to initialize database: %v", err)
+		log.Printf("⚠️  Database initialization failed: %v", err)
+		log.Printf("📌 Bot will continue without database features (stats, limits)")
+		// Don't exit - bot can work without database
+	} else {
+		log.Printf("✅ Database initialized successfully")
 	}
 }
 
