@@ -1564,8 +1564,8 @@ func handleBotCommand(origMessage *response.TgMessage, origChat *response.TgChat
 	case "/setgrouptimezone":
 		handleSetGroupTimezoneCommand(origMessage, origChat, origUser)
 	default:
-		// Unknown command - send help
-		handleStartCommand(origMessage, origChat, origUser)
+		// Unknown command - ignore it
+		log.Printf("🚫 Ignoring unknown command: %s from user %d", command, origUser.Id)
 	}
 }
 
