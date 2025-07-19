@@ -35,7 +35,20 @@ func GetExtractionStrategy(url string) *ExtractionStrategy {
 				HasFixedLink: false,
 			}
 		}
-		// All Instagram content: yt-dlp first (fast and reliable), browser fallback, fixed link last resort
+		// Instagram videos (reels, IGTV): try fixed link first to avoid account bans
+		if strings.Contains(url, "/reel/") || strings.Contains(url, "/tv/") || strings.Contains(url, "/reels/") {
+			return &ExtractionStrategy{
+				Platform: "instagram",
+				Methods: []ExtractionMethod{
+					MethodFixedLink,  // Try fixed link first for videos
+					MethodYtDlp,      // Fallback to yt-dlp if fixed link fails
+					// Skip browser method as it consistently times out for Instagram
+				},
+				HasFixedLink: true,
+				FixedLinkDomain: "instagramez.com",
+			}
+		}
+		// Instagram photos/carousels: yt-dlp first (fast and reliable), browser fallback, fixed link last resort
 		return &ExtractionStrategy{
 			Platform: "instagram",
 			Methods: []ExtractionMethod{

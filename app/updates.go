@@ -319,20 +319,23 @@ func processMediaDownload(url string, origChat *response.TgChat, origMessage *re
 			return
 		}
 		
-		// For Instagram, TikTok, and Twitter - try fixed link fallback
-		fixedUrl := getFixedUrl(url)
-		if fixedUrl != "" {
-			log.Printf("📎 Falling back to fixed link for %s", url)
-			fixedLinkMsg := payload.TgPlSendMessage{
-				ChatId:              origChat.Id,
-				ParseMode:           payload.ParseModeHTML,
-				Text:                fixedUrl,
-				ReplyToMessageId:    origMessage.MessageId,
-				DisableNotification: true,
+		// For Instagram videos, we already tried fixed link first, so don't fallback
+		// For other platforms (TikTok, Twitter) that didn't try fixed link first, fallback
+		if !strings.Contains(url, "instagram.com") || (!strings.Contains(url, "/reel/") && !strings.Contains(url, "/tv/")) {
+			fixedUrl := getFixedUrl(url)
+			if fixedUrl != "" {
+				log.Printf("📎 Falling back to fixed link for %s", url)
+				fixedLinkMsg := payload.TgPlSendMessage{
+					ChatId:              origChat.Id,
+					ParseMode:           payload.ParseModeHTML,
+					Text:                fixedUrl,
+					ReplyToMessageId:    origMessage.MessageId,
+					DisableNotification: true,
+				}
+				response := message.NewSendMessage(fixedLinkMsg)
+				services.LogTelegramMessage(origChat.Id, "fixed-link-fallback", response != nil, "")
+				return
 			}
-			response := message.NewSendMessage(fixedLinkMsg)
-			services.LogTelegramMessage(origChat.Id, "fixed-link-fallback", response != nil, "")
-			return
 		}
 		
 		// Send error message for other platforms
@@ -777,6 +780,10 @@ func getErrorMessage(url string) string {
 	} else if strings.Contains(url, "9gag.com") {
 		return "❌ Failed to download from 9GAG.\n\n" +
 			"9GAG content may be region-restricted or unavailable."
+	} else if strings.Contains(url, "instagram.com") {
+		return "❌ Cannot download this Instagram video.\n\n" +
+			"The content may be private, deleted, or the account might be restricted. " +
+			"Instagram has strict anti-bot measures that sometimes prevent downloads."
 	}
 	
 	return fmt.Sprintf("❌ Failed to download media from %s", url)

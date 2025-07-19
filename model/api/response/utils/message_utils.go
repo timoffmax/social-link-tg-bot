@@ -155,7 +155,29 @@ func fixTwitterLink(link string) string {
 
 func GetOriginalInstagramLinks(message *response.TgMessage) []string {
 	regex := regexp.MustCompile(`https?:\/\/(www\.)?instagram\.com\/[^\s]+`)
-	return regex.FindAllString(message.Text, -1)
+	links := regex.FindAllString(message.Text, -1)
+	
+	// Clean tracking parameters from Instagram URLs
+	for i, link := range links {
+		links[i] = cleanInstagramURL(link)
+	}
+	
+	return links
+}
+
+// cleanInstagramURL removes tracking parameters like igsh from Instagram URLs
+func cleanInstagramURL(url string) string {
+	// Remove query parameters like ?igsh=...
+	if idx := strings.Index(url, "?"); idx != -1 {
+		url = url[:idx]
+	}
+	
+	// Ensure URL ends with trailing slash for consistency
+	if !strings.HasSuffix(url, "/") {
+		url = url + "/"
+	}
+	
+	return url
 }
 
 func GetOriginalTikTokLinks(message *response.TgMessage) []string {

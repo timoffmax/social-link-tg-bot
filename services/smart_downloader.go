@@ -84,17 +84,32 @@ func (sd *SmartDownloader) DownloadMedia(url string) ([]*MediaInfo, error) {
 			
 		case MethodFixedLink:
 			if strategy.HasFixedLink {
-				log.Printf("🔗 Returning fixed link as fallback")
+				log.Printf("🔗 Trying fixed link approach for %s", strategy.Platform)
 				fixedURL := strategy.GetFixedURL(url)
+				methodDuration := time.Since(methodStartTime)
+				
 				if fixedURL != "" {
-					// Return a text-only MediaInfo with the fixed link
-					LogExtraction(strategy.Platform, url, "fixed-link", true, 1, time.Since(startTime))
-					return []*MediaInfo{{
-						Type:    "text",
-						URL:     url,
-						Caption: fixedURL,
-						Filename: "",
-					}}, nil
+					// For Instagram videos, immediately return the fixed link without validation
+					// These services provide embed pages, not direct downloads
+					if strategy.Platform == "instagram" && (strings.Contains(url, "/reel/") || strings.Contains(url, "/tv/")) {
+						log.Printf("📎 Returning Instagram fixed link: %s", fixedURL)
+						LogExtraction(strategy.Platform, url, "fixed-link", true, 1, methodDuration)
+						return []*MediaInfo{{
+							Type:    "text",
+							URL:     url,
+							Caption: fixedURL,
+							Filename: "",
+						}}, nil
+					} else {
+						// For other platforms or non-video Instagram, return fixed link as text
+						LogExtraction(strategy.Platform, url, "fixed-link", true, 1, time.Since(startTime))
+						return []*MediaInfo{{
+							Type:    "text",
+							URL:     url,
+							Caption: fixedURL,
+							Filename: "",
+						}}, nil
+					}
 				}
 			}
 		}
