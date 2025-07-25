@@ -198,7 +198,7 @@ func (sc *StartupChecker) printPlatformSupport() {
 		{
 			Name:      "📷 Instagram",
 			Supported: []string{"Photos", "Videos", "Albums (limited support)"},
-			FixedLink: "instagramez.com",
+			FixedLink: "d.ddinstagram.com",
 		},
 		{
 			Name:      "🎵 TikTok",

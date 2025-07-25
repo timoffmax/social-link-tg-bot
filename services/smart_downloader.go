@@ -89,11 +89,54 @@ func (sd *SmartDownloader) DownloadMedia(url string) ([]*MediaInfo, error) {
 				methodDuration := time.Since(methodStartTime)
 				
 				if fixedURL != "" {
-					// For Instagram videos, immediately return the fixed link without validation
-					// These services provide embed pages, not direct downloads
-					if strategy.Platform == "instagram" && (strings.Contains(url, "/reel/") || strings.Contains(url, "/tv/")) {
-						log.Printf("📎 Returning Instagram fixed link: %s", fixedURL)
-						LogExtraction(strategy.Platform, url, "fixed-link", true, 1, methodDuration)
+					// For Instagram, try to download media from the fixed link first
+					if strategy.Platform == "instagram" {
+						log.Printf("🎯 Attempting to download media from Instagram fixed link: %s", fixedURL)
+						
+						// Try yt-dlp on the fixed link
+						fixedMediaInfos, fixedErr := sd.ytdlp.DownloadMedia(fixedURL)
+						if fixedErr == nil && len(fixedMediaInfos) > 0 {
+							// Check if we got actual media files
+							hasActualMedia := false
+							for _, media := range fixedMediaInfos {
+								if media.Type != "text" && media.Filename != "" {
+									hasActualMedia = true
+									break
+								}
+							}
+							
+							if hasActualMedia {
+								log.Printf("✅ Fixed link extraction succeeded with %d media items", len(fixedMediaInfos))
+								LogExtraction(strategy.Platform, url, "fixed-link-media", true, len(fixedMediaInfos), methodDuration)
+								appendOriginalURL(fixedMediaInfos, url)
+								return fixedMediaInfos, nil
+							}
+						}
+						
+						// If yt-dlp failed, try browser extraction on the fixed link
+						log.Printf("🌐 Trying browser extraction on fixed link")
+						browserMediaInfos, browserErr := sd.browser.ExtractMedia(fixedURL)
+						if browserErr == nil && len(browserMediaInfos) > 0 {
+							// Check if we got actual media files
+							hasActualMedia := false
+							for _, media := range browserMediaInfos {
+								if media.Type != "text" && media.Filename != "" {
+									hasActualMedia = true
+									break
+								}
+							}
+							
+							if hasActualMedia {
+								log.Printf("✅ Fixed link browser extraction succeeded with %d media items", len(browserMediaInfos))
+								LogExtraction(strategy.Platform, url, "fixed-link-browser", true, len(browserMediaInfos), methodDuration)
+								appendOriginalURL(browserMediaInfos, url)
+								return browserMediaInfos, nil
+							}
+						}
+						
+						// If all extraction attempts failed, return the fixed link as text
+						log.Printf("📎 Could not extract media from fixed link, returning as text: %s", fixedURL)
+						LogExtraction(strategy.Platform, url, "fixed-link-text", true, 1, methodDuration)
 						return []*MediaInfo{{
 							Type:    "text",
 							URL:     url,
@@ -101,7 +144,7 @@ func (sd *SmartDownloader) DownloadMedia(url string) ([]*MediaInfo, error) {
 							Filename: "",
 						}}, nil
 					} else {
-						// For other platforms or non-video Instagram, return fixed link as text
+						// For other platforms, return fixed link as text
 						LogExtraction(strategy.Platform, url, "fixed-link", true, 1, time.Since(startTime))
 						return []*MediaInfo{{
 							Type:    "text",

@@ -35,29 +35,29 @@ func GetExtractionStrategy(url string) *ExtractionStrategy {
 				HasFixedLink: false,
 			}
 		}
-		// Instagram videos (reels, IGTV): try fixed link first to avoid account bans
+		// Instagram videos (reels, IGTV): try yt-dlp first for actual media extraction
 		if strings.Contains(url, "/reel/") || strings.Contains(url, "/tv/") || strings.Contains(url, "/reels/") {
 			return &ExtractionStrategy{
 				Platform: "instagram",
 				Methods: []ExtractionMethod{
-					MethodFixedLink,  // Try fixed link first for videos
-					MethodYtDlp,      // Fallback to yt-dlp if fixed link fails
-					// Skip browser method as it consistently times out for Instagram
+					MethodYtDlp,      // Try yt-dlp first for actual media
+					MethodBrowser,    // Browser as fallback
+					MethodFixedLink,  // Fixed link as last resort
 				},
 				HasFixedLink: true,
-				FixedLinkDomain: "instagramez.com",
+				FixedLinkDomain: "d.ddinstagram.com",
 			}
 		}
-		// Instagram photos/carousels: yt-dlp first (fast and reliable), browser fallback, fixed link last resort
+		// Instagram photos/carousels: browser first for better carousel support, then yt-dlp, fixed link last resort
 		return &ExtractionStrategy{
 			Platform: "instagram",
 			Methods: []ExtractionMethod{
-				MethodYtDlp,
-				MethodBrowser,
-				MethodFixedLink,
+				MethodBrowser,    // Browser extraction works better for carousels
+				MethodYtDlp,      // Fallback to yt-dlp
+				MethodFixedLink,  // Last resort - but now tries to extract media from fixed link
 			},
 			HasFixedLink: true,
-			FixedLinkDomain: "instagramez.com",
+			FixedLinkDomain: "d.ddinstagram.com",
 		}
 	}
 	
@@ -224,7 +224,8 @@ func (es *ExtractionStrategy) GetFixedURL(originalURL string) string {
 	
 	switch es.Platform {
 	case "instagram":
-		return strings.Replace(originalURL, "instagram.com", es.FixedLinkDomain, 1)
+		// For ddinstagram, we need to add "d.dd" before instagram.com
+		return strings.Replace(originalURL, "https://www.instagram.com", "https://d.ddinstagram.com", 1)
 	case "tiktok":
 		return strings.Replace(originalURL, "tiktok.com", es.FixedLinkDomain, 1)
 	case "twitter":
