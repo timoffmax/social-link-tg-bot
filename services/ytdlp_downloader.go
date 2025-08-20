@@ -191,6 +191,22 @@ func (yd *YtDlpDownloader) GetMediaInfo(url string) (*YtDlpInfo, error) {
 	return &info, nil
 }
 
+// HasInstagramCookies checks if Instagram cookies are available and configured
+func (yd *YtDlpDownloader) HasInstagramCookies() bool {
+	// Check if cookies are enabled for Instagram in configuration
+	if !config.IsCookiesEnabledForPlatform("instagram") {
+		return false
+	}
+	
+	// Check if cookie file exists
+	instagramCookiesPath := yd.getFilePath("cookies/instagram_cookies.txt")
+	if _, err := os.Stat(instagramCookiesPath); err != nil {
+		return false
+	}
+	
+	return true
+}
+
 func (yd *YtDlpDownloader) DownloadMedia(url string) ([]*MediaInfo, error) {
 	log.Printf("Starting media download from: %s", url)
 	

@@ -43,6 +43,22 @@ func (sd *SmartDownloader) DownloadMedia(url string) ([]*MediaInfo, error) {
 	
 	// Get the extraction strategy for this URL
 	strategy := GetExtractionStrategy(url)
+	
+	// Instagram video optimization: prioritize fixed link when cookies are not available
+	if strategy.Platform == "instagram" && strategy.HasFixedLink {
+		// Check if this is a video URL (reel, tv, reels)
+		isVideo := strings.Contains(url, "/reel/") || strings.Contains(url, "/tv/") || strings.Contains(url, "/reels/")
+		if isVideo && !sd.ytdlp.HasInstagramCookies() {
+			log.Printf("🚀 Instagram video without cookies detected - prioritizing ddinstagram fixed link")
+			// Reorder methods to prioritize fixed link first
+			strategy.Methods = []ExtractionMethod{
+				MethodFixedLink,  // Try fixed link first (fast)
+				MethodBrowser,    // Browser as fallback
+				MethodYtDlp,      // yt-dlp as last resort
+			}
+		}
+	}
+	
 	strategy.LogStrategy()
 	
 	var lastErr error
