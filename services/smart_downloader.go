@@ -150,15 +150,27 @@ func (sd *SmartDownloader) DownloadMedia(url string) ([]*MediaInfo, error) {
 							}
 						}
 						
-						// If all extraction attempts failed, return the fixed link as text
-						log.Printf("📎 Could not extract media from fixed link, returning as text: %s", fixedURL)
-						LogExtraction(strategy.Platform, url, "fixed-link-text", true, 1, methodDuration)
-						return []*MediaInfo{{
-							Type:    "text",
-							URL:     url,
-							Caption: fixedURL,
-							Filename: "",
-						}}, nil
+						// For Instagram videos, only return fixed link if we know it can resolve
+						// Check if this is a video URL (reel, tv, reels)
+						isVideo := strings.Contains(url, "/reel/") || strings.Contains(url, "/tv/") || strings.Contains(url, "/reels/")
+						
+						if isVideo {
+							// For videos without working cookies, we should not send a fixed link that won't work
+							// Instead, indicate the failure so the user knows to check their cookies
+							log.Printf("❌ Instagram video extraction failed - cookies may be invalid or expired")
+							lastErr = fmt.Errorf("Instagram video extraction failed - cookies may be invalid or expired")
+							// Continue to next method or fail
+						} else {
+							// For photos/carousels, the fixed link might still work
+							log.Printf("📎 Returning fixed link for Instagram photo/carousel: %s", fixedURL)
+							LogExtraction(strategy.Platform, url, "fixed-link-text", true, 1, methodDuration)
+							return []*MediaInfo{{
+								Type:    "text",
+								URL:     url,
+								Caption: fixedURL,
+								Filename: "",
+							}}, nil
+						}
 					} else {
 						// For other platforms, return fixed link as text
 						LogExtraction(strategy.Platform, url, "fixed-link", true, 1, time.Since(startTime))
