@@ -217,6 +217,7 @@ func GetExtractionStrategy(url string) *ExtractionStrategy {
 }
 
 // GetFixedURL returns the fixed URL for platforms that support it
+// This is the user-facing URL (e.g., instagramez for Instagram)
 func (es *ExtractionStrategy) GetFixedURL(originalURL string) string {
 	if !es.HasFixedLink {
 		return ""
@@ -226,6 +227,29 @@ func (es *ExtractionStrategy) GetFixedURL(originalURL string) string {
 	case "instagram":
 		// For instagramez, replace instagram.com with instagramez.com
 		return strings.Replace(strings.Replace(originalURL, "https://www.instagram.com", "https://www.instagramez.com", 1), "https://instagram.com", "https://instagramez.com", 1)
+	case "tiktok":
+		return strings.Replace(originalURL, "tiktok.com", es.FixedLinkDomain, 1)
+	case "twitter":
+		if strings.Contains(originalURL, "twitter.com") {
+			return strings.Replace(originalURL, "twitter.com", es.FixedLinkDomain, 1)
+		}
+		return strings.Replace(originalURL, "x.com", es.FixedLinkDomain, 1)
+	}
+	
+	return ""
+}
+
+// GetInternalFixedURL returns the internal fixed URL for downloading
+// This may differ from the user-facing URL (e.g., ddinstagram for internal downloading)
+func (es *ExtractionStrategy) GetInternalFixedURL(originalURL string) string {
+	if !es.HasFixedLink {
+		return ""
+	}
+	
+	switch es.Platform {
+	case "instagram":
+		// Use ddinstagram for internal downloading (it works better)
+		return strings.Replace(originalURL, "https://www.instagram.com", "https://d.ddinstagram.com", 1)
 	case "tiktok":
 		return strings.Replace(originalURL, "tiktok.com", es.FixedLinkDomain, 1)
 	case "twitter":
@@ -266,6 +290,10 @@ func (es *ExtractionStrategy) LogStrategy() {
 	
 	log.Printf("📋 Extraction strategy for %s: %s", es.Platform, strings.Join(methodNames, " → "))
 	if es.HasFixedLink {
-		log.Printf("   Fixed link domain: %s", es.FixedLinkDomain)
+		if es.Platform == "instagram" {
+			log.Printf("   Fixed link: ddinstagram (internal), instagramez (user-facing)")
+		} else {
+			log.Printf("   Fixed link domain: %s", es.FixedLinkDomain)
+		}
 	}
 }
