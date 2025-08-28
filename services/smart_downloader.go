@@ -44,18 +44,47 @@ func (sd *SmartDownloader) DownloadMedia(url string) ([]*MediaInfo, error) {
 	// Get the extraction strategy for this URL
 	strategy := GetExtractionStrategy(url)
 	
-	// Instagram video optimization: prioritize fixed link when cookies are not available
+	// Instagram video optimization: use instagramez immediately when cookies are not available
 	if strategy.Platform == "instagram" && strategy.HasFixedLink {
 		// Check if this is a video URL (reel, tv, reels)
 		isVideo := strings.Contains(url, "/reel/") || strings.Contains(url, "/tv/") || strings.Contains(url, "/reels/")
 		if isVideo && !sd.ytdlp.HasInstagramCookies() {
-			log.Printf("🚀 Instagram video without cookies detected - prioritizing ddinstagram for download")
-			// Reorder methods to prioritize fixed link first
-			strategy.Methods = []ExtractionMethod{
-				MethodFixedLink,  // Try fixed link first (fast)
-				MethodBrowser,    // Browser as fallback
-				MethodYtDlp,      // yt-dlp as last resort
+			log.Printf("🚀 Instagram video without cookies - using instagramez directly")
+			
+			// Get the instagramez URL
+			instagramezURL := strategy.GetFixedURL(url)
+			
+			// Try to extract from instagramez immediately
+			log.Printf("🎯 Attempting to extract from instagramez: %s", instagramezURL)
+			ezMediaInfos, ezErr := sd.ytdlp.DownloadMedia(instagramezURL)
+			
+			if ezErr == nil && len(ezMediaInfos) > 0 {
+				// Check if we got actual media files
+				hasActualMedia := false
+				for _, media := range ezMediaInfos {
+					if media.Type != "text" && media.Filename != "" {
+						hasActualMedia = true
+						break
+					}
+				}
+				
+				if hasActualMedia {
+					log.Printf("✅ Instagramez extraction succeeded with %d media items", len(ezMediaInfos))
+					LogExtraction(strategy.Platform, url, "instagramez-direct", true, len(ezMediaInfos), time.Since(startTime))
+					appendOriginalURL(ezMediaInfos, url)
+					return ezMediaInfos, nil
+				}
 			}
+			
+			// If extraction failed, just send the instagramez link
+			log.Printf("📎 Sending instagramez link: %s", instagramezURL)
+			LogExtraction(strategy.Platform, url, "instagramez-link", true, 1, time.Since(startTime))
+			return []*MediaInfo{{
+				Type:    "text",
+				URL:     url,
+				Caption: instagramezURL,
+				Filename: "",
+			}}, nil
 		}
 	}
 	
@@ -165,38 +194,13 @@ func (sd *SmartDownloader) DownloadMedia(url string) ([]*MediaInfo, error) {
 						isVideo := strings.Contains(url, "/reel/") || strings.Contains(url, "/tv/") || strings.Contains(url, "/reels/")
 						
 						if isVideo {
-							// For Instagram videos, try extracting from instagramez as last resort
-							log.Printf("🔗 Trying to extract video from instagramez/embedez")
-							
-							// Try yt-dlp on the user-facing link (instagramez)
-							ezMediaInfos, ezErr := sd.ytdlp.DownloadMedia(userFixedURL)
-							if ezErr == nil && len(ezMediaInfos) > 0 {
-								// Check if we got actual media files
-								hasActualMedia := false
-								for _, media := range ezMediaInfos {
-									if media.Type != "text" && media.Filename != "" {
-										hasActualMedia = true
-										break
-									}
-								}
-								
-								if hasActualMedia {
-									log.Printf("✅ Instagramez extraction succeeded with %d media items", len(ezMediaInfos))
-									LogExtraction(strategy.Platform, url, "instagramez-media", true, len(ezMediaInfos), methodDuration)
-									appendOriginalURL(ezMediaInfos, url)
-									return ezMediaInfos, nil
-								}
+							// For videos without working cookies, we should not send a fixed link that won't work
+							// Check if we already have a more specific error about authentication
+							if lastErr == nil || !strings.Contains(lastErr.Error(), "authentication") {
+								log.Printf("❌ Instagram video extraction failed - authentication required")
+								lastErr = fmt.Errorf("Instagram video requires authentication. Enable cookies: ENABLE_INSTAGRAM_COOKIES=true")
 							}
-							
-							// If instagramez extraction also failed, send the link anyway
-							log.Printf("📎 Sending instagramez link as last resort: %s", userFixedURL)
-							LogExtraction(strategy.Platform, url, "instagramez-fallback", true, 1, methodDuration)
-							return []*MediaInfo{{
-								Type:    "text",
-								URL:     url,
-								Caption: userFixedURL,
-								Filename: "",
-							}}, nil
+							// Continue to next method or fail
 						} else {
 							// For photos/carousels, return the user-facing fixed link
 							log.Printf("📎 Returning fixed link for Instagram photo/carousel: %s", userFixedURL)
