@@ -45,7 +45,7 @@ func GetExtractionStrategy(url string) *ExtractionStrategy {
 					MethodFixedLink,  // Fixed link as last resort
 				},
 				HasFixedLink: true,
-				FixedLinkDomain: "d.ddinstagram.com",
+				FixedLinkDomain: "instagramez.com",
 			}
 		}
 		// Instagram photos/carousels: browser first for better carousel support, then yt-dlp, fixed link last resort
@@ -57,7 +57,7 @@ func GetExtractionStrategy(url string) *ExtractionStrategy {
 				MethodFixedLink,  // Last resort - but now tries to extract media from fixed link
 			},
 			HasFixedLink: true,
-			FixedLinkDomain: "d.ddinstagram.com",
+			FixedLinkDomain: "instagramez.com",
 		}
 	}
 	
@@ -224,8 +224,8 @@ func (es *ExtractionStrategy) GetFixedURL(originalURL string) string {
 	
 	switch es.Platform {
 	case "instagram":
-		// For ddinstagram, we need to add "d.dd" before instagram.com
-		return strings.Replace(originalURL, "https://www.instagram.com", "https://d.ddinstagram.com", 1)
+		// For instagramez, replace instagram.com with instagramez.com
+		return strings.Replace(strings.Replace(originalURL, "https://www.instagram.com", "https://www.instagramez.com", 1), "https://instagram.com", "https://instagramez.com", 1)
 	case "tiktok":
 		return strings.Replace(originalURL, "tiktok.com", es.FixedLinkDomain, 1)
 	case "twitter":

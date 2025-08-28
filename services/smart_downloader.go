@@ -49,7 +49,7 @@ func (sd *SmartDownloader) DownloadMedia(url string) ([]*MediaInfo, error) {
 		// Check if this is a video URL (reel, tv, reels)
 		isVideo := strings.Contains(url, "/reel/") || strings.Contains(url, "/tv/") || strings.Contains(url, "/reels/")
 		if isVideo && !sd.ytdlp.HasInstagramCookies() {
-			log.Printf("🚀 Instagram video without cookies detected - prioritizing ddinstagram fixed link")
+			log.Printf("🚀 Instagram video without cookies detected - prioritizing instagramez fixed link")
 			// Reorder methods to prioritize fixed link first
 			strategy.Methods = []ExtractionMethod{
 				MethodFixedLink,  // Try fixed link first (fast)

@@ -751,7 +751,7 @@ func sendFixedLinkFallback(originalUrl string, origChat *response.TgChat) {
 func getFixedUrl(url string) string {
 	// Instagram
 	if strings.Contains(url, "instagram.com") {
-		return strings.Replace(url, "https://www.instagram.com", "https://d.ddinstagram.com", 1)
+		return strings.Replace(strings.Replace(url, "https://www.instagram.com", "https://www.instagramez.com", 1), "https://instagram.com", "https://instagramez.com", 1)
 	}
 	
 	// TikTok
