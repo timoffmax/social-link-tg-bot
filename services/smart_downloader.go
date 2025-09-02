@@ -2,7 +2,9 @@ package services
 
 import (
 	"fmt"
+	"io"
 	"log"
+	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -14,6 +16,7 @@ import (
 type SmartDownloader struct {
 	ytdlp    *YtDlpDownloader
 	browser  *UniversalBrowserExtractor
+	embedez  *EmbedezExtractor
 	tempDir  string
 	workingDir string
 }
@@ -32,6 +35,7 @@ func NewSmartDownloader() *SmartDownloader {
 	return &SmartDownloader{
 		ytdlp:    NewYtDlpDownloader(),
 		browser:  NewUniversalBrowserExtractor(workingDir, tempDir),
+		embedez:  NewEmbedezExtractor(),
 		tempDir:  tempDir,
 		workingDir: workingDir,
 	}
@@ -44,18 +48,39 @@ func (sd *SmartDownloader) DownloadMedia(url string) ([]*MediaInfo, error) {
 	// Get the extraction strategy for this URL
 	strategy := GetExtractionStrategy(url)
 	
-	// Instagram video optimization: use instagramez immediately when cookies are not available
+	// Instagram video optimization: use embedez extractor when cookies are not available
 	if strategy.Platform == "instagram" && strategy.HasFixedLink {
 		// Check if this is a video URL (reel, tv, reels)
 		isVideo := strings.Contains(url, "/reel/") || strings.Contains(url, "/tv/") || strings.Contains(url, "/reels/")
 		if isVideo && !sd.ytdlp.HasInstagramCookies() {
-			log.Printf("🚀 Instagram video without cookies - using instagramez directly")
+			log.Printf("🚀 Instagram video without cookies - using embedez extractor")
 			
-			// Get the instagramez URL
+			// Try embedez extractor first
+			videoURL, err := sd.embedez.ExtractInstagramVideo(url)
+			if err == nil && videoURL != "" {
+				log.Printf("✅ Embedez extracted video URL: %s", videoURL)
+				
+				// Download the video
+				filename := fmt.Sprintf("instagram_video_%d.mp4", time.Now().Unix())
+				videoFilePath := filepath.Join(sd.tempDir, filename)
+				
+				err = sd.downloadVideoFromURL(videoURL, videoFilePath)
+				if err == nil {
+					log.Printf("✅ Successfully downloaded Instagram video via embedez")
+					LogExtraction(strategy.Platform, url, "embedez-direct", true, 1, time.Since(startTime))
+					return []*MediaInfo{{
+						Type:     "video",
+						URL:      url,
+						Caption:  "Downloaded from Instagram",
+						Filename: videoFilePath,
+					}}, nil
+				}
+				log.Printf("⚠️ Failed to download video from embedez URL: %v", err)
+			}
+			
+			// Fallback: Try yt-dlp with instagramez URL
+			log.Printf("🔄 Falling back to yt-dlp with instagramez URL")
 			instagramezURL := strategy.GetFixedURL(url)
-			
-			// Try to extract from instagramez immediately
-			log.Printf("🎯 Attempting to extract from instagramez: %s", instagramezURL)
 			ezMediaInfos, ezErr := sd.ytdlp.DownloadMedia(instagramezURL)
 			
 			if ezErr == nil && len(ezMediaInfos) > 0 {
@@ -69,15 +94,15 @@ func (sd *SmartDownloader) DownloadMedia(url string) ([]*MediaInfo, error) {
 				}
 				
 				if hasActualMedia {
-					log.Printf("✅ Instagramez extraction succeeded with %d media items", len(ezMediaInfos))
-					LogExtraction(strategy.Platform, url, "instagramez-direct", true, len(ezMediaInfos), time.Since(startTime))
+					log.Printf("✅ Instagramez extraction via yt-dlp succeeded with %d media items", len(ezMediaInfos))
+					LogExtraction(strategy.Platform, url, "instagramez-ytdlp", true, len(ezMediaInfos), time.Since(startTime))
 					appendOriginalURL(ezMediaInfos, url)
 					return ezMediaInfos, nil
 				}
 			}
 			
-			// If extraction failed, just send the instagramez link
-			log.Printf("📎 Sending instagramez link: %s", instagramezURL)
+			// Last resort: just send the instagramez link
+			log.Printf("📎 Sending instagramez link as fallback: %s", instagramezURL)
 			LogExtraction(strategy.Platform, url, "instagramez-link", true, 1, time.Since(startTime))
 			return []*MediaInfo{{
 				Type:    "text",
@@ -305,6 +330,36 @@ func appendOriginalURL(mediaInfos []*MediaInfo, originalURL string) {
 			mediaInfo.Caption = strings.TrimPrefix(urlSuffix, "\n\n")
 		}
 	}
+}
+
+// downloadVideoFromURL downloads a video file from a direct URL
+func (sd *SmartDownloader) downloadVideoFromURL(videoURL, filepath string) error {
+	client := &http.Client{
+		Timeout: 60 * time.Second,
+	}
+	
+	resp, err := client.Get(videoURL)
+	if err != nil {
+		return fmt.Errorf("failed to fetch video: %v", err)
+	}
+	defer resp.Body.Close()
+	
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("bad status code: %d", resp.StatusCode)
+	}
+	
+	out, err := os.Create(filepath)
+	if err != nil {
+		return fmt.Errorf("failed to create file: %v", err)
+	}
+	defer out.Close()
+	
+	_, err = io.Copy(out, resp.Body)
+	if err != nil {
+		return fmt.Errorf("failed to write file: %v", err)
+	}
+	
+	return nil
 }
 
 // cleanURLParams removes tracking parameters and UTM tags from URLs
