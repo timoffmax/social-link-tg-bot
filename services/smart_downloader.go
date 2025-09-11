@@ -2,6 +2,7 @@ package services
 
 import (
 	"fmt"
+	"github.com/timoffmax/social-link-bot/config"
 	"io"
 	"log"
 	"net/http"
@@ -49,10 +50,14 @@ func (sd *SmartDownloader) DownloadMedia(url string) ([]*MediaInfo, error) {
 	strategy := GetExtractionStrategy(url)
 	
 	// Instagram video optimization: use embedez extractor when cookies are not available
+	// BUT skip this if we're in direct link mode (only MethodFixedLink)
 	if strategy.Platform == "instagram" && strategy.HasFixedLink {
+		// Check if we're in direct link mode (skip all download attempts)
+		isDirectLinkMode := len(strategy.Methods) == 1 && strategy.Methods[0] == MethodFixedLink
+		
 		// Check if this is a video URL (reel, tv, reels)
 		isVideo := strings.Contains(url, "/reel/") || strings.Contains(url, "/tv/") || strings.Contains(url, "/reels/")
-		if isVideo && !sd.ytdlp.HasInstagramCookies() {
+		if isVideo && !sd.ytdlp.HasInstagramCookies() && !isDirectLinkMode {
 			log.Printf("🚀 Instagram video without cookies - using embedez extractor")
 			
 			// Try embedez extractor first
@@ -78,10 +83,11 @@ func (sd *SmartDownloader) DownloadMedia(url string) ([]*MediaInfo, error) {
 				log.Printf("⚠️ Failed to download video from embedez URL: %v", err)
 			}
 			
-			// Fallback: Try yt-dlp with instagramez URL
-			log.Printf("🔄 Falling back to yt-dlp with instagramez URL")
-			instagramezURL := strategy.GetFixedURL(url)
-			ezMediaInfos, ezErr := sd.ytdlp.DownloadMedia(instagramezURL)
+			// Fallback: Try yt-dlp with fixed service URL
+			service := config.GetInstagramService()
+			log.Printf("🔄 Falling back to yt-dlp with %s URL", service)
+			fixedServiceURL := strategy.GetFixedURL(url)
+			ezMediaInfos, ezErr := sd.ytdlp.DownloadMedia(fixedServiceURL)
 			
 			if ezErr == nil && len(ezMediaInfos) > 0 {
 				// Check if we got actual media files
@@ -94,20 +100,22 @@ func (sd *SmartDownloader) DownloadMedia(url string) ([]*MediaInfo, error) {
 				}
 				
 				if hasActualMedia {
-					log.Printf("✅ Instagramez extraction via yt-dlp succeeded with %d media items", len(ezMediaInfos))
-					LogExtraction(strategy.Platform, url, "instagramez-ytdlp", true, len(ezMediaInfos), time.Since(startTime))
+					service := config.GetInstagramService()
+					log.Printf("✅ %s extraction via yt-dlp succeeded with %d media items", service, len(ezMediaInfos))
+					LogExtraction(strategy.Platform, url, service+"-ytdlp", true, len(ezMediaInfos), time.Since(startTime))
 					appendOriginalURL(ezMediaInfos, url)
 					return ezMediaInfos, nil
 				}
 			}
 			
-			// Last resort: just send the instagramez link
-			log.Printf("📎 Sending instagramez link as fallback: %s", instagramezURL)
-			LogExtraction(strategy.Platform, url, "instagramez-link", true, 1, time.Since(startTime))
+			// Last resort: just send the fixed service link
+			serviceName := config.GetInstagramService()
+			log.Printf("📎 Sending %s link as fallback: %s", serviceName, fixedServiceURL)
+			LogExtraction(strategy.Platform, url, serviceName+"-link", true, 1, time.Since(startTime))
 			return []*MediaInfo{{
 				Type:    "text",
 				URL:     url,
-				Caption: instagramezURL,
+				Caption: fixedServiceURL,
 				Filename: "",
 			}}, nil
 		}
@@ -161,8 +169,20 @@ func (sd *SmartDownloader) DownloadMedia(url string) ([]*MediaInfo, error) {
 				methodDuration := time.Since(methodStartTime)
 				
 				if internalFixedURL != "" {
-					// For Instagram, try to download media from the fixed link first
+					// For Instagram, check if we should skip download attempts
 					if strategy.Platform == "instagram" {
+						// If the ONLY method is FixedLink, skip download attempts and return link immediately
+						if len(strategy.Methods) == 1 && strategy.Methods[0] == MethodFixedLink {
+							log.Printf("📎 Direct link mode - returning %s link immediately: %s", config.GetInstagramService(), userFixedURL)
+							LogExtraction(strategy.Platform, url, "fixed-link-direct", true, 1, methodDuration)
+							return []*MediaInfo{{
+								Type:    "text",
+								URL:     url,
+								Caption: userFixedURL,
+								Filename: "",
+							}}, nil
+						}
+						
 						log.Printf("🎯 Attempting to download media from Instagram fixed link: %s", internalFixedURL)
 						
 						// Try yt-dlp on the internal fixed link (ddinstagram)

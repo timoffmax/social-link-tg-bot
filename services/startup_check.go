@@ -1,6 +1,7 @@
 package services
 
 import (
+	"github.com/timoffmax/social-link-bot/config"
 	"log"
 	"os"
 	"os/exec"
@@ -190,6 +191,13 @@ func (sc *StartupChecker) printPlatformSupport() {
 	log.Printf("\n📱 Platform Support Summary:")
 	log.Printf("================================")
 	
+	// Get Instagram service configuration
+	instagramService := config.GetInstagramService()
+	instagramFixedLink := "instagramez.com"
+	if instagramService == "kkinstagram" {
+		instagramFixedLink = "kkinstagram.com"
+	}
+	
 	platforms := []struct {
 		Name        string
 		Supported   []string
@@ -198,7 +206,7 @@ func (sc *StartupChecker) printPlatformSupport() {
 		{
 			Name:      "📷 Instagram",
 			Supported: []string{"Photos", "Videos", "Albums (limited support)"},
-			FixedLink: "instagramez.com",
+			FixedLink: instagramFixedLink,
 		},
 		{
 			Name:      "🎵 TikTok",

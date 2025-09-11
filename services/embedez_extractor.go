@@ -2,6 +2,7 @@ package services
 
 import (
 	"fmt"
+	"github.com/timoffmax/social-link-bot/config"
 	"io"
 	"log"
 	"net/http"
@@ -12,7 +13,7 @@ import (
 	"time"
 )
 
-// EmbedezExtractor handles video extraction from instagramez/embedez service
+// EmbedezExtractor handles video extraction from instagramez/kkinstagram/embedez service
 type EmbedezExtractor struct {
 	client *http.Client
 }
@@ -33,14 +34,15 @@ func NewEmbedezExtractor() *EmbedezExtractor {
 	}
 }
 
-// ExtractInstagramVideo extracts video URL from Instagram via instagramez/embedez
+// ExtractInstagramVideo extracts video URL from Instagram via configured service
 func (e *EmbedezExtractor) ExtractInstagramVideo(instagramURL string) (string, error) {
-	// Convert Instagram URL to instagramez URL
-	instagramezURL := e.convertToInstagramez(instagramURL)
-	log.Printf("🔍 [Embedez] Converting to instagramez URL: %s", instagramezURL)
+	// Convert Instagram URL to the configured service URL
+	serviceURL := e.convertToServiceURL(instagramURL)
+	service := config.GetInstagramService()
+	log.Printf("🔍 [Embedez] Converting to %s URL: %s", service, serviceURL)
 	
-	// Follow instagramez redirect to embedez
-	embedezURL, err := e.followToEmbedez(instagramezURL)
+	// Follow service redirect to embedez (or equivalent for kkinstagram)
+	embedezURL, err := e.followToEmbedez(serviceURL)
 	if err != nil {
 		return "", fmt.Errorf("failed to get embedez URL: %v", err)
 	}
@@ -65,14 +67,26 @@ func (e *EmbedezExtractor) ExtractInstagramVideo(instagramURL string) (string, e
 	return actualURL, nil
 }
 
-// convertToInstagramez converts Instagram URL to instagramez URL
-func (e *EmbedezExtractor) convertToInstagramez(instagramURL string) string {
+// convertToServiceURL converts Instagram URL to the configured service URL
+func (e *EmbedezExtractor) convertToServiceURL(instagramURL string) string {
+	service := config.GetInstagramService()
+	if service == "kkinstagram" {
+		result := strings.Replace(instagramURL, "https://www.instagram.com", "https://www.kkinstagram.com", 1)
+		result = strings.Replace(result, "https://instagram.com", "https://www.kkinstagram.com", 1)
+		return result
+	}
+	// Default to instagramez
 	result := strings.Replace(instagramURL, "https://www.instagram.com", "https://www.instagramez.com", 1)
 	result = strings.Replace(result, "https://instagram.com", "https://www.instagramez.com", 1)
 	return result
 }
 
-// followToEmbedez follows the instagramez redirect to get the embedez URL
+// convertToInstagramez is deprecated, use convertToServiceURL instead
+func (e *EmbedezExtractor) convertToInstagramez(instagramURL string) string {
+	return e.convertToServiceURL(instagramURL)
+}
+
+// followToEmbedez follows the service redirect to get the embedez URL (or equivalent)
 func (e *EmbedezExtractor) followToEmbedez(instagramezURL string) (string, error) {
 	resp, err := e.client.Get(instagramezURL)
 	if err != nil {

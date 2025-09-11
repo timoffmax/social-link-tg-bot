@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"github.com/timoffmax/social-link-bot/config"
 	"github.com/timoffmax/social-link-bot/model/api"
 	"github.com/timoffmax/social-link-bot/model/api/request/message"
 	"github.com/timoffmax/social-link-bot/model/api/request/payload"
@@ -298,8 +299,18 @@ func sendFixedLinks(origMessage *response.TgMessage, origChat *response.TgChat) 
 
 func processMediaDownload(url string, origChat *response.TgChat, origMessage *response.TgMessage, downloader *services.SmartDownloader) {
 	log.Printf("🚀 [DEBUG] Starting processMediaDownload for URL: %s", url)
-	// Send "typing" status to indicate processing
-	// (You could implement sendChatAction here)
+	
+	// Send status message for Instagram photos/carousels (which may take time to download)
+	if (strings.Contains(url, "instagram.com") || strings.Contains(url, "kkinstagram.com")) && strings.Contains(url, "/p/") {
+		statusMsg := payload.TgPlSendMessage{
+			ChatId:              origChat.Id,
+			Text:                "📸 Processing Instagram photos... This isn't quick, unfortunately, may take a couple of minutes ⏳",
+			ReplyToMessageId:    origMessage.MessageId,
+			DisableNotification: true,
+		}
+		message.NewSendMessage(statusMsg)
+		log.Printf("📤 Sent status message for Instagram photo/carousel processing")
+	}
 
 	// Try to download media using smart downloader
 	mediaInfos, err := downloader.DownloadMedia(url)
@@ -751,6 +762,12 @@ func sendFixedLinkFallback(originalUrl string, origChat *response.TgChat) {
 func getFixedUrl(url string) string {
 	// Instagram
 	if strings.Contains(url, "instagram.com") {
+		service := config.GetInstagramService()
+		if service == "kkinstagram" {
+			result := strings.Replace(url, "https://www.instagram.com", "https://www.kkinstagram.com", 1)
+			return strings.Replace(result, "https://instagram.com", "https://www.kkinstagram.com", 1)
+		}
+		// Default to instagramez
 		return strings.Replace(strings.Replace(url, "https://www.instagram.com", "https://www.instagramez.com", 1), "https://instagram.com", "https://instagramez.com", 1)
 	}
 	

@@ -229,6 +229,16 @@ func GetDefaultDailyMediaLimit() int {
 	return 0 // 0 means no limit
 }
 
+// Instagram service configuration
+// Returns the service to use for Instagram links (instagramez or kkinstagram)
+func GetInstagramService() string {
+	service := strings.ToLower(strings.TrimSpace(os.Getenv("INSTAGRAM_SERVICE")))
+	if service == "" {
+		return "kkinstagram" // Default to kkinstagram
+	}
+	return service
+}
+
 // Helper function to parse boolean environment variables
 func getBoolEnv(key string, defaultValue bool) bool {
 	value := strings.ToLower(strings.TrimSpace(os.Getenv(key)))

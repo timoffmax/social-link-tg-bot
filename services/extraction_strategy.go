@@ -6,6 +6,15 @@ import (
 	"strings"
 )
 
+// getInstagramFixedDomain returns the configured Instagram service domain
+func getInstagramFixedDomain() string {
+	service := config.GetInstagramService()
+	if service == "kkinstagram" {
+		return "kkinstagram.com"
+	}
+	return "instagramez.com"
+}
+
 // ExtractionMethod represents a method for extracting media
 type ExtractionMethod int
 
@@ -27,7 +36,8 @@ type ExtractionStrategy struct {
 // GetExtractionStrategy returns the optimal extraction strategy for a given URL
 func GetExtractionStrategy(url string) *ExtractionStrategy {
 	// Instagram: optimized based on test results showing yt-dlp performance is excellent
-	if strings.Contains(url, "instagram.com") {
+	// Also handle kkinstagram.com URLs (already fixed links)
+	if strings.Contains(url, "instagram.com") || strings.Contains(url, "kkinstagram.com") {
 		if !config.IsInstagramEnabled() {
 			return &ExtractionStrategy{
 				Platform: "instagram",
@@ -35,29 +45,43 @@ func GetExtractionStrategy(url string) *ExtractionStrategy {
 				HasFixedLink: false,
 			}
 		}
-		// Instagram videos (reels, IGTV): try yt-dlp first for actual media extraction
+		// Instagram videos (reels, IGTV): directly use fixed link for speed
 		if strings.Contains(url, "/reel/") || strings.Contains(url, "/tv/") || strings.Contains(url, "/reels/") {
 			return &ExtractionStrategy{
 				Platform: "instagram",
 				Methods: []ExtractionMethod{
-					MethodYtDlp,      // Try yt-dlp first for actual media
-					MethodBrowser,    // Browser as fallback
-					MethodFixedLink,  // Fixed link as last resort
+					MethodFixedLink,  // Direct link replacement only
 				},
 				HasFixedLink: true,
-				FixedLinkDomain: "instagramez.com",
+				FixedLinkDomain: getInstagramFixedDomain(),
 			}
 		}
-		// Instagram photos/carousels: browser first for better carousel support, then yt-dlp, fixed link last resort
+		
+		// Instagram photos (/p/ URLs): attempt download for all photos
+		// This handles both single photos and carousels, with fallback to fixed link
+		if strings.Contains(url, "/p/") {
+			log.Printf("📸 Instagram photo - will attempt download with fallback to direct link")
+			return &ExtractionStrategy{
+				Platform: "instagram",
+				Methods: []ExtractionMethod{
+					MethodBrowser,    // Browser extraction for photos/albums
+					MethodYtDlp,      // Fallback to yt-dlp
+					MethodFixedLink,  // Fast fallback to fixed link
+				},
+				HasFixedLink: true,
+				FixedLinkDomain: getInstagramFixedDomain(),
+			}
+		}
+		// Instagram stories and other content: try downloading first
 		return &ExtractionStrategy{
 			Platform: "instagram",
 			Methods: []ExtractionMethod{
-				MethodBrowser,    // Browser extraction works better for carousels
+				MethodBrowser,    // Browser extraction
 				MethodYtDlp,      // Fallback to yt-dlp
-				MethodFixedLink,  // Last resort - but now tries to extract media from fixed link
+				MethodFixedLink,  // Last resort
 			},
 			HasFixedLink: true,
-			FixedLinkDomain: "instagramez.com",
+			FixedLinkDomain: getInstagramFixedDomain(),
 		}
 	}
 	
@@ -225,7 +249,13 @@ func (es *ExtractionStrategy) GetFixedURL(originalURL string) string {
 	
 	switch es.Platform {
 	case "instagram":
-		// For instagramez, replace instagram.com with instagramez.com
+		// Replace instagram.com with the configured service domain
+		service := config.GetInstagramService()
+		if service == "kkinstagram" {
+			result := strings.Replace(originalURL, "https://www.instagram.com", "https://www.kkinstagram.com", 1)
+			return strings.Replace(result, "https://instagram.com", "https://www.kkinstagram.com", 1)
+		}
+		// Default to instagramez
 		return strings.Replace(strings.Replace(originalURL, "https://www.instagram.com", "https://www.instagramez.com", 1), "https://instagram.com", "https://instagramez.com", 1)
 	case "tiktok":
 		return strings.Replace(originalURL, "tiktok.com", es.FixedLinkDomain, 1)
@@ -291,7 +321,12 @@ func (es *ExtractionStrategy) LogStrategy() {
 	log.Printf("📋 Extraction strategy for %s: %s", es.Platform, strings.Join(methodNames, " → "))
 	if es.HasFixedLink {
 		if es.Platform == "instagram" {
-			log.Printf("   Fixed link: ddinstagram (internal), instagramez (user-facing)")
+			service := config.GetInstagramService()
+			if service == "kkinstagram" {
+				log.Printf("   Fixed link: ddinstagram (internal), kkinstagram (user-facing)")
+			} else {
+				log.Printf("   Fixed link: ddinstagram (internal), instagramez (user-facing)")
+			}
 		} else {
 			log.Printf("   Fixed link domain: %s", es.FixedLinkDomain)
 		}

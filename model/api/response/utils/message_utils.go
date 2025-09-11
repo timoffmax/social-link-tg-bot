@@ -90,12 +90,17 @@ func GetAllSocialLinks(message *response.TgMessage) []string {
 }
 
 func GetInstagramLinks(message *response.TgMessage) []string {
-	regex := regexp.MustCompile(`https?:\/\/(www\.)?(instagram)\.com\/[^\s]+`)
+	// Match both instagram.com and kkinstagram.com URLs
+	regex := regexp.MustCompile(`https?:\/\/(www\.)?(instagram|kkinstagram)\.com\/[^\s]+`)
 	result := regex.FindAllString(message.Text, -1)
 
 	for i, url := range result {
-		fixedUrl := fixInstagramLink(url)
-		result[i] = fixedUrl
+		// Only fix Instagram URLs, leave kkinstagram URLs as-is (they're already fixed)
+		if strings.Contains(url, "instagram.com") {
+			fixedUrl := fixInstagramLink(url)
+			result[i] = fixedUrl
+		}
+		// kkinstagram URLs are already "fixed", just return them
 	}
 
 	return result
@@ -126,6 +131,16 @@ func GetTwitterLinks(message *response.TgMessage) []string {
 }
 
 func fixInstagramLink(link string) string {
+	service := config.GetInstagramService()
+	
+	if service == "kkinstagram" {
+		// Transform https://www.instagram.com/reel/XXX to https://www.kkinstagram.com/reel/XXX
+		result := strings.Replace(link, "https://www.instagram.com", "https://www.kkinstagram.com", 1)
+		result = strings.Replace(result, "https://instagram.com", "https://www.kkinstagram.com", 1)
+		return result
+	}
+	
+	// Default to instagramez
 	searchFor := "instagram"
 	replaceWith := "instagramez"
 	result := strings.Replace(link, searchFor, replaceWith, -1)
@@ -154,7 +169,8 @@ func fixTwitterLink(link string) string {
 }
 
 func GetOriginalInstagramLinks(message *response.TgMessage) []string {
-	regex := regexp.MustCompile(`https?:\/\/(www\.)?instagram\.com\/[^\s]+`)
+	// Match both instagram.com and kkinstagram.com URLs
+	regex := regexp.MustCompile(`https?:\/\/(www\.)?(instagram|kkinstagram)\.com\/[^\s]+`)
 	links := regex.FindAllString(message.Text, -1)
 	
 	// Clean tracking parameters from Instagram URLs
