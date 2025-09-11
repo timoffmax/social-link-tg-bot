@@ -91,19 +91,6 @@ func (hc *HealthChecker) GetTestCases() []TestCase {
 			ExpectedTypes: []string{"video"},
 		},
 		
-		// 9GAG tests
-		{
-			Platform:    "9GAG",
-			URL:         "https://9gag.com/gag/aNDOPoG", // Replace with stable test
-			Description: "9GAG video post",
-			ExpectedTypes: []string{"video"},
-		},
-		{
-			Platform:    "9GAG",
-			URL:         "https://9gag.com/gag/a1mE12R", // Replace with stable test
-			Description: "9GAG image post",
-			ExpectedTypes: []string{"photo"},
-		},
 	}
 }
 
@@ -263,7 +250,7 @@ func (hc *HealthChecker) RunQuickCheck() bool {
 	log.Printf("✅ yt-dlp is available")
 	
 	// Check if we have cookies for major platforms
-	platforms := []string{"cookies/instagram_cookies.txt", "cookies/twitter_cookies.txt", "cookies/tiktok_cookies.txt", "cookies/youtube_cookies.txt", "cookies/reddit_cookies.txt", "cookies/facebook_cookies.txt", "cookies/9gag_cookies.txt"}
+	platforms := []string{"cookies/instagram_cookies.txt", "cookies/twitter_cookies.txt", "cookies/tiktok_cookies.txt", "cookies/youtube_cookies.txt", "cookies/reddit_cookies.txt", "cookies/facebook_cookies.txt"}
 	for _, cookieFile := range platforms {
 		if _, err := os.Stat(cookieFile); err == nil {
 			log.Printf("✅ Found %s", cookieFile)

@@ -207,7 +207,7 @@ func processUpdate(upd *response.TgUpdate) {
 	}
 
 	// Get original social media links
-	socialLinks := utils.GetAllSocialLinks(&origMessage)
+	socialLinks := utils.GetAllSocialLinks(&origMessage, origChat.Id)
 	
 	log.Printf("Found %d social media links: %v", len(socialLinks), socialLinks)
 
@@ -318,8 +318,8 @@ func processMediaDownload(url string, origChat *response.TgChat, origMessage *re
 		log.Printf("Failed to download media from %s: %v", url, err)
 		
 		// Skip error notifications for platforms that commonly fail (silently fail)
-		if strings.Contains(url, "9gag.com") || strings.Contains(url, "reddit.com") || strings.Contains(url, "facebook.com") {
-			platformName := "9GAG"
+		if strings.Contains(url, "reddit.com") || strings.Contains(url, "facebook.com") {
+			platformName := "Reddit"
 			if strings.Contains(url, "reddit.com") {
 				platformName = "Reddit"
 			} else if strings.Contains(url, "facebook.com") {
@@ -505,12 +505,105 @@ func processMediaDownload(url string, origChat *response.TgChat, origMessage *re
 	}
 }
 
+// detectPlatformFromUrl detects the social media platform from URL
+func detectPlatformFromUrl(url string) string {
+	if strings.Contains(url, "instagram.com") || strings.Contains(url, "kkinstagram.com") {
+		return "instagram"
+	} else if strings.Contains(url, "tiktok.com") || strings.Contains(url, "vxtiktok.com") {
+		return "tiktok"
+	} else if strings.Contains(url, "twitter.com") || strings.Contains(url, "x.com") || strings.Contains(url, "fixupx.com") {
+		return "twitter"
+	} else if strings.Contains(url, "youtube.com") || strings.Contains(url, "youtu.be") {
+		return "youtube"
+	} else if strings.Contains(url, "reddit.com") {
+		return "reddit"
+	} else if strings.Contains(url, "facebook.com") {
+		return "facebook"
+	}
+	return ""
+}
+
+// extractAuthorInfo extracts only author information from caption, removing main content
+func extractAuthorInfo(fullCaption, platform string) string {
+	if fullCaption == "" {
+		return ""
+	}
+	
+	switch platform {
+	case "twitter":
+		// For Twitter, try to extract the author line (usually first line with @username)
+		lines := strings.Split(fullCaption, "\n")
+		for _, line := range lines {
+			if strings.Contains(line, "@") && (strings.Contains(line, "👤") || len(line) < 100) {
+				return strings.TrimSpace(line) // Return just the author line
+			}
+		}
+		// Fallback: return first line if it looks like author info
+		if len(lines) > 0 && len(lines[0]) < 100 {
+			return strings.TrimSpace(lines[0])
+		}
+		
+	case "instagram":
+		// For Instagram, try to extract username (usually has @username)
+		lines := strings.Split(fullCaption, "\n")
+		for _, line := range lines {
+			if strings.Contains(line, "@") && len(line) < 50 {
+				return strings.TrimSpace(line)
+			}
+		}
+		// Fallback: return a generic Instagram indicator
+		return "📸 Instagram"
+		
+	case "tiktok":
+		// For TikTok, extract author/creator info
+		lines := strings.Split(fullCaption, "\n")
+		for _, line := range lines {
+			if strings.Contains(line, "@") && len(line) < 50 {
+				return strings.TrimSpace(line)
+			}
+		}
+		return "🎵 TikTok"
+		
+	case "youtube":
+		// For YouTube, extract channel name (usually first line)
+		lines := strings.Split(fullCaption, "\n")
+		if len(lines) > 0 && len(lines[0]) < 100 {
+			return strings.TrimSpace(lines[0])
+		}
+		return "📺 YouTube"
+		
+	case "reddit":
+		// For Reddit, extract subreddit/author info
+		lines := strings.Split(fullCaption, "\n")
+		for _, line := range lines {
+			if (strings.Contains(line, "r/") || strings.Contains(line, "u/")) && len(line) < 100 {
+				return strings.TrimSpace(line)
+			}
+		}
+		return "🤖 Reddit"
+		
+	case "facebook":
+		// For Facebook, generic fallback
+		return "📘 Facebook"
+	}
+	
+	// Generic fallback
+	return "📱 Social Media"
+}
 
 func sendMediaFile(mediaInfo *services.MediaInfo, origChat *response.TgChat, origMessage *response.TgMessage, url string) error {
 	log.Printf("Sending media to chat ID: %d", origChat.Id)
 	
 	// Decode HTML entities
 	caption := html.UnescapeString(mediaInfo.Caption)
+	
+	// Check description settings and filter caption if needed
+	platform := detectPlatformFromUrl(url)
+	if platform != "" && !services.IsDescriptionEnabledForChat(origChat.Id, platform) {
+		log.Printf("📝 Descriptions disabled for %s in chat %d, using minimal caption", platform, origChat.Id)
+		// Keep only author info, remove the main description
+		caption = extractAuthorInfo(caption, platform)
+	}
 	
 	// For Twitter/X posts, handle long text intelligently
 	if (strings.Contains(mediaInfo.URL, "twitter.com") || strings.Contains(mediaInfo.URL, "x.com")) && 
@@ -784,7 +877,7 @@ func getFixedUrl(url string) string {
 		return strings.Replace(url, "x.com", "fixupx.com", 1)
 	}
 	
-	// 9GAG and YouTube don't have fixed link services
+	// YouTube doesn't have fixed link services
 	// Return empty string to trigger fallback message
 	
 	return ""
@@ -794,9 +887,6 @@ func getErrorMessage(url string) string {
 	if strings.Contains(url, "youtube.com") || strings.Contains(url, "youtu.be") {
 		// Don't send YouTube error messages to Telegram
 		return ""
-	} else if strings.Contains(url, "9gag.com") {
-		return "❌ Failed to download from 9GAG.\n\n" +
-			"9GAG content may be region-restricted or unavailable."
 	} else if strings.Contains(url, "instagram.com") {
 		return "❌ Cannot download this Instagram video.\n\n" +
 			"The content may be private, deleted, or the account might be restricted. " +
@@ -1570,12 +1660,17 @@ func parseTwitterThreadURLs(html, authorUsername, originalTweetID string) []stri
 
 // handleBotCommand handles all bot commands
 func handleBotCommand(origMessage *response.TgMessage, origChat *response.TgChat, origUser *response.TgUser) {
-	command := strings.ToLower(strings.Fields(origMessage.Text)[0])
+	commandText := strings.Fields(origMessage.Text)[0]
+	// Remove bot mention if present (e.g., /start@botname -> /start)
+	if atIndex := strings.Index(commandText, "@"); atIndex != -1 {
+		commandText = commandText[:atIndex]
+	}
+	command := strings.ToLower(commandText)
 	
 	log.Printf("🤖 Processing command: %s from user %d in chat %d", command, origUser.Id, origChat.Id)
 	
 	switch command {
-	case "/start", "/help":
+	case "/start", "/help", "/menu":
 		handleStartCommand(origMessage, origChat, origUser)
 	case "/stats":
 		handleStatsCommand(origMessage, origChat, origUser)
@@ -1609,8 +1704,7 @@ func handleStartCommand(origMessage *response.TgMessage, origChat *response.TgCh
 	menuText.WriteString("🐦 <b>Twitter/X:</b> Photos, Videos, GIFs\n")
 	menuText.WriteString("📺 <b>YouTube:</b> Videos, Shorts\n")
 	menuText.WriteString("🔴 <b>Reddit:</b> Videos, Images, Galleries\n")
-	menuText.WriteString("👥 <b>Facebook:</b> Videos, Photos\n")
-	menuText.WriteString("😂 <b>9GAG:</b> Videos, Images, GIFs\n\n")
+	menuText.WriteString("👥 <b>Facebook:</b> Videos, Photos\n\n")
 	
 	// How to use
 	menuText.WriteString("📝 <b>How to use:</b>\n")
@@ -1618,7 +1712,7 @@ func handleStartCommand(origMessage *response.TgMessage, origChat *response.TgCh
 	
 	// Commands
 	menuText.WriteString("⚡ <b>Commands:</b>\n")
-	menuText.WriteString("• /start or /help - Show this menu\n")
+	menuText.WriteString("• /start, /help, or /menu - Show this menu\n")
 	menuText.WriteString("• /stats [period] - View media statistics\n")
 	menuText.WriteString("  <i>Periods: today, week, month, year</i>\n")
 	menuText.WriteString("• /mylimit - Check your daily media limit\n")
@@ -1737,7 +1831,6 @@ func handleStatsCommand(origMessage *response.TgMessage, origChat *response.TgCh
 					"youtube":   "📺",
 					"reddit":    "🔴",
 					"facebook":  "👥",
-					"9gag":      "😂",
 				}
 				emoji := platformEmoji[strings.ToLower(platform.Platform)]
 				if emoji == "" {
@@ -2338,6 +2431,22 @@ func handleCallbackQuery(callbackQuery *response.TgCallbackQuery) {
 		handleTimezoneRegionCallback(callbackQuery)
 	} else if strings.HasPrefix(callbackQuery.Data, "/setgrouptimezone_") {
 		handleSetTimezoneCallback(callbackQuery)
+	} else if callbackQuery.Data == "/platform_settings" {
+		handlePlatformSettingsCallback(&callbackQuery.Message.Chat, &callbackQuery.From, callbackQuery.Message.MessageId)
+	} else if strings.HasPrefix(callbackQuery.Data, "/toggle_platform_") {
+		handleTogglePlatformCallback(*callbackQuery)
+	} else if callbackQuery.Data == "/platform_enable_all" {
+		handlePlatformEnableAllCallback(*callbackQuery)
+	} else if callbackQuery.Data == "/platform_disable_all" {
+		handlePlatformDisableAllCallback(*callbackQuery)
+	} else if callbackQuery.Data == "/description_settings" {
+		handleDescriptionSettingsCallback(&callbackQuery.Message.Chat, &callbackQuery.From, callbackQuery.Message.MessageId)
+	} else if strings.HasPrefix(callbackQuery.Data, "/toggle_description_") {
+		handleToggleDescriptionCallback(*callbackQuery)
+	} else if callbackQuery.Data == "/description_enable_all" {
+		handleDescriptionEnableAllCallback(*callbackQuery)
+	} else if callbackQuery.Data == "/description_disable_all" {
+		handleDescriptionDisableAllCallback(*callbackQuery)
 	} else {
 		log.Printf("🤷 Unknown callback query: %s", callbackQuery.Data)
 	}
@@ -2454,11 +2563,19 @@ func createGroupSettingsKeyboard() *api.TgInlineKeyboardMarkup {
 		{
 			{Text: "⚙️ Set Custom Limit", CallbackData: "/setgrouplimit_custom"},
 		},
-		// Fourth row - Timezone settings
+		// Fourth row - Platform settings
+		{
+			{Text: "📱 Platform Settings", CallbackData: "/platform_settings"},
+		},
+		// Fifth row - Description settings
+		{
+			{Text: "📝 Description Settings", CallbackData: "/description_settings"},
+		},
+		// Sixth row - Timezone settings
 		{
 			{Text: "🌍 Change Timezone", CallbackData: "/timezone_menu"},
 		},
-		// Fifth row - Back to main menu
+		// Sixth row - Back to main menu
 		{
 			{Text: "⬅️ Back to Main Menu", CallbackData: "/help"},
 		},
@@ -2845,9 +2962,393 @@ func getPlatformFromURL(url string) string {
 		return "reddit"
 	} else if strings.Contains(url, "facebook.com") {
 		return "facebook"
-	} else if strings.Contains(url, "9gag.com") {
-		return "9gag"
 	} else {
 		return "unknown"
 	}
 }
+
+// Platform Settings Functions
+
+// createPlatformSettingsKeyboard creates the interactive keyboard for platform settings
+func createPlatformSettingsKeyboard(chatID int64) (*api.TgInlineKeyboardMarkup, error) {
+	// Get current platform settings
+	platformSettings, err := services.GetChatPlatformSettings(chatID)
+	if err != nil {
+		return nil, err
+	}
+	
+	platforms := []struct {
+		Key   string
+		Name  string
+		Emoji string
+	}{
+		{"instagram", "Instagram", "📷"},
+		{"tiktok", "TikTok", "🎵"},
+		{"twitter", "Twitter/X", "🐦"},
+		{"youtube", "YouTube", "📺"},
+		{"reddit", "Reddit", "🤖"},
+		{"facebook", "Facebook", "📘"},
+	}
+	
+	var buttons [][]api.TgInlineKeyboardButton
+	
+	// Create platform toggle buttons (2 per row)
+	for i := 0; i < len(platforms); i += 2 {
+		var row []api.TgInlineKeyboardButton
+		
+		for j := 0; j < 2 && i+j < len(platforms); j++ {
+			platform := platforms[i+j]
+			enabled := platformSettings[platform.Key]
+			
+			status := "❌"
+			if enabled {
+				status = "✅"
+			}
+			
+			button := api.TgInlineKeyboardButton{
+				Text:         fmt.Sprintf("%s %s %s", platform.Emoji, platform.Name, status),
+				CallbackData: fmt.Sprintf("/toggle_platform_%s", platform.Key),
+			}
+			row = append(row, button)
+		}
+		buttons = append(buttons, row)
+	}
+	
+	// Add control buttons
+	buttons = append(buttons, []api.TgInlineKeyboardButton{
+		{Text: "✅ Enable All", CallbackData: "/platform_enable_all"},
+		{Text: "❌ Disable All", CallbackData: "/platform_disable_all"},
+	})
+	
+	// Add back button
+	buttons = append(buttons, []api.TgInlineKeyboardButton{
+		{Text: "⬅️ Back to Group Settings", CallbackData: "/group_settings"},
+	})
+	
+	return &api.TgInlineKeyboardMarkup{
+		InlineKeyboard: buttons,
+	}, nil
+}
+
+// handlePlatformSettingsCallback handles the platform settings menu
+func handlePlatformSettingsCallback(origChat *response.TgChat, origUser *response.TgUser, messageId int) {
+	log.Printf("📱 Admin %d opened platform settings in chat %d", origUser.Id, origChat.Id)
+	
+	// Initialize settings if not exist
+	services.InitializeChatSettings(origChat.Id)
+	
+	// Get platform settings
+	platformSettings, err := services.GetChatPlatformSettings(origChat.Id)
+	if err != nil {
+		log.Printf("Error getting platform settings: %v", err)
+		return
+	}
+	
+	// Count enabled/disabled platforms
+	enabled, disabled := 0, 0
+	for _, isEnabled := range platformSettings {
+		if isEnabled {
+			enabled++
+		} else {
+			disabled++
+		}
+	}
+	
+	// Build settings message
+	var settingsText strings.Builder
+	settingsText.WriteString("📱 <b>Platform Settings</b>\n")
+	settingsText.WriteString(fmt.Sprintf("<i>Chat: %s</i>\n\n", html.EscapeString(origChat.Title)))
+	settingsText.WriteString("🎯 <b>Configure which social media platforms the bot should process in this chat.</b>\n\n")
+	settingsText.WriteString(fmt.Sprintf("📊 <b>Status:</b> %d enabled, %d disabled\n\n", enabled, disabled))
+	settingsText.WriteString("💡 <i>Click platform buttons below to toggle on/off</i>")
+	
+	// Create keyboard
+	keyboard, err := createPlatformSettingsKeyboard(origChat.Id)
+	if err != nil {
+		log.Printf("Error creating platform settings keyboard: %v", err)
+		return
+	}
+	
+	settingsMsg := payload.TgPlSendMessage{
+		ChatId:      origChat.Id,
+		ParseMode:   payload.ParseModeHTML,
+		Text:        settingsText.String(),
+		ReplyMarkup: keyboard,
+	}
+	
+	message.NewSendMessage(settingsMsg)
+}
+
+
+// handleTogglePlatformCallback handles individual platform toggle
+func handleTogglePlatformCallback(callbackQuery response.TgCallbackQuery) {
+	// Extract platform from callback data
+	platform := strings.TrimPrefix(callbackQuery.Data, "/toggle_platform_")
+	chatID := callbackQuery.Message.Chat.Id
+	userID := callbackQuery.From.Id
+	
+	log.Printf("📱 User %d toggling platform %s in chat %d", userID, platform, chatID)
+	
+	// Get current setting
+	currentSetting := services.IsPlatformEnabledForChat(chatID, platform)
+	newSetting := !currentSetting
+	
+	// Update platform setting
+	err := services.SetChatPlatformEnabled(chatID, platform, newSetting)
+	if err != nil {
+		log.Printf("Error updating platform setting: %v", err)
+		return
+	}
+	
+	// Refresh the platform settings menu
+	handlePlatformSettingsCallback(&callbackQuery.Message.Chat, &callbackQuery.From, callbackQuery.Message.MessageId)
+}
+
+// handlePlatformEnableAllCallback enables all platforms
+func handlePlatformEnableAllCallback(callbackQuery response.TgCallbackQuery) {
+	chatID := callbackQuery.Message.Chat.Id
+	userID := callbackQuery.From.Id
+	
+	log.Printf("📱 User %d enabling all platforms in chat %d", userID, chatID)
+	
+	platforms := []string{"instagram", "tiktok", "twitter", "youtube", "reddit", "facebook"}
+	
+	for _, platform := range platforms {
+		err := services.SetChatPlatformEnabled(chatID, platform, true)
+		if err != nil {
+			log.Printf("Error enabling platform %s: %v", platform, err)
+		}
+	}
+	
+	// Refresh the platform settings menu
+	handlePlatformSettingsCallback(&callbackQuery.Message.Chat, &callbackQuery.From, callbackQuery.Message.MessageId)
+}
+
+// handlePlatformDisableAllCallback disables all platforms
+func handlePlatformDisableAllCallback(callbackQuery response.TgCallbackQuery) {
+	chatID := callbackQuery.Message.Chat.Id
+	userID := callbackQuery.From.Id
+	
+	log.Printf("📱 User %d disabling all platforms in chat %d", userID, chatID)
+	
+	platforms := []string{"instagram", "tiktok", "twitter", "youtube", "reddit", "facebook"}
+	
+	for _, platform := range platforms {
+		err := services.SetChatPlatformEnabled(chatID, platform, false)
+		if err != nil {
+			log.Printf("Error disabling platform %s: %v", platform, err)
+		}
+	}
+	
+	// Refresh the platform settings menu
+	handlePlatformSettingsCallback(&callbackQuery.Message.Chat, &callbackQuery.From, callbackQuery.Message.MessageId)
+}
+
+// Description Settings Functions
+
+// handleDescriptionSettingsCallback handles the description settings menu  
+func handleDescriptionSettingsCallback(origChat *response.TgChat, origUser *response.TgUser, messageId int) {
+	log.Printf("📝 User %d accessing description settings in chat %d", origUser.Id, origChat.Id)
+	
+	// Create keyboard
+	keyboard, err := createDescriptionSettingsKeyboard(origChat.Id)
+	if err != nil {
+		log.Printf("Error creating description settings keyboard: %v", err)
+		return
+	}
+	
+	// Get current settings for message
+	descriptionSettings, err := services.GetChatDescriptionSettings(origChat.Id)
+	if err != nil {
+		log.Printf("Error getting description settings: %v", err)
+		descriptionSettings = make(map[string]bool)
+	}
+	
+	// Count enabled/disabled descriptions
+	enabled := 0
+	disabled := 0
+	platforms := []string{"instagram", "tiktok", "twitter", "youtube", "reddit", "facebook"}
+	
+	for _, platform := range platforms {
+		if isEnabled, exists := descriptionSettings[platform]; !exists || isEnabled {
+			enabled++ // Default to enabled if not set
+		} else {
+			disabled++
+		}
+	}
+	
+	// Build settings message
+	var settingsText strings.Builder
+	settingsText.WriteString("📝 <b>Description Settings</b>\n")
+	settingsText.WriteString(fmt.Sprintf("<i>Chat: %s</i>\n\n", html.EscapeString(origChat.Title)))
+	settingsText.WriteString("🎯 <b>Configure whether to show text descriptions/captions for each platform.</b>\n\n")
+	settingsText.WriteString("💡 <b>Enabled:</b> Shows full descriptions with media\n")
+	settingsText.WriteString("🔇 <b>Disabled:</b> Shows only media + author info\n\n")
+	settingsText.WriteString(fmt.Sprintf("📊 <b>Status:</b> %d showing descriptions, %d minimal\n\n", enabled, disabled))
+	settingsText.WriteString("💡 <i>Click platform buttons below to toggle description visibility</i>")
+	
+	// Create message payload  
+	msgPayload := payload.TgPlSendMessage{
+		ChatId:                origChat.Id,
+		ParseMode:            payload.ParseModeHTML,
+		Text:                 settingsText.String(),
+		ReplyMarkup:          keyboard,
+		DisableNotification: true,
+	}
+	
+	// Send message
+	message.NewSendMessage(msgPayload)
+}
+
+// createDescriptionSettingsKeyboard creates the keyboard for description settings
+func createDescriptionSettingsKeyboard(chatID int64) (*api.TgInlineKeyboardMarkup, error) {
+	// Get current description settings
+	descriptionSettings, err := services.GetChatDescriptionSettings(chatID)
+	if err != nil {
+		log.Printf("Error getting description settings: %v", err)
+		descriptionSettings = make(map[string]bool)
+	}
+	
+	// Platform definitions with display names and emojis
+	platforms := []struct {
+		Key   string
+		Name  string
+		Emoji string
+	}{
+		{"instagram", "Instagram", "📸"},
+		{"tiktok", "TikTok", "🎵"},
+		{"twitter", "Twitter/X", "🐦"},
+		{"youtube", "YouTube", "📺"},
+		{"reddit", "Reddit", "🤖"},
+		{"facebook", "Facebook", "📘"},
+	}
+	
+	var rows [][]api.TgInlineKeyboardButton
+	
+	// Create platform toggle buttons (2 per row)
+	for i := 0; i < len(platforms); i += 2 {
+		var row []api.TgInlineKeyboardButton
+		
+		// First platform in row
+		platform1 := platforms[i]
+		enabled1 := true // Default to enabled
+		if isEnabled, exists := descriptionSettings[platform1.Key]; exists {
+			enabled1 = isEnabled
+		}
+		status1 := "✅"
+		if !enabled1 {
+			status1 = "🔇"
+		}
+		
+		button1 := api.TgInlineKeyboardButton{
+			Text:         fmt.Sprintf("%s %s %s", platform1.Emoji, platform1.Name, status1),
+			CallbackData: "/toggle_description_" + platform1.Key,
+		}
+		row = append(row, button1)
+		
+		// Second platform in row (if exists)
+		if i+1 < len(platforms) {
+			platform2 := platforms[i+1]
+			enabled2 := true // Default to enabled
+			if isEnabled, exists := descriptionSettings[platform2.Key]; exists {
+				enabled2 = isEnabled
+			}
+			status2 := "✅"
+			if !enabled2 {
+				status2 = "🔇"
+			}
+			
+			button2 := api.TgInlineKeyboardButton{
+				Text:         fmt.Sprintf("%s %s %s", platform2.Emoji, platform2.Name, status2),
+				CallbackData: "/toggle_description_" + platform2.Key,
+			}
+			row = append(row, button2)
+		}
+		
+		rows = append(rows, row)
+	}
+	
+	// Add bulk action buttons
+	rows = append(rows, []api.TgInlineKeyboardButton{
+		{Text: "✅ Enable All Descriptions", CallbackData: "/description_enable_all"},
+		{Text: "🔇 Disable All Descriptions", CallbackData: "/description_disable_all"},
+	})
+	
+	// Add back button
+	rows = append(rows, []api.TgInlineKeyboardButton{
+		{Text: "🔙 Back to Settings", CallbackData: "/start"},
+	})
+	
+	return &api.TgInlineKeyboardMarkup{
+		InlineKeyboard: rows,
+	}, nil
+}
+
+// handleToggleDescriptionCallback handles individual description toggle
+func handleToggleDescriptionCallback(callbackQuery response.TgCallbackQuery) {
+	// Extract platform from callback data
+	platform := strings.TrimPrefix(callbackQuery.Data, "/toggle_description_")
+	chatID := callbackQuery.Message.Chat.Id
+	userID := callbackQuery.From.Id
+	
+	// Get current state
+	currentState := services.IsDescriptionEnabledForChat(chatID, platform)
+	newState := !currentState
+	
+	// Toggle setting
+	err := services.SetChatDescriptionEnabled(chatID, platform, newState)
+	if err != nil {
+		log.Printf("Error toggling description for platform %s: %v", platform, err)
+		return
+	}
+	
+	action := "enabled"
+	if !newState {
+		action = "disabled"
+	}
+	log.Printf("📝 User %d %s descriptions for %s in chat %d", userID, action, platform, chatID)
+	
+	// Refresh the description settings menu
+	handleDescriptionSettingsCallback(&callbackQuery.Message.Chat, &callbackQuery.From, callbackQuery.Message.MessageId)
+}
+
+// handleDescriptionEnableAllCallback enables descriptions for all platforms
+func handleDescriptionEnableAllCallback(callbackQuery response.TgCallbackQuery) {
+	chatID := callbackQuery.Message.Chat.Id
+	userID := callbackQuery.From.Id
+	
+	log.Printf("📝 User %d enabling descriptions for all platforms in chat %d", userID, chatID)
+	
+	platforms := []string{"instagram", "tiktok", "twitter", "youtube", "reddit", "facebook"}
+	
+	for _, platform := range platforms {
+		err := services.SetChatDescriptionEnabled(chatID, platform, true)
+		if err != nil {
+			log.Printf("Error enabling descriptions for platform %s: %v", platform, err)
+		}
+	}
+	
+	// Refresh the description settings menu
+	handleDescriptionSettingsCallback(&callbackQuery.Message.Chat, &callbackQuery.From, callbackQuery.Message.MessageId)
+}
+
+// handleDescriptionDisableAllCallback disables descriptions for all platforms
+func handleDescriptionDisableAllCallback(callbackQuery response.TgCallbackQuery) {
+	chatID := callbackQuery.Message.Chat.Id
+	userID := callbackQuery.From.Id
+	
+	log.Printf("📝 User %d disabling descriptions for all platforms in chat %d", userID, chatID)
+	
+	platforms := []string{"instagram", "tiktok", "twitter", "youtube", "reddit", "facebook"}
+	
+	for _, platform := range platforms {
+		err := services.SetChatDescriptionEnabled(chatID, platform, false)
+		if err != nil {
+			log.Printf("Error disabling descriptions for platform %s: %v", platform, err)
+		}
+	}
+	
+	// Refresh the description settings menu
+	handleDescriptionSettingsCallback(&callbackQuery.Message.Chat, &callbackQuery.From, callbackQuery.Message.MessageId)
+}
+

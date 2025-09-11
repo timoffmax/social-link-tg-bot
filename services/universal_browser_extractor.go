@@ -474,8 +474,8 @@ func (ube *UniversalBrowserExtractor) extractYouTubeMedia(mediaURL string) ([]*M
 func (ube *UniversalBrowserExtractor) extract9GAGMedia(mediaURL string) ([]*MediaInfo, error) {
 	log.Printf("😂 Extracting 9GAG media with headless browser")
 
-	// Extract username from URL
-	username := Extract9GAGUsername(mediaURL)
+	// 9GAG posts don't include username in URL
+	username := ""
 
 	// Try the simple HTTP approach first since it used to work
 	html, err := ube.tryImproved9GAGFallback(mediaURL)

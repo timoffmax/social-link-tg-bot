@@ -140,23 +140,3 @@ func ExtractFacebookUsername(url string) string {
 	return ""
 }
 
-// Extract9GAGUsername extracts username from 9GAG URL
-func Extract9GAGUsername(url string) string {
-	// 9GAG URL patterns:
-	// https://9gag.com/gag/ID (no username in URL)
-	// https://9gag.com/u/username
-	patterns := []string{
-		`9gag\.com/u/([^/]+)`,
-	}
-	
-	for _, pattern := range patterns {
-		re := regexp.MustCompile(pattern)
-		matches := re.FindStringSubmatch(url)
-		if len(matches) > 1 {
-			return matches[1]
-		}
-	}
-	
-	// 9GAG posts don't include username in URL
-	return ""
-}

@@ -246,7 +246,7 @@ func (rlt *RealLinkTester) printTestSummary(results map[string][]LinkTestResult,
 	log.Printf("===============")
 	
 	// Platform breakdown
-	platforms := []string{"Instagram", "TikTok", "Twitter/X", "YouTube", "9GAG"}
+	platforms := []string{"Instagram", "TikTok", "Twitter/X", "YouTube"}
 	
 	for _, platform := range platforms {
 		if platformResults, ok := results[platform]; ok {

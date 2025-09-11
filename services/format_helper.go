@@ -23,8 +23,6 @@ func FormatAuthorCaption(platform, displayName, username, originalCaption string
 		emoji = "🟠"
 	case "facebook":
 		emoji = "📘"
-	case "9gag":
-		emoji = "😂"
 	case "twitter", "x":
 		emoji = "🐦"
 	}

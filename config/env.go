@@ -56,15 +56,6 @@ func GetTwitterPassword() string {
 	return os.Getenv("TWITTER_PASSWORD")
 }
 
-// 9GAG authentication configuration
-func GetNineGagUsername() string {
-	return os.Getenv("NINEGAG_USERNAME")
-}
-
-func GetNineGagPassword() string {
-	return os.Getenv("NINEGAG_PASSWORD")
-}
-
 // Proxy configuration with global and per-platform disable options
 func IsProxyEnabled() bool {
 	return getBoolEnv("ENABLE_PROXIES", true)
@@ -90,8 +81,6 @@ func IsProxyEnabledForPlatform(platform string) bool {
 		return getBoolEnv("ENABLE_FACEBOOK_PROXY", true)
 	case "reddit":
 		return getBoolEnv("ENABLE_REDDIT_PROXY", true)
-	case "9gag":
-		return getBoolEnv("ENABLE_9GAG_PROXY", true)
 	default:
 		return true // Default to enabled for unknown platforms
 	}
@@ -152,9 +141,6 @@ func IsRedditEnabled() bool {
 	return getBoolEnv("ENABLE_REDDIT", true)
 }
 
-func Is9GAGEnabled() bool {
-	return getBoolEnv("ENABLE_9GAG", true)
-}
 
 // Cookie usage configuration per platform
 func IsCookiesEnabledForPlatform(platform string) bool {
@@ -171,8 +157,6 @@ func IsCookiesEnabledForPlatform(platform string) bool {
 		return getBoolEnv("ENABLE_FACEBOOK_COOKIES", true)
 	case "reddit":
 		return getBoolEnv("ENABLE_REDDIT_COOKIES", true)
-	case "9gag":
-		return getBoolEnv("ENABLE_9GAG_COOKIES", true)
 	default:
 		return true // Default to enabled for unknown platforms
 	}

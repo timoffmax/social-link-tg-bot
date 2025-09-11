@@ -170,26 +170,6 @@ func GetExtractionStrategy(url string) *ExtractionStrategy {
 		}
 	}
 	
-	// 9GAG: configurable enablement via ENABLE_9GAG environment variable
-	if strings.Contains(url, "9gag.com") {
-		if !config.Is9GAGEnabled() {
-			// 9GAG disabled via configuration
-			return &ExtractionStrategy{
-				Platform: "9gag",
-				Methods: []ExtractionMethod{},
-				HasFixedLink: false,
-			}
-		}
-		
-		// 9GAG enabled - use browser extraction with proxy support
-		return &ExtractionStrategy{
-			Platform: "9gag",
-			Methods: []ExtractionMethod{
-				MethodBrowser, // CLI browser with proxy support
-			},
-			HasFixedLink: false,
-		}
-	}
 	
 	// Reddit: yt-dlp works well for video posts, browser fallback for images
 	if strings.Contains(url, "reddit.com") {
