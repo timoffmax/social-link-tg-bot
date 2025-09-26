@@ -650,7 +650,7 @@ func (cbe *CliBrowserExtractor) RenderPageForTwitterThread(twitterURL string) (s
 	}
 	
 	// Add Twitter cookies if available for better authentication and thread loading
-	twitterCookiesPath := filepath.Join(cbe.workingDir, "twitter_cookies.txt")
+	twitterCookiesPath := filepath.Join(cbe.workingDir, "cookies", "twitter_cookies.txt")
 	if _, err := os.Stat(twitterCookiesPath); err == nil {
 		args = append(args, "--cookie-file="+twitterCookiesPath)
 		log.Printf("🍪 [AUTO-THREAD] Using Twitter cookies: %s", twitterCookiesPath)

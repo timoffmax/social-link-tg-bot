@@ -19,6 +19,8 @@ type TwitterExtractor struct {
 	cookiesPath string
 	tempDir    string
 	workingDir string
+	// Cache extracted tweet text from successful methods to use in fallbacks
+	cachedTweetText string
 }
 
 type TwitterMediaItem struct {
@@ -38,7 +40,7 @@ func NewTwitterExtractor(workingDir, tempDir string) *TwitterExtractor {
 	
 	return &TwitterExtractor{
 		client:     client,
-		cookiesPath: filepath.Join(workingDir, "twitter_cookies.txt"),
+		cookiesPath: filepath.Join(workingDir, "cookies", "twitter_cookies.txt"),
 		tempDir:    tempDir,
 		workingDir: workingDir,
 	}
@@ -310,6 +312,10 @@ func (te *TwitterExtractor) extractAuthorInfoFromHTML(html string) (displayName,
 	// Pattern to extract display name from Twitter's HTML structure
 	// Looking for patterns like: <span...>Display Name</span>
 	displayNamePatterns := []string{
+		// Modern Twitter/X structure using data-testid="User-Name"
+		`data-testid="User-Name"[^>]*>.*?<span[^>]*>([^<]+)</span>.*?<span[^>]*>@([^<]+)</span>`,
+		// Alternative order: username first, then display name
+		`data-testid="User-Name"[^>]*>.*?<span[^>]*>@([^<]+)</span>.*?<span[^>]*>([^<]+)</span>`,
 		// Modern Twitter/X structure
 		`<a href="/([^"]+)"[^>]*>.*?<span[^>]*>([^<]+)</span>`,
 		// Alternative structure with nested spans
@@ -336,6 +342,14 @@ func (te *TwitterExtractor) extractAuthorInfoFromHTML(html string) (displayName,
 				// Meta tag pattern: matches[1] is display name, matches[2] is username
 				displayName = matches[1]
 				username = matches[2]
+			} else if strings.Contains(pattern, "User-Name") && strings.Contains(pattern, "@([^<]+).*?([^<]+)") {
+				// data-testid pattern with username first: matches[1] is username, matches[2] is display name
+				username = matches[1]
+				displayName = matches[2]
+			} else if strings.Contains(pattern, "User-Name") && strings.Contains(pattern, "([^<]+).*?@([^<]+)") {
+				// data-testid pattern with display name first: matches[1] is display name, matches[2] is username
+				displayName = matches[1]
+				username = matches[2]
 			} else {
 				// Link pattern: matches[1] is username, matches[2] is display name
 				username = matches[1]
@@ -355,10 +369,40 @@ func (te *TwitterExtractor) extractAuthorInfoFromHTML(html string) (displayName,
 	}
 	
 	// Fallback: try to extract just the username from profile links
-	usernamePattern := regexp.MustCompile(`href="/([^"/]+)"`)
-	if matches := usernamePattern.FindStringSubmatch(html); len(matches) > 1 {
-		username = matches[1]
-		log.Printf("⚠️ Only found username from HTML: @%s", username)
+	// Use more specific patterns to avoid false matches
+	fallbackPatterns := []string{
+		// Look for Twitter profile links with specific context
+		`<a[^>]*href="/([^"/]+)"[^>]*>[^<]*@([^<]+)</a>`,
+		// Match @username patterns in spans with specific CSS classes (2025 Twitter structure)
+		`<span class="[^"]*r-poiln3[^"]*">@([a-zA-Z0-9_]+)</span>`,
+		`<span[^>]*class="[^"]*poiln3[^"]*"[^>]*>@([a-zA-Z0-9_]+)</span>`,
+		// Match @username patterns in spans (generic)
+		`<span[^>]*>@([a-zA-Z0-9_]+)</span>`,
+		// Look for specific href patterns that should contain the actual username
+		`href="/([a-zA-Z0-9_]+)"[^>]*role="link"`,
+		// Only use very generic pattern as last resort, but filter out common false positives
+		`href="/([a-zA-Z][a-zA-Z0-9_]+)"`,
+	}
+
+	for _, pattern := range fallbackPatterns {
+		re := regexp.MustCompile(pattern)
+		if matches := re.FindStringSubmatch(html); len(matches) > 1 {
+			candidate := matches[1]
+			if len(matches) > 2 {
+				candidate = matches[2] // Use the second match if it exists (usually the @username part)
+			}
+
+			// Skip common false positives
+			if candidate != "i" && candidate != "search" && candidate != "home" &&
+			   candidate != "notifications" && candidate != "messages" &&
+			   candidate != "compose" && candidate != "settings" && candidate != "help" &&
+			   candidate != "tos" && candidate != "privacy" && candidate != "os-x.xml" &&
+			   len(candidate) > 2 && len(candidate) < 20 {
+				username = candidate
+				log.Printf("⚠️ Found username via fallback pattern: @%s", username)
+				break
+			}
+		}
 	}
 	
 	return displayName, username
@@ -794,8 +838,16 @@ func (te *TwitterExtractor) parseEmbedResponse(response, tweetID string) ([]*Med
 	
 	// Return an error if photos exist but we couldn't extract them from embed
 	// This will allow the extraction chain to try other methods (including fixupx)
+	// But cache the tweet text for use in subsequent methods
 	if hasPhotoReferences {
 		log.Printf("🖼️ Found %d pic.twitter.com references but no direct media URLs in embed", len(picMatches))
+
+		// Cache the good tweet text for use in subsequent methods
+		if tweetText != "" && tweetText != "Private to you" {
+			te.cachedTweetText = tweetText
+			log.Printf("💾 Cached tweet text from embed: %s", tweetText)
+		}
+
 		return nil, fmt.Errorf("photos detected but not extractable from embed API")
 	}
 	
@@ -1219,9 +1271,15 @@ func (te *TwitterExtractor) extractTweetText(html string) string {
 		`<div[^>]*class="[^"]*timeline-tweet[^"]*"[^>]*>.*?<div[^>]*class="[^"]*tweet-text[^"]*"[^>]*>(.*?)</div>`,
 		
 		// Modern Twitter data-testid patterns (2025 X/Twitter structure)
+		// More flexible pattern that captures everything between opening and closing div
+		`(?s)<div[^>]*data-testid="tweetText"[^>]*>(.*?)</div>`,
+		// Match the exact structure with nested spans
+		`<div[^>]*data-testid="tweetText"[^>]*>((?:<span[^>]*>[^<]*</span>[\s]*)+)</div>`,
+		// With specific class pattern
 		`<div[^>]*data-testid="tweetText"[^>]*class="[^"]*css-146c3p1[^"]*"[^>]*>(.*?)</div>`,
 		`<div[^>]*class="[^"]*css-146c3p1[^"]*"[^>]*data-testid="tweetText"[^>]*>(.*?)</div>`,
-		`<div[^>]*data-testid="tweetText"[^>]*>(.*?)</div>`,
+		// Simple span within tweetText div
+		`data-testid="tweetText"[^>]*><span[^>]*>([^<]+)</span>`,
 		`<span[^>]*data-testid="tweetText"[^>]*>(.*?)</span>`,
 		
 		// Classic patterns
@@ -1251,18 +1309,50 @@ func (te *TwitterExtractor) extractTweetText(html string) string {
 		`<span[^>]*class="[^"]*tweet-text[^"]*"[^>]*>(.*?)</span>`,
 	}
 	
-	for _, pattern := range patterns {
+	// Check if we have the data-testid="tweetText" in HTML
+	if strings.Contains(html, `data-testid="tweetText"`) {
+		log.Printf("✅ Found data-testid=\"tweetText\" in HTML")
+
+		// Try to extract a sample
+		if idx := strings.Index(html, `data-testid="tweetText"`); idx >= 0 {
+			endIdx := idx + 500
+			if endIdx > len(html) {
+				endIdx = len(html)
+			}
+			sample := html[idx:endIdx]
+			log.Printf("📄 Sample around tweetText: %.300s", sample)
+		}
+	} else {
+		log.Printf("❌ No data-testid=\"tweetText\" found in HTML")
+	}
+
+	for i, pattern := range patterns {
 		re := regexp.MustCompile(`(?s)` + pattern) // (?s) makes . match newlines
 		matches := re.FindStringSubmatch(html)
 		if len(matches) > 1 {
+			log.Printf("🎯 Pattern %d matched! Raw content: %.100s", i+1, matches[1])
 			// Clean and format the text properly
 			text := te.cleanAndFormatTweetText(matches[1])
 			if text != "" && text != "null" {
+				// Check if we have cached text from embed API that's better than generic "Private to you"
+				if te.cachedTweetText != "" && (text == "Private to you" || strings.Contains(text, "Private to you")) {
+					log.Printf("✅ Using cached embed text instead of generic pattern result: %s", te.cachedTweetText)
+					return te.cachedTweetText
+				}
+				log.Printf("✅ Extracted tweet text via pattern %d: %.200s", i+1, text)
 				return text
 			}
 		}
 	}
-	
+
+	log.Printf("⚠️ No tweet text patterns matched")
+
+	// Use cached tweet text from embed API if available and we didn't find anything better
+	if te.cachedTweetText != "" {
+		log.Printf("✅ Using cached tweet text from embed API: %s", te.cachedTweetText)
+		return te.cachedTweetText
+	}
+
 	return ""
 }
 

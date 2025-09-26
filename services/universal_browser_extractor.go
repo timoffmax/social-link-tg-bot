@@ -209,9 +209,11 @@ func (ube *UniversalBrowserExtractor) extractTwitterMedia(mediaURL string) ([]*M
 	// If we found images, download them
 	if len(tweetImages) > 0 {
 		var mediaInfos []*MediaInfo
-		
-		// Extract caption
-		caption := ube.extractTwitterCaption(html)
+
+		// Extract author info and caption
+		displayName, username := ube.extractTwitterAuthorInfo(html)
+		tweetText := ube.extractTwitterCaption(html)
+		caption := FormatAuthorCaption("twitter", displayName, username, tweetText)
 		
 		// Download each image
 		for i, imageURL := range tweetImages {
@@ -1293,6 +1295,57 @@ func (ube *UniversalBrowserExtractor) extractTwitterCaption(html string) string 
 	}
 
 	return ""
+}
+
+// extractTwitterAuthorInfo extracts author display name and username from Twitter HTML
+func (ube *UniversalBrowserExtractor) extractTwitterAuthorInfo(html string) (displayName, username string) {
+	// Twitter author patterns for browser-rendered content
+	patterns := []string{
+		// Modern Twitter/X structure using data-testid="User-Name"
+		`data-testid="User-Name"[^>]*>.*?<span[^>]*>([^<]+)</span>.*?<span[^>]*>@([^<]+)</span>`,
+		// Alternative order: username first, then display name
+		`data-testid="User-Name"[^>]*>.*?<span[^>]*>@([^<]+)</span>.*?<span[^>]*>([^<]+)</span>`,
+		// Meta tag patterns
+		`<meta[^>]*property="og:title"[^>]*content="([^"]+) \(@([^)]+)\)`,
+		`<meta[^>]*name="twitter:title"[^>]*content="([^"]+) \(@([^)]+)\)`,
+		// Profile link patterns
+		`<a href="/([^"]+)"[^>]*>.*?<span[^>]*>([^<]+)</span>`,
+	}
+
+	for _, pattern := range patterns {
+		re := regexp.MustCompile(pattern)
+		matches := re.FindStringSubmatch(html)
+
+		if len(matches) >= 3 {
+			if strings.Contains(pattern, "User-Name") && strings.Contains(pattern, "@([^<]+).*?([^<]+)") {
+				// data-testid pattern with username first: matches[1] is username, matches[2] is display name
+				username = matches[1]
+				displayName = matches[2]
+			} else if strings.Contains(pattern, "User-Name") && strings.Contains(pattern, "([^<]+).*?@([^<]+)") {
+				// data-testid pattern with display name first: matches[1] is display name, matches[2] is username
+				displayName = matches[1]
+				username = matches[2]
+			} else if strings.Contains(pattern, "og:title") || strings.Contains(pattern, "twitter:title") {
+				displayName = strings.TrimSpace(matches[1])
+				username = strings.TrimSpace(matches[2])
+			} else {
+				// Link pattern: matches[1] is username, matches[2] is display name
+				username = strings.TrimSpace(matches[1])
+				displayName = strings.TrimSpace(matches[2])
+			}
+
+			// Clean up
+			displayName = strings.TrimSpace(displayName)
+			username = strings.TrimSpace(username)
+
+			if displayName != "" || username != "" {
+				log.Printf("✅ Extracted Twitter author: %s (@%s)", displayName, username)
+				return displayName, username
+			}
+		}
+	}
+
+	return "", ""
 }
 
 func (ube *UniversalBrowserExtractor) extractTikTokCaption(html string) string {
