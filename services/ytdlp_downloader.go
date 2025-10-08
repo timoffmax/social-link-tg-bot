@@ -727,32 +727,87 @@ func (yd *YtDlpDownloader) attemptDownload(url string, outputTemplate string, pr
 }
 
 func (yd *YtDlpDownloader) DownloadInstagramMedia(url string) ([]*MediaInfo, error) {
-	// For Instagram carousels, prioritize browser extraction over direct download
-	
-	// Strategy 1: Try normal yt-dlp download for videos/single posts first
-	log.Printf("Trying yt-dlp for Instagram video/single posts")
+	// Detect content type from URL
+	isVideo := (strings.Contains(url, "/reel/") || strings.Contains(url, "/tv/") || strings.Contains(url, "/reels/"))
+	isPhoto := strings.Contains(url, "/p/")
+	hasCookies := yd.HasInstagramCookies()
+
+	// For photo posts (which may be carousels):
+	// - WITH cookies: Try browser extraction (handles carousels well with JS rendering)
+	// - WITHOUT cookies: Skip browser (times out on login wall), use fixed services instead
+	if isPhoto && hasCookies {
+		log.Printf("Detected Instagram photo post WITH cookies - trying browser extraction first for carousel support")
+		browserExtractor := NewUniversalBrowserExtractor(yd.WorkingDir, yd.TempDir)
+		browserMediaInfos, err := browserExtractor.ExtractMedia(url)
+		if err == nil && len(browserMediaInfos) > 0 {
+			// Check if we got actual media files (not just text)
+			hasActualMedia := false
+			for _, media := range browserMediaInfos {
+				if media.Type != "text" && media.Filename != "" {
+					hasActualMedia = true
+					break
+				}
+			}
+			if hasActualMedia {
+				log.Printf("✅ Browser extraction succeeded with %d items (carousel support)", len(browserMediaInfos))
+				return browserMediaInfos, nil
+			}
+			log.Printf("Browser extraction only returned text content, trying other strategies")
+		}
+		log.Printf("Browser extraction failed, falling back to other methods")
+	} else if isPhoto && !hasCookies {
+		log.Printf("Detected Instagram photo post WITHOUT cookies - skipping browser extraction (would timeout)")
+		log.Printf("Will try fixed service URLs (ddinstagram) which support carousels")
+
+		// Use ddinstagram.com for internal downloading (better for actual media extraction)
+		fixedServiceURL := strings.Replace(url, "https://www.instagram.com", "https://d.ddinstagram.com", 1)
+		fixedServiceURL = strings.Replace(fixedServiceURL, "https://instagram.com", "https://d.ddinstagram.com", 1)
+
+		log.Printf("🔄 Trying yt-dlp with ddinstagram for carousel support: %s", fixedServiceURL)
+		fixedMediaInfos, err := yd.DownloadMedia(fixedServiceURL)
+		if err == nil && len(fixedMediaInfos) > 0 {
+			// Check if we got actual media files
+			hasActualMedia := false
+			for _, media := range fixedMediaInfos {
+				if media.Type != "text" && media.Filename != "" {
+					hasActualMedia = true
+					break
+				}
+			}
+			if hasActualMedia {
+				log.Printf("✅ Fixed service (ddinstagram) succeeded with %d items", len(fixedMediaInfos))
+				return fixedMediaInfos, nil
+			}
+		}
+		log.Printf("Fixed service download failed, trying direct Instagram URL")
+	}
+
+	// Strategy 1: Try yt-dlp (prioritized for videos, fallback for photos)
+	log.Printf("Trying yt-dlp for Instagram media")
 	mediaInfos, err := yd.DownloadMedia(url)
 	if err == nil && len(mediaInfos) > 0 {
 		return mediaInfos, nil
 	}
-	
-	// Strategy 2: Universal headless browser for carousel images (prioritize over text-only)
-	log.Printf("yt-dlp failed, trying universal headless browser for Instagram carousels")
-	browserExtractor := NewUniversalBrowserExtractor(yd.WorkingDir, yd.TempDir)
-	browserMediaInfos, err := browserExtractor.ExtractMedia(url)
-	if err == nil && len(browserMediaInfos) > 0 {
-		// Check if we got actual media files (not just text)
-		hasActualMedia := false
-		for _, media := range browserMediaInfos {
-			if media.Type != "text" && media.Filename != "" {
-				hasActualMedia = true
-				break
+
+	// Strategy 2: Universal headless browser (fallback for videos if yt-dlp failed)
+	if isVideo {
+		log.Printf("yt-dlp failed, trying universal headless browser for Instagram video")
+		browserExtractor := NewUniversalBrowserExtractor(yd.WorkingDir, yd.TempDir)
+		browserMediaInfos, err := browserExtractor.ExtractMedia(url)
+		if err == nil && len(browserMediaInfos) > 0 {
+			// Check if we got actual media files (not just text)
+			hasActualMedia := false
+			for _, media := range browserMediaInfos {
+				if media.Type != "text" && media.Filename != "" {
+					hasActualMedia = true
+					break
+				}
 			}
+			if hasActualMedia {
+				return browserMediaInfos, nil
+			}
+			log.Printf("Browser extraction only returned text content, continuing to other strategies")
 		}
-		if hasActualMedia {
-			return browserMediaInfos, nil
-		}
-		log.Printf("Browser extraction only returned text content, continuing to other strategies")
 	}
 	
 	// Strategy 3: Try Instagram GraphQL API (sometimes works without authentication)
@@ -1766,19 +1821,122 @@ func (yd *YtDlpDownloader) downloadInstagramDirect(url string) ([]*MediaInfo, er
 // extractInstagramImagesFromHTML extracts image URLs from Instagram HTML content
 func (yd *YtDlpDownloader) extractInstagramImagesFromHTML(html, originalURL string) ([]*MediaInfo, error) {
 	var mediaInfos []*MediaInfo
-	
+
+	// FIRST: Try to extract carousel media if present (modern Instagram structure)
+	// Find carousel_media and extract the complete array (with proper bracket matching)
+	carouselStart := strings.Index(html, `"carousel_media":`)
+	if carouselStart != -1 {
+		// Find the opening bracket
+		bracketStart := strings.Index(html[carouselStart:], "[")
+		if bracketStart != -1 {
+			bracketStart += carouselStart
+
+			// Count brackets to find the matching closing bracket
+			count := 1
+			pos := bracketStart + 1
+			for count > 0 && pos < len(html) {
+				if html[pos] == '[' {
+					count++
+				} else if html[pos] == ']' {
+					count--
+				}
+				pos++
+			}
+
+			if count == 0 {
+				carouselJSON := html[bracketStart:pos]
+				log.Printf("🎠 Detected Instagram carousel, extracting all items")
+
+				// Extract all display_uri from carousel items
+				displayURIRe := regexp.MustCompile(`"display_uri":"(https:[^"]+\.cdninstagram\.com[^"]*)"`)
+				displayURIs := displayURIRe.FindAllStringSubmatch(carouselJSON, -1)
+
+				// Also extract from candidates array for higher quality
+				candidatesRe := regexp.MustCompile(`"candidates":\[[^\]]*?"url":"(https:[^"]+\.cdninstagram\.com[^"]+stp=dst-jpg_e35_tt6[^"]*)"`)
+				candidateURIs := candidatesRe.FindAllStringSubmatch(carouselJSON, -1)
+
+		// Combine both sources, preferring candidates (higher quality)
+		var carouselURLs []string
+		seenCarouselURLs := make(map[string]bool)
+
+		// Add candidate URLs first (higher quality, full-size)
+		for _, match := range candidateURIs {
+			if len(match) > 1 {
+				url := strings.ReplaceAll(match[1], `\/`, "/")
+				url = strings.ReplaceAll(url, `\u0026`, "&")
+				if !seenCarouselURLs[url] {
+					seenCarouselURLs[url] = true
+					carouselURLs = append(carouselURLs, url)
+				}
+			}
+		}
+
+		// Add display_uri if no candidates found
+		if len(carouselURLs) == 0 {
+			for _, match := range displayURIs {
+				if len(match) > 1 {
+					url := strings.ReplaceAll(match[1], `\/`, "/")
+					url = strings.ReplaceAll(url, `\u0026`, "&")
+					if !seenCarouselURLs[url] {
+						seenCarouselURLs[url] = true
+						carouselURLs = append(carouselURLs, url)
+					}
+				}
+			}
+		}
+
+				if len(carouselURLs) > 0 {
+					log.Printf("✅ Found %d carousel items", len(carouselURLs))
+
+					// Extract username and caption
+					username := yd.extractInstagramUsernameFromHTML(html)
+					caption := yd.extractInstagramCaptionFromHTML(html)
+
+					// Download each carousel image
+					for i, imageURL := range carouselURLs {
+						uniquePrefix := fmt.Sprintf("%d_%08X", time.Now().Unix(), uint32(i*1000))
+
+						filename, err := yd.downloadImageFromURL(imageURL, uniquePrefix, i)
+						if err != nil {
+							log.Printf("❌ Failed to download carousel image %d: %v", i+1, err)
+							continue
+						}
+
+						mediaInfo := &MediaInfo{
+							Type:     "photo",
+							URL:      originalURL,
+							Caption:  FormatAuthorCaption("instagram", "", username, caption),
+							Filename: filename,
+						}
+						mediaInfos = append(mediaInfos, mediaInfo)
+					}
+
+					if len(mediaInfos) > 0 {
+						return mediaInfos, nil
+					}
+					log.Printf("⚠️ Carousel detected but no images downloaded successfully")
+				}
+			}
+		}
+	}
+
+	// FALLBACK: Try regex patterns for single photos
 	// Simple Instagram image patterns - prioritize JSON script data over meta tags
 	imagePatterns := []string{
 		// HIGHEST PRIORITY: JSON script with image candidates array (contains all sizes including full-size)
 		// Note: URLs in JSON have escaped forward slashes (\/)
 		`"candidates":\[.*?"url":"(https:\\?/\\?/scontent[^"]*\.cdninstagram\.com\\?/v\\?/t51\.2885-15\\?/[^"]*)"`,
 		`"candidates":\[.*?"url":"(https:\\?/\\?/[^"]*\.cdninstagram\.com\\?/v\\?/t51\.2885-15\\?/[^"]*)"`,
+		`"candidates":\[.*?"url":"(https:\\?/\\?/scontent[^"]*\.cdninstagram\.com\\?/v\\?/t51\.82787-15\\?/[^"]*)"`,
+		`"candidates":\[.*?"url":"(https:\\?/\\?/[^"]*\.cdninstagram\.com\\?/v\\?/t51\.82787-15\\?/[^"]*)"`,
 		// IMG tags (good quality)
 		`<img[^>]*src="(https://scontent[^"]*\.cdninstagram\.com/[^"]*)"`,
 		`<img[^>]*src="(https://[^"]*\.cdninstagram\.com/[^"]*)"`,
 		// JSON patterns for display URLs
 		`"display_url":"(https://scontent[^"]*\.cdninstagram\.com/[^"]*)"`,
 		`"display_url":"(https://[^"]*\.cdninstagram\.com/[^"]*)"`,
+		`"display_uri":"(https://scontent[^"]*\.cdninstagram\.com/[^"]*)"`,
+		`"display_uri":"(https://[^"]*\.cdninstagram\.com/[^"]*)"`,
 		`"url":"(https://scontent[^"]*\.cdninstagram\.com/[^"]*)"`,
 		`"src":"(https://scontent[^"]*\.cdninstagram\.com/[^"]*)"`,
 		`"display_src":"(https://scontent[^"]*\.cdninstagram\.com/[^"]*)"`,
