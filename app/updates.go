@@ -1731,6 +1731,8 @@ func handleBotCommand(origMessage *response.TgMessage, origChat *response.TgChat
 		handleSetGroupLimitCommand(origMessage, origChat, origUser)
 	case "/setgrouptimezone":
 		handleSetGroupTimezoneCommand(origMessage, origChat, origUser)
+	case "/adminstats":
+		handleAdminStatsCommand(origMessage, origChat, origUser)
 	default:
 		// Unknown command - ignore it
 		log.Printf("🚫 Ignoring unknown command: %s from user %d", command, origUser.Id)
@@ -2401,6 +2403,129 @@ func handleSetGroupTimezoneCommand(origMessage *response.TgMessage, origChat *re
 	
 	message.NewSendMessage(successMsg)
 	log.Printf("🌍 SetGroupTimezone command completed by user %d in chat %d (timezone: %s)", origUser.Id, origChat.Id, timezone)
+}
+
+// handleAdminStatsCommand handles /adminstats command (admin only)
+func handleAdminStatsCommand(origMessage *response.TgMessage, origChat *response.TgChat, origUser *response.TgUser) {
+	// Check if user is admin
+	adminUserID := config.GetAdminUserID()
+	if adminUserID == 0 {
+		log.Printf("⚠️ Admin stats requested but ADMIN_USER_ID not configured")
+		return
+	}
+
+	if int64(origUser.Id) != adminUserID {
+		log.Printf("🚫 Unauthorized admin stats request from user %d (admin is %d)", origUser.Id, adminUserID)
+		return
+	}
+
+	// Parse period from command arguments (default: all)
+	args := strings.Fields(origMessage.Text)
+	period := "all"
+	if len(args) > 1 {
+		period = strings.ToLower(args[1])
+	}
+
+	// Validate period
+	validPeriods := map[string]bool{"today": true, "week": true, "month": true, "year": true, "all": true}
+	if !validPeriods[period] {
+		errorMsg := payload.TgPlSendMessage{
+			ChatId:              origChat.Id,
+			ParseMode:           payload.ParseModeHTML,
+			Text:                "❌ Invalid period. Use: <code>today</code>, <code>week</code>, <code>month</code>, <code>year</code>, or <code>all</code>",
+			ReplyToMessageId:    origMessage.MessageId,
+			DisableNotification: true,
+		}
+		message.NewSendMessage(errorMsg)
+		return
+	}
+
+	// Get global stats
+	stats, err := services.GetGlobalStats(period)
+	if err != nil {
+		log.Printf("Error getting global stats: %v", err)
+		errorMsg := payload.TgPlSendMessage{
+			ChatId:              origChat.Id,
+			Text:                "❌ Error fetching statistics. Please try again later.",
+			ReplyToMessageId:    origMessage.MessageId,
+			DisableNotification: true,
+		}
+		message.NewSendMessage(errorMsg)
+		return
+	}
+
+	// Build response message
+	var statsText strings.Builder
+	periodLabels := map[string]string{
+		"today": "Today",
+		"week":  "Last 7 Days",
+		"month": "Last 30 Days",
+		"year":  "Last Year",
+		"all":   "All Time",
+	}
+
+	statsText.WriteString(fmt.Sprintf("📊 <b>Bot Admin Statistics</b>\n"))
+	statsText.WriteString(fmt.Sprintf("📅 <i>Period: %s</i>\n\n", periodLabels[period]))
+
+	// Overview
+	statsText.WriteString("<b>📈 Overview</b>\n")
+	statsText.WriteString(fmt.Sprintf("• Chats: <b>%d</b>\n", stats.TotalChats))
+	statsText.WriteString(fmt.Sprintf("• Total Media: <b>%d</b>\n", stats.TotalLinks))
+	statsText.WriteString(fmt.Sprintf("  └ 📷 Photos: %d\n", stats.TotalPhotos))
+	statsText.WriteString(fmt.Sprintf("  └ 🎬 Videos: %d\n", stats.TotalVideos))
+	if stats.TotalDocuments > 0 {
+		statsText.WriteString(fmt.Sprintf("  └ 📄 Documents: %d\n", stats.TotalDocuments))
+	}
+
+	// Platform breakdown
+	if len(stats.PlatformStats) > 0 {
+		statsText.WriteString("\n<b>🌐 By Platform</b>\n")
+		platformEmoji := map[string]string{
+			"instagram": "📷",
+			"twitter":   "🐦",
+			"tiktok":    "🎵",
+			"youtube":   "📺",
+			"reddit":    "🔴",
+			"facebook":  "👥",
+		}
+		for _, ps := range stats.PlatformStats {
+			emoji := platformEmoji[strings.ToLower(ps.Platform)]
+			if emoji == "" {
+				emoji = "📱"
+			}
+			statsText.WriteString(fmt.Sprintf("• %s %s: <b>%d</b> (📷%d 🎬%d)\n",
+				emoji, ps.Platform, ps.Total, ps.Photos, ps.Videos))
+		}
+	}
+
+	// Top chats
+	if len(stats.TopChats) > 0 {
+		statsText.WriteString("\n<b>🏆 Top Chats</b>\n")
+		for i, cs := range stats.TopChats {
+			if i >= 5 {
+				break
+			}
+			chatName := cs.ChatTitle
+			if len(chatName) > 25 {
+				chatName = chatName[:22] + "..."
+			}
+			statsText.WriteString(fmt.Sprintf("%d. %s: <b>%d</b>\n", i+1, html.EscapeString(chatName), cs.Total))
+		}
+	}
+
+	statsText.WriteString("\n━━━━━━━━━━━━━━━━━━━━")
+	statsText.WriteString("\n💡 <i>Use /adminstats [period] for different periods</i>")
+
+	statsMsg := payload.TgPlSendMessage{
+		ChatId:              origChat.Id,
+		ParseMode:           payload.ParseModeHTML,
+		Text:                statsText.String(),
+		ReplyToMessageId:    origMessage.MessageId,
+		DisableNotification: true,
+	}
+
+	message.NewSendMessage(statsMsg)
+	log.Printf("📊 Admin stats command completed for user %d (period: %s)", origUser.Id, period)
 }
 
 // createMainMenuKeyboard creates the interactive main menu keyboard

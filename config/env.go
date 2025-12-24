@@ -223,6 +223,19 @@ func GetInstagramService() string {
 	return service
 }
 
+// GetAdminUserID returns the Telegram user ID of the bot admin
+func GetAdminUserID() int64 {
+	idStr := os.Getenv("ADMIN_USER_ID")
+	if idStr == "" {
+		return 0
+	}
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		return 0
+	}
+	return id
+}
+
 // Helper function to parse boolean environment variables
 func getBoolEnv(key string, defaultValue bool) bool {
 	value := strings.ToLower(strings.TrimSpace(os.Getenv(key)))

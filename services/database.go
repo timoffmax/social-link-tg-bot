@@ -633,3 +633,175 @@ func GetTopUsersMediaStats(chatID int64, period string, limit int) ([]UserStats,
 	}
 	return allUsers, nil
 }
+
+// AdminGlobalStats represents global bot statistics for admin
+type AdminGlobalStats struct {
+	TotalChats       int
+	TotalLinks       int
+	TotalPhotos      int
+	TotalVideos      int
+	TotalDocuments   int
+	PlatformStats    []PlatformStats
+	TopChats         []ChatStats
+}
+
+// ChatStats represents statistics for a single chat
+type ChatStats struct {
+	ChatID    int64
+	ChatTitle string
+	Total     int
+	Photos    int
+	Videos    int
+	Documents int
+}
+
+// GetGlobalStats returns global statistics across all chats
+func GetGlobalStats(period string) (*AdminGlobalStats, error) {
+	if !IsDBInitialized() {
+		return &AdminGlobalStats{}, nil
+	}
+
+	var whereClause string
+	switch period {
+	case "today":
+		whereClause = "WHERE DATE(created_at AT TIME ZONE 'UTC') = DATE(NOW() AT TIME ZONE 'UTC')"
+	case "week":
+		whereClause = "WHERE created_at >= NOW() - INTERVAL '7 days'"
+	case "month":
+		whereClause = "WHERE created_at >= NOW() - INTERVAL '30 days'"
+	case "year":
+		whereClause = "WHERE created_at >= NOW() - INTERVAL '365 days'"
+	case "all":
+		whereClause = ""
+	default:
+		return nil, fmt.Errorf("invalid period: %s", period)
+	}
+
+	stats := &AdminGlobalStats{}
+
+	// Get total unique chats
+	chatCountQuery := fmt.Sprintf("SELECT COUNT(DISTINCT chat_id) FROM media_stats %s", whereClause)
+	err := GetDB().QueryRow(chatCountQuery).Scan(&stats.TotalChats)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get chat count: %w", err)
+	}
+
+	// Get totals by media type
+	totalsQuery := fmt.Sprintf(`
+		SELECT
+			COUNT(*) as total,
+			SUM(CASE WHEN media_type = 'photo' THEN 1 ELSE 0 END) as photos,
+			SUM(CASE WHEN media_type = 'video' THEN 1 ELSE 0 END) as videos,
+			SUM(CASE WHEN media_type = 'document' THEN 1 ELSE 0 END) as documents
+		FROM media_stats %s
+	`, whereClause)
+	err = GetDB().QueryRow(totalsQuery).Scan(&stats.TotalLinks, &stats.TotalPhotos, &stats.TotalVideos, &stats.TotalDocuments)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get totals: %w", err)
+	}
+
+	// Get platform stats
+	platformQuery := fmt.Sprintf(`
+		SELECT platform,
+			SUM(CASE WHEN media_type = 'photo' THEN 1 ELSE 0 END) as photos,
+			SUM(CASE WHEN media_type = 'video' THEN 1 ELSE 0 END) as videos,
+			COUNT(*) as total
+		FROM media_stats %s
+		GROUP BY platform
+		ORDER BY total DESC
+	`, whereClause)
+
+	rows, err := GetDB().Query(platformQuery)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get platform stats: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var ps PlatformStats
+		if err := rows.Scan(&ps.Platform, &ps.Photos, &ps.Videos, &ps.Total); err != nil {
+			return nil, err
+		}
+		stats.PlatformStats = append(stats.PlatformStats, ps)
+	}
+
+	// Get top chats
+	topChatsQuery := fmt.Sprintf(`
+		SELECT chat_id, COALESCE(chat_title, 'Private Chat') as chat_title,
+			COUNT(*) as total,
+			SUM(CASE WHEN media_type = 'photo' THEN 1 ELSE 0 END) as photos,
+			SUM(CASE WHEN media_type = 'video' THEN 1 ELSE 0 END) as videos,
+			SUM(CASE WHEN media_type = 'document' THEN 1 ELSE 0 END) as documents
+		FROM media_stats %s
+		GROUP BY chat_id, chat_title
+		ORDER BY total DESC
+		LIMIT 10
+	`, whereClause)
+
+	chatRows, err := GetDB().Query(topChatsQuery)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get top chats: %w", err)
+	}
+	defer chatRows.Close()
+
+	for chatRows.Next() {
+		var cs ChatStats
+		if err := chatRows.Scan(&cs.ChatID, &cs.ChatTitle, &cs.Total, &cs.Photos, &cs.Videos, &cs.Documents); err != nil {
+			return nil, err
+		}
+		stats.TopChats = append(stats.TopChats, cs)
+	}
+
+	return stats, nil
+}
+
+// GetAllChatsWithStats returns all chats with their statistics
+func GetAllChatsWithStats(period string) ([]ChatStats, error) {
+	if !IsDBInitialized() {
+		return nil, nil
+	}
+
+	var whereClause string
+	switch period {
+	case "today":
+		whereClause = "WHERE DATE(created_at AT TIME ZONE 'UTC') = DATE(NOW() AT TIME ZONE 'UTC')"
+	case "week":
+		whereClause = "WHERE created_at >= NOW() - INTERVAL '7 days'"
+	case "month":
+		whereClause = "WHERE created_at >= NOW() - INTERVAL '30 days'"
+	case "year":
+		whereClause = "WHERE created_at >= NOW() - INTERVAL '365 days'"
+	case "all":
+		whereClause = ""
+	default:
+		return nil, fmt.Errorf("invalid period: %s", period)
+	}
+
+	query := fmt.Sprintf(`
+		SELECT chat_id, COALESCE(chat_title, 'Private Chat') as chat_title,
+			COUNT(*) as total,
+			SUM(CASE WHEN media_type = 'photo' THEN 1 ELSE 0 END) as photos,
+			SUM(CASE WHEN media_type = 'video' THEN 1 ELSE 0 END) as videos,
+			SUM(CASE WHEN media_type = 'document' THEN 1 ELSE 0 END) as documents
+		FROM media_stats %s
+		GROUP BY chat_id, chat_title
+		ORDER BY total DESC
+	`, whereClause)
+
+	rows, err := GetDB().Query(query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var result []ChatStats
+	for rows.Next() {
+		var cs ChatStats
+		if err := rows.Scan(&cs.ChatID, &cs.ChatTitle, &cs.Total, &cs.Photos, &cs.Videos, &cs.Documents); err != nil {
+			return nil, err
+		}
+		result = append(result, cs)
+	}
+
+	return result, nil
+}
