@@ -1,9 +1,11 @@
 package app
 
 import (
+	"encoding/json"
 	"fmt"
 	"html"
 	"log"
+	"net/http"
 	"net/url"
 	"os"
 	"regexp"
@@ -12,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+
 	"github.com/timoffmax/social-link-bot/config"
 	"github.com/timoffmax/social-link-bot/model/api"
 	"github.com/timoffmax/social-link-bot/model/api/request/message"
@@ -24,7 +27,38 @@ import (
 var (
 	processedUpdates = make(map[int64]bool)
 	updatesMutex     sync.RWMutex
+	botUsername      string // Bot's username, fetched on startup
 )
+
+// fetchBotInfo fetches the bot's info using the getMe API and stores the username
+func fetchBotInfo() error {
+	token := config.GetTgBotToken()
+	url := fmt.Sprintf("https://api.telegram.org/bot%s/getMe", token)
+
+	resp, err := (&http.Client{}).Get(url)
+	if err != nil {
+		return fmt.Errorf("failed to fetch bot info: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		Ok     bool             `json:"ok"`
+		Result response.TgUser  `json:"result"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return fmt.Errorf("failed to decode bot info: %w", err)
+	}
+
+	if !result.Ok {
+		return fmt.Errorf("telegram API returned error for getMe")
+	}
+
+	botUsername = strings.ToLower(result.Result.Username)
+	log.Printf("✅ Bot username fetched: @%s", botUsername)
+
+	return nil
+}
 
 // isTimezoneValid checks if a timezone is valid with fallback support
 func isTimezoneValid(timezoneStr string) bool {
@@ -78,6 +112,12 @@ func loadTimezoneWithFallback(timezoneStr string) *time.Location {
 }
 
 func listenForUpdates() {
+	// Fetch bot info on startup
+	if err := fetchBotInfo(); err != nil {
+		log.Printf("⚠️ Warning: Could not fetch bot info: %v", err)
+		log.Printf("📌 Commands with @botname mentions will be processed")
+	}
+
 	var offset int
 	isFirstRun := true
 
@@ -1661,12 +1701,21 @@ func parseTwitterThreadURLs(html, authorUsername, originalTweetID string) []stri
 // handleBotCommand handles all bot commands
 func handleBotCommand(origMessage *response.TgMessage, origChat *response.TgChat, origUser *response.TgUser) {
 	commandText := strings.Fields(origMessage.Text)[0]
-	// Remove bot mention if present (e.g., /start@botname -> /start)
+
+	// Check if command is directed at a specific bot (e.g., /start@other_bot)
 	if atIndex := strings.Index(commandText, "@"); atIndex != -1 {
+		mentionedBot := strings.ToLower(commandText[atIndex+1:])
+		// If a specific bot is mentioned and it's not us, ignore the command
+		if (botUsername != "") && (mentionedBot != botUsername) {
+			log.Printf("🚫 Ignoring command directed at @%s (we are @%s)", mentionedBot, botUsername)
+			return
+		}
+		// Remove bot mention to get the base command
 		commandText = commandText[:atIndex]
 	}
+
 	command := strings.ToLower(commandText)
-	
+
 	log.Printf("🤖 Processing command: %s from user %d in chat %d", command, origUser.Id, origChat.Id)
 	
 	switch command {
