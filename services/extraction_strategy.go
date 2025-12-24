@@ -119,7 +119,7 @@ func GetExtractionStrategy(url string) *ExtractionStrategy {
 		}
 	}
 	
-	// Twitter/X: browser extractor first (FxTwitter API has full text), then yt-dlp fallback
+	// Twitter/X: yt-dlp with hybrid approach (FxTwitter text + yt-dlp media)
 	if strings.Contains(url, "twitter.com") || strings.Contains(url, "x.com") {
 		if !config.IsTwitterEnabled() {
 			return &ExtractionStrategy{
@@ -131,8 +131,8 @@ func GetExtractionStrategy(url string) *ExtractionStrategy {
 		return &ExtractionStrategy{
 			Platform: "twitter",
 			Methods: []ExtractionMethod{
-				MethodBrowser, // Custom Twitter extractor with FxTwitter API (full text)
-				MethodYtDlp,   // Fallback - has truncated text but reliable video download
+				MethodYtDlp,    // Hybrid: gets full text from FxTwitter + media from yt-dlp
+				MethodBrowser,  // Fallback: custom Twitter extractor
 				MethodFixedLink,
 			},
 			HasFixedLink: true,

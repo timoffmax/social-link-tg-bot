@@ -886,56 +886,71 @@ func (yd *YtDlpDownloader) DownloadTikTokMedia(url string) ([]*MediaInfo, error)
 }
 
 func (yd *YtDlpDownloader) DownloadTwitterMedia(url string) ([]*MediaInfo, error) {
-	// For Twitter, try multiple strategies since yt-dlp image handling is problematic
-	
-	// Strategy 1: Try normal yt-dlp download first 
+	// HYBRID APPROACH: Get full text from FxTwitter API, media from yt-dlp
+	log.Printf("🐦 Twitter hybrid extraction: text from FxTwitter + media from yt-dlp")
+
+	// Step 1: Get full text from FxTwitter API (via TwitterExtractor)
+	twitterExtractor := NewTwitterExtractor(yd.WorkingDir, yd.TempDir)
+	var fullCaption string
+
+	textResult, textErr := twitterExtractor.ExtractTweet(url)
+	if textErr == nil && len(textResult) > 0 && textResult[0].Caption != "" {
+		fullCaption = textResult[0].Caption
+		log.Printf("✅ Got FULL text from FxTwitter API: %d chars", len(fullCaption))
+
+		// If TwitterExtractor also got media (photos/videos), use it directly
+		if textResult[0].Filename != "" {
+			log.Printf("✅ TwitterExtractor also downloaded media, using it directly")
+			return textResult, nil
+		}
+	}
+
+	// Step 2: Try yt-dlp for media download (reliable for videos)
 	mediaInfos, err := yd.DownloadMedia(url)
 	if err == nil && len(mediaInfos) > 0 {
+		// Apply the full text caption from FxTwitter
+		if fullCaption != "" {
+			log.Printf("✅ Applying FxTwitter caption to yt-dlp media")
+			for _, media := range mediaInfos {
+				media.Caption = fullCaption
+			}
+		}
 		return mediaInfos, nil
 	}
-	
-	// Strategy 2: Try thumbnails-only approach for image tweets
-	log.Printf("Normal download failed, trying thumbnails-only approach for Twitter")
+	log.Printf("⚠️ yt-dlp download failed: %v", err)
+
+	// Step 3: Try thumbnails-only for image tweets
+	log.Printf("Trying thumbnails-only approach for Twitter")
 	mediaInfos, err = yd.downloadThumbnailsOnly(url, "Twitter")
 	if err == nil && len(mediaInfos) > 0 {
+		if fullCaption != "" {
+			for _, media := range mediaInfos {
+				media.Caption = fullCaption
+			}
+		}
 		return mediaInfos, nil
 	}
-	
-	// Strategy 3: Hybrid approach - get text from Twitter extractor, try images from CLI browser
-	log.Printf("yt-dlp failed, trying hybrid approach: text + individual images")
-	
-	// First, get the text/caption from Twitter extractor (reliable)
-	twitterExtractor := NewTwitterExtractor(yd.WorkingDir, yd.TempDir)
-	textResult, textErr := twitterExtractor.ExtractTweet(url)
-	var tweetText string
-	if textErr == nil && len(textResult) > 0 && textResult[0].Caption != "" {
-		tweetText = textResult[0].Caption
-		log.Printf("✅ Got tweet text from Twitter extractor: %.100s...", tweetText)
-	}
-	
-	// Then, try to get individual images from CLI browser
+
+	// Step 4: Try CLI browser for images
 	cliBrowser := NewCliBrowserExtractor(yd.WorkingDir, yd.TempDir)
 	imageResult, imageErr := cliBrowser.ExtractTwitterImages(url)
 	if imageErr == nil && len(imageResult) > 0 {
 		log.Printf("✅ CLI browser got %d individual images", len(imageResult))
-		// Update image results with the proper tweet text
-		for _, media := range imageResult {
-			if tweetText != "" {
-				media.Caption = tweetText
+		if fullCaption != "" {
+			for _, media := range imageResult {
+				media.Caption = fullCaption
 			}
 		}
 		return imageResult, nil
 	}
-	log.Printf("⚠️ CLI browser failed: %v", imageErr)
-	
-	// Strategy 4: If CLI browser failed but we have text, return text result (mosaic from fixupx)
+
+	// Step 5: If we have text result from TwitterExtractor, use it (might have mosaic image)
 	if textErr == nil && len(textResult) > 0 {
-		log.Printf("📋 Using Twitter extractor result with text and mosaic image")
+		log.Printf("📋 Using TwitterExtractor result")
 		return textResult, nil
 	}
-	
-	// Strategy 5: Complete fallback
-	log.Printf("❌ Both approaches failed")
+
+	log.Printf("❌ All Twitter extraction methods failed")
 	return nil, fmt.Errorf("all Twitter extraction methods failed")
 }
 
