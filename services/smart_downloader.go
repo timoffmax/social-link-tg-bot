@@ -321,30 +321,24 @@ func (sd *SmartDownloader) GetTempDir() string {
 	return sd.tempDir
 }
 
-// appendOriginalURL adds the original URL to caption while respecting Telegram limits
+// appendOriginalURL adds the original URL to caption
+// Note: Does NOT truncate - lets the caller (updates.go) handle long captions
+// This allows Twitter long text handling to work properly
 func appendOriginalURL(mediaInfos []*MediaInfo, originalURL string) {
-	const maxCaptionLength = 1024 // Telegram limit for photo/video/document captions
 	cleanURL := cleanURLParams(originalURL)
 	urlSuffix := fmt.Sprintf("\n\n🔗 %s", cleanURL)
-	
+
 	for _, mediaInfo := range mediaInfos {
 		// Skip text-only media (fixed links)
 		if mediaInfo.Type == "text" || mediaInfo.Filename == "" {
 			continue
 		}
-		
+
 		currentCaption := mediaInfo.Caption
-		
-		// Calculate available space
-		availableSpace := maxCaptionLength - len(urlSuffix)
-		
-		if len(currentCaption) <= availableSpace {
-			// Caption fits with URL
+
+		if len(currentCaption) > 0 {
+			// Append URL to caption - don't truncate here
 			mediaInfo.Caption = currentCaption + urlSuffix
-		} else if len(currentCaption) > 0 {
-			// Truncate caption to fit with URL
-			truncated := currentCaption[:availableSpace-3] + "..."
-			mediaInfo.Caption = truncated + urlSuffix
 		} else {
 			// No caption, just add URL (remove leading newlines)
 			mediaInfo.Caption = strings.TrimPrefix(urlSuffix, "\n\n")

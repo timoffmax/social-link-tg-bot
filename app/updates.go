@@ -646,31 +646,39 @@ func sendMediaFile(mediaInfo *services.MediaInfo, origChat *response.TgChat, ori
 	}
 	
 	// For Twitter/X posts, handle long text intelligently
-	if (strings.Contains(mediaInfo.URL, "twitter.com") || strings.Contains(mediaInfo.URL, "x.com")) && 
-	   len(caption) > 1024 && mediaInfo.Type != "text" {
+	if (strings.Contains(mediaInfo.URL, "twitter.com") || strings.Contains(mediaInfo.URL, "x.com")) &&
+		len(caption) > 1024 && mediaInfo.Type != "text" {
 		log.Printf("🐦 Twitter post exceeds Telegram limit (%d chars), sending text and media separately", len(caption))
-		
+
+		// Extract URL from caption (it's at the end after "\n\n🔗 ")
+		textPart := caption
+		urlPart := ""
+		if idx := strings.LastIndex(caption, "\n\n🔗 "); idx != -1 {
+			textPart = caption[:idx]
+			urlPart = caption[idx:]
+		}
+
 		// Send text first (only if it's not a generic message) with reply and silent notification
-		if caption != "Downloaded from Twitter/X" && caption != "Downloaded from Twitter" && caption != "" {
+		if textPart != "Downloaded from Twitter/X" && textPart != "Downloaded from Twitter" && textPart != "" {
 			textPayload := payload.TgPlSendMessage{
 				ChatId:              origChat.Id,
-				Text:                caption,
+				Text:                textPart,
 				ReplyToMessageId:    origMessage.MessageId,
 				DisableNotification: true,
 			}
 			message.NewSendMessage(textPayload)
 			log.Printf("✅ Sent Twitter text content separately")
 		}
-		
-		// Send media without caption 
-		caption = ""
+
+		// Send media with just the URL as caption
+		caption = strings.TrimPrefix(urlPart, "\n\n")
 	} else {
 		// Normal handling - limit caption length to Telegram's 1024 character limit
-		if len(caption) > 1020 {
-			caption = caption[:1017] + "..."
+		if len(caption) > 1024 {
+			caption = caption[:1021] + "..."
 		}
 	}
-	
+
 	switch mediaInfo.Type {
 	case "text":
 		// Send text-only content as a message with reply and silent notification
@@ -839,8 +847,8 @@ func sendPhotosAsMediaGroup(photos []*services.MediaInfo, origChat *response.TgC
 		if i == 0 && photoInfo.Caption != "" {
 			// Decode HTML entities and limit caption length to Telegram's 1024 character limit
 			caption := html.UnescapeString(photoInfo.Caption)
-			if len(caption) > 1020 {
-				caption = caption[:1017] + "..."
+			if len(caption) > 1024 {
+				caption = caption[:1021] + "..."
 			}
 			mediaItem.Caption = caption
 		}

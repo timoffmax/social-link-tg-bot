@@ -112,6 +112,7 @@ func (te *TwitterExtractor) isValidExtraction(mediaInfos []*MediaInfo) bool {
 				"nitter.it", "nitter.net", "twitter.com", "x.com",
 				"fixupx.com", "not found", "error", "failed",
 				"access denied", "rate limit", "unavailable",
+				"private to you", "suspended account", "tweet was deleted",
 			}
 			
 			for _, badText := range badTexts {
@@ -287,9 +288,24 @@ func (te *TwitterExtractor) extractUsernameFromEmbedData(embedData map[string]in
 
 // formatTweetCaption formats tweet caption with author info at the top
 func (te *TwitterExtractor) formatTweetCaption(authorName, authorUsername, tweetText string) string {
+	// Filter out invalid/placeholder tweet texts
+	invalidTexts := []string{
+		"Private to you",
+		"This Tweet is from a suspended account",
+		"This Tweet was deleted",
+		"This Tweet is unavailable",
+		"Age-restricted adult content",
+	}
+	for _, invalid := range invalidTexts {
+		if tweetText == invalid || strings.Contains(tweetText, invalid) {
+			tweetText = ""
+			break
+		}
+	}
+
 	// Start with author info
 	caption := ""
-	
+
 	if authorName != "" && authorUsername != "" {
 		// Both name and username available
 		caption = fmt.Sprintf("👤 %s (@%s)\n\n", authorName, authorUsername)
@@ -300,11 +316,11 @@ func (te *TwitterExtractor) formatTweetCaption(authorName, authorUsername, tweet
 		// Only name available
 		caption = fmt.Sprintf("👤 %s\n\n", authorName)
 	}
-	
+
 	// Add tweet text
 	caption += tweetText
-	
-	return caption
+
+	return strings.TrimSpace(caption)
 }
 
 // extractAuthorInfoFromHTML extracts author display name and username from Twitter HTML
