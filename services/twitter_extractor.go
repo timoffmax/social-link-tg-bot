@@ -35,7 +35,7 @@ type TwitterTweetData struct {
 
 func NewTwitterExtractor(workingDir, tempDir string) *TwitterExtractor {
 	client := &http.Client{
-		Timeout: 30 * time.Second,
+		Timeout: 120 * time.Second, // Increased for large video downloads
 	}
 	
 	return &TwitterExtractor{
@@ -1751,9 +1751,15 @@ func (te *TwitterExtractor) getFileExtension(url, contentType string) string {
 			return ".webp"
 		}
 	}
-	
+
+	// Strip query params before getting extension
+	cleanURL := url
+	if idx := strings.Index(url, "?"); idx != -1 {
+		cleanURL = url[:idx]
+	}
+
 	// Try to get extension from URL
-	if ext := filepath.Ext(url); ext != "" {
+	if ext := filepath.Ext(cleanURL); ext != "" {
 		return ext
 	}
 	
