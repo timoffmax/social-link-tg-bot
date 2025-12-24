@@ -2419,8 +2419,20 @@ func handleAdminStatsCommand(origMessage *response.TgMessage, origChat *response
 		return
 	}
 
-	// Parse period from command arguments (default: all)
+	// Parse arguments
 	args := strings.Fields(origMessage.Text)
+
+	// Check for subcommand: /adminstats chats [period]
+	if (len(args) > 1) && (strings.ToLower(args[1]) == "chats") {
+		period := "all"
+		if len(args) > 2 {
+			period = strings.ToLower(args[2])
+		}
+		handleAdminChatsCommand(origMessage, origChat, period)
+		return
+	}
+
+	// Parse period from command arguments (default: all)
 	period := "all"
 	if len(args) > 1 {
 		period = strings.ToLower(args[1])
@@ -2432,7 +2444,7 @@ func handleAdminStatsCommand(origMessage *response.TgMessage, origChat *response
 		errorMsg := payload.TgPlSendMessage{
 			ChatId:              origChat.Id,
 			ParseMode:           payload.ParseModeHTML,
-			Text:                "❌ Invalid period. Use: <code>today</code>, <code>week</code>, <code>month</code>, <code>year</code>, or <code>all</code>",
+			Text:                "❌ Invalid period. Use: <code>today</code>, <code>week</code>, <code>month</code>, <code>year</code>, or <code>all</code>\n\n💡 Or use <code>/adminstats chats [period]</code> to see all chats",
 			ReplyToMessageId:    origMessage.MessageId,
 			DisableNotification: true,
 		}
@@ -2514,7 +2526,8 @@ func handleAdminStatsCommand(origMessage *response.TgMessage, origChat *response
 	}
 
 	statsText.WriteString("\n━━━━━━━━━━━━━━━━━━━━")
-	statsText.WriteString("\n💡 <i>Use /adminstats [period] for different periods</i>")
+	statsText.WriteString("\n💡 <code>/adminstats [period]</code> - change period")
+	statsText.WriteString("\n💡 <code>/adminstats chats [period]</code> - all chats")
 
 	statsMsg := payload.TgPlSendMessage{
 		ChatId:              origChat.Id,
@@ -2526,6 +2539,95 @@ func handleAdminStatsCommand(origMessage *response.TgMessage, origChat *response
 
 	message.NewSendMessage(statsMsg)
 	log.Printf("📊 Admin stats command completed for user %d (period: %s)", origUser.Id, period)
+}
+
+// handleAdminChatsCommand handles /adminstats chats subcommand
+func handleAdminChatsCommand(origMessage *response.TgMessage, origChat *response.TgChat, period string) {
+	// Validate period
+	validPeriods := map[string]bool{"today": true, "week": true, "month": true, "year": true, "all": true}
+	if !validPeriods[period] {
+		errorMsg := payload.TgPlSendMessage{
+			ChatId:              origChat.Id,
+			ParseMode:           payload.ParseModeHTML,
+			Text:                "❌ Invalid period. Use: <code>today</code>, <code>week</code>, <code>month</code>, <code>year</code>, or <code>all</code>",
+			ReplyToMessageId:    origMessage.MessageId,
+			DisableNotification: true,
+		}
+		message.NewSendMessage(errorMsg)
+		return
+	}
+
+	// Get all chats with stats
+	chats, err := services.GetAllChatsWithStats(period)
+	if err != nil {
+		log.Printf("Error getting all chats: %v", err)
+		errorMsg := payload.TgPlSendMessage{
+			ChatId:              origChat.Id,
+			Text:                "❌ Error fetching chat statistics. Please try again later.",
+			ReplyToMessageId:    origMessage.MessageId,
+			DisableNotification: true,
+		}
+		message.NewSendMessage(errorMsg)
+		return
+	}
+
+	periodLabels := map[string]string{
+		"today": "Today",
+		"week":  "Last 7 Days",
+		"month": "Last 30 Days",
+		"year":  "Last Year",
+		"all":   "All Time",
+	}
+
+	// Build response - may need multiple messages if too long
+	var statsText strings.Builder
+	statsText.WriteString(fmt.Sprintf("📋 <b>All Chats Statistics</b>\n"))
+	statsText.WriteString(fmt.Sprintf("📅 <i>Period: %s</i>\n", periodLabels[period]))
+	statsText.WriteString(fmt.Sprintf("📊 <i>Total: %d chats</i>\n\n", len(chats)))
+
+	if len(chats) == 0 {
+		statsText.WriteString("<i>No chat activity in this period</i>")
+	} else {
+		for i, cs := range chats {
+			chatLine := fmt.Sprintf("<b>%d.</b> %s\n    📷%d 🎬%d 📄%d = <b>%d</b>\n",
+				i+1,
+				html.EscapeString(cs.ChatTitle),
+				cs.Photos,
+				cs.Videos,
+				cs.Documents,
+				cs.Total,
+			)
+
+			// Check if adding this line would exceed Telegram's message limit (4096 chars)
+			if statsText.Len()+len(chatLine) > 3900 {
+				// Send current message and start a new one
+				statsMsg := payload.TgPlSendMessage{
+					ChatId:              origChat.Id,
+					ParseMode:           payload.ParseModeHTML,
+					Text:                statsText.String(),
+					DisableNotification: true,
+				}
+				message.NewSendMessage(statsMsg)
+
+				// Reset for continuation
+				statsText.Reset()
+				statsText.WriteString("<b>📋 All Chats (continued)</b>\n\n")
+			}
+
+			statsText.WriteString(chatLine)
+		}
+	}
+
+	// Send final message
+	statsMsg := payload.TgPlSendMessage{
+		ChatId:              origChat.Id,
+		ParseMode:           payload.ParseModeHTML,
+		Text:                statsText.String(),
+		ReplyToMessageId:    origMessage.MessageId,
+		DisableNotification: true,
+	}
+	message.NewSendMessage(statsMsg)
+	log.Printf("📋 Admin chats command completed (period: %s, chats: %d)", period, len(chats))
 }
 
 // createMainMenuKeyboard creates the interactive main menu keyboard
