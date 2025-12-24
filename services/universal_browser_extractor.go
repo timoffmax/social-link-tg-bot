@@ -171,15 +171,21 @@ func (ube *UniversalBrowserExtractor) extractInstagramMedia(mediaURL string) ([]
 }
 
 func (ube *UniversalBrowserExtractor) extractTwitterMedia(mediaURL string) ([]*MediaInfo, error) {
-	log.Printf("🐦 Extracting Twitter media with headless browser (true browser extraction)")
-	
-	// First try actual browser extraction for images
+	log.Printf("🐦 Extracting Twitter media via FxTwitter API (full text support)")
+
+	// Always use TwitterExtractor first - it has FxTwitter API which provides full text
+	twitterExtractor := NewTwitterExtractor(ube.workingDir, ube.tempDir)
+	mediaInfos, err := twitterExtractor.ExtractTweet(mediaURL)
+	if err == nil && len(mediaInfos) > 0 {
+		return mediaInfos, nil
+	}
+	log.Printf("⚠️ TwitterExtractor failed: %v, trying browser fallback", err)
+
+	// Fallback to browser extraction for images
 	html, err := ube.renderPageWithBrowser(mediaURL, 10*time.Second)
 	if err != nil {
-		log.Printf("❌ Browser rendering failed, falling back to custom extractor: %v", err)
-		// Fall back to custom Twitter extractor
-		twitterExtractor := NewTwitterExtractor(ube.workingDir, ube.tempDir)
-		return twitterExtractor.ExtractTweet(mediaURL)
+		log.Printf("❌ Browser rendering also failed: %v", err)
+		return nil, fmt.Errorf("all Twitter extraction methods failed")
 	}
 	
 	// Extract images from rendered HTML
@@ -236,11 +242,10 @@ func (ube *UniversalBrowserExtractor) extractTwitterMedia(mediaURL string) ([]*M
 			return mediaInfos, nil
 		}
 	}
-	
-	// If browser extraction didn't find images, fall back to custom extractor
-	log.Printf("📋 No images found via browser, falling back to custom Twitter extractor")
-	twitterExtractor := NewTwitterExtractor(ube.workingDir, ube.tempDir)
-	return twitterExtractor.ExtractTweet(mediaURL)
+
+	// Browser fallback also didn't find anything
+	log.Printf("📋 No images found via browser fallback either")
+	return nil, fmt.Errorf("no Twitter media found via any method")
 }
 
 func (ube *UniversalBrowserExtractor) extractTikTokMedia(mediaURL string) ([]*MediaInfo, error) {
