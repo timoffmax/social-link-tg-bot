@@ -58,11 +58,12 @@ func (te *TwitterExtractor) ExtractTweet(twitterURL string) ([]*MediaInfo, error
 	log.Printf("🔍 Extracted tweet ID: %s, username: %s", tweetID, username)
 	
 	// Try multiple extraction methods
-	// Prioritize embed API since it's most reliable
+	// Prioritize FxTwitter API first - it has full text for long tweets
 	methods := []func(string, string) ([]*MediaInfo, error){
+		te.extractViaFxTwitterAPI,
+		te.extractViaSyndicationAPI,
 		te.extractViaEmbedAPI,
 		te.extractViaWebInterface,
-		te.extractViaSyndicationAPI,
 		te.extractViaDirectScraping,
 		te.extractViaNitterProxy,
 		te.extractViaFixupxProxy,
@@ -424,6 +425,124 @@ func (te *TwitterExtractor) extractAuthorInfoFromHTML(html string) (displayName,
 	return displayName, username
 }
 
+func (te *TwitterExtractor) extractViaFxTwitterAPI(tweetID string, username string) ([]*MediaInfo, error) {
+	log.Printf("🌐 Trying FxTwitter API extraction for tweet %s", tweetID)
+
+	// FxTwitter API provides full text for long tweets
+	apiURL := fmt.Sprintf("https://api.fxtwitter.com/status/%s", tweetID)
+
+	req, err := http.NewRequest("GET", apiURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create fxtwitter request: %v", err)
+	}
+
+	req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; TelegramBot/1.0)")
+
+	resp, err := te.client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch fxtwitter: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("fxtwitter API HTTP %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read fxtwitter response: %v", err)
+	}
+
+	// Parse JSON response
+	var fxData map[string]interface{}
+	if err := json.Unmarshal(body, &fxData); err != nil {
+		return nil, fmt.Errorf("failed to parse fxtwitter JSON: %v", err)
+	}
+
+	tweet, ok := fxData["tweet"].(map[string]interface{})
+	if !ok {
+		return nil, fmt.Errorf("no tweet data in fxtwitter response")
+	}
+
+	var mediaInfos []*MediaInfo
+
+	// Extract full tweet text
+	tweetText := ""
+	if text, ok := tweet["text"].(string); ok {
+		tweetText = text
+		log.Printf("📝 Got FULL tweet text from FxTwitter: %d chars", len(tweetText))
+	}
+
+	// Extract author information
+	authorName := ""
+	authorUsername := username
+	if author, ok := tweet["author"].(map[string]interface{}); ok {
+		if name, ok := author["name"].(string); ok {
+			authorName = name
+		}
+		if screenName, ok := author["screen_name"].(string); ok {
+			authorUsername = screenName
+		}
+	}
+
+	// Extract media
+	if media, ok := tweet["media"].(map[string]interface{}); ok {
+		// Check for photos
+		if photos, ok := media["photos"].([]interface{}); ok && len(photos) > 0 {
+			log.Printf("📸 Found %d photos in FxTwitter response", len(photos))
+			for i, photo := range photos {
+				if photoMap, ok := photo.(map[string]interface{}); ok {
+					if url, ok := photoMap["url"].(string); ok {
+						mediaInfo, err := te.downloadMedia(url, tweetID, i)
+						if err != nil {
+							log.Printf("⚠️ Failed to download photo %d: %v", i, err)
+							continue
+						}
+						mediaInfo.Caption = te.formatTweetCaption(authorName, authorUsername, tweetText)
+						mediaInfos = append(mediaInfos, mediaInfo)
+					}
+				}
+			}
+		}
+
+		// Check for videos
+		if videos, ok := media["videos"].([]interface{}); ok && len(videos) > 0 {
+			log.Printf("🎬 Found %d videos in FxTwitter response", len(videos))
+			for i, video := range videos {
+				if videoMap, ok := video.(map[string]interface{}); ok {
+					if url, ok := videoMap["url"].(string); ok {
+						mediaInfo, err := te.downloadMedia(url, tweetID, i)
+						if err != nil {
+							log.Printf("⚠️ Failed to download video %d: %v", i, err)
+							continue
+						}
+						mediaInfo.Caption = te.formatTweetCaption(authorName, authorUsername, tweetText)
+						mediaInfos = append(mediaInfos, mediaInfo)
+					}
+				}
+			}
+		}
+	}
+
+	// If we found media, return it
+	if len(mediaInfos) > 0 {
+		return mediaInfos, nil
+	}
+
+	// Text-only tweet
+	if tweetText != "" {
+		textMedia := &MediaInfo{
+			Type:     "text",
+			URL:      fmt.Sprintf("https://x.com/i/web/status/%s", tweetID),
+			Caption:  te.formatTweetCaption(authorName, authorUsername, tweetText),
+			Filename: "",
+		}
+		return []*MediaInfo{textMedia}, nil
+	}
+
+	return nil, fmt.Errorf("no content found in fxtwitter response")
+}
+
 func (te *TwitterExtractor) extractViaSyndicationAPI(tweetID string, username string) ([]*MediaInfo, error) {
 	log.Printf("🔄 Trying syndication API extraction for tweet %s by @%s", tweetID, username)
 	
@@ -461,12 +580,24 @@ func (te *TwitterExtractor) extractViaSyndicationAPI(tweetID string, username st
 	}
 	
 	var mediaInfos []*MediaInfo
-	
-	// Extract tweet text
+
+	// Extract tweet text - check note_tweet first for long tweets
 	tweetText := ""
-	if text, ok := synData["text"].(string); ok {
-		tweetText = text
-		log.Printf("📝 Got tweet text from syndication: %s", tweetText)
+
+	// Check for note_tweet (contains full text for long tweets)
+	if noteTweet, ok := synData["note_tweet"].(map[string]interface{}); ok {
+		if noteText, ok := noteTweet["text"].(string); ok && noteText != "" {
+			tweetText = noteText
+			log.Printf("📝 Got FULL tweet text from note_tweet: %d chars", len(tweetText))
+		}
+	}
+
+	// Fallback to regular text field if note_tweet not available
+	if tweetText == "" {
+		if text, ok := synData["text"].(string); ok {
+			tweetText = text
+			log.Printf("📝 Got tweet text from syndication: %s", tweetText)
+		}
 	}
 	
 	// Extract author information from syndication data
