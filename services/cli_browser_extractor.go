@@ -114,18 +114,46 @@ func (cbe *CliBrowserExtractor) extractTwitterImagesFromHTML(html, twitterURL st
 	}
 
 	// Filter out profile images and other non-tweet images
-	var tweetImages []string
-	seen := make(map[string]bool)
+	// Use media ID for deduplication to handle URL variations
+	seenMediaIDs := make(map[string]string) // mediaID -> best URL
 	for _, url := range imageURLs {
 		if !strings.Contains(url, "profile_images") && !strings.Contains(url, "_normal") {
 			// Clean up URL (remove HTML entities)
 			cleanURL := strings.ReplaceAll(url, "&amp;", "&")
 			// Upgrade to high quality
 			cleanURL = cbe.upgradeTwitterImageURL(cleanURL)
-			
-			if !seen[cleanURL] {
-				tweetImages = append(tweetImages, cleanURL)
-				seen[cleanURL] = true
+
+			// Extract media ID for deduplication
+			mediaID := cbe.extractMediaID(cleanURL)
+			if mediaID == "" {
+				mediaID = cleanURL
+			}
+
+			if existingURL, exists := seenMediaIDs[mediaID]; exists {
+				// Keep URL with higher quality
+				if cbe.getURLQualityScore(cleanURL) > cbe.getURLQualityScore(existingURL) {
+					seenMediaIDs[mediaID] = cleanURL
+				}
+			} else {
+				seenMediaIDs[mediaID] = cleanURL
+			}
+		}
+	}
+
+	// Collect unique URLs preserving order
+	seen := make(map[string]bool)
+	var tweetImages []string
+	for _, url := range imageURLs {
+		if !strings.Contains(url, "profile_images") && !strings.Contains(url, "_normal") {
+			cleanURL := strings.ReplaceAll(url, "&amp;", "&")
+			cleanURL = cbe.upgradeTwitterImageURL(cleanURL)
+			mediaID := cbe.extractMediaID(cleanURL)
+			if mediaID == "" {
+				mediaID = cleanURL
+			}
+			if !seen[mediaID] {
+				seen[mediaID] = true
+				tweetImages = append(tweetImages, seenMediaIDs[mediaID])
 			}
 		}
 	}
@@ -188,7 +216,37 @@ func (cbe *CliBrowserExtractor) upgradeTwitterImageURL(url string) string {
 	if !strings.Contains(url, "&name=") && strings.Contains(url, "?format=") {
 		url += "&name=orig"
 	}
+
 	return url
+}
+
+// extractMediaID extracts the media identifier from a Twitter image URL
+func (cbe *CliBrowserExtractor) extractMediaID(url string) string {
+	re := regexp.MustCompile(`pbs\.twimg\.com/media/([A-Za-z0-9_-]+)`)
+	matches := re.FindStringSubmatch(url)
+	if len(matches) > 1 {
+		return matches[1]
+	}
+
+	return ""
+}
+
+// getURLQualityScore returns a quality score for URL (higher is better)
+func (cbe *CliBrowserExtractor) getURLQualityScore(url string) int {
+	if strings.Contains(url, "name=orig") {
+		return 4
+	}
+	if strings.Contains(url, "name=large") {
+		return 3
+	}
+	if strings.Contains(url, "name=medium") {
+		return 2
+	}
+	if strings.Contains(url, "name=small") {
+		return 1
+	}
+
+	return 0
 }
 
 func (cbe *CliBrowserExtractor) extractTwitterCaption(html string) string {

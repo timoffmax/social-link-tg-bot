@@ -1456,18 +1456,74 @@ func (te *TwitterExtractor) extractMediaURLs(html string) []string {
 		}
 		cleanURLs = append(cleanURLs, url)
 	}
-	
-	// Remove duplicates
+
+	// Remove duplicates based on media ID, not full URL
+	// This prevents duplicates from URL variations like:
+	// - https://pbs.twimg.com/media/ABC123?format=jpg&name=small
+	// - https://pbs.twimg.com/media/ABC123?format=jpg&name=large
+	seenMediaIDs := make(map[string]string) // mediaID -> best URL
+	for _, url := range cleanURLs {
+		mediaID := te.extractMediaID(url)
+		if mediaID == "" {
+			// For non-Twitter URLs (videos, etc.), use full URL as key
+			mediaID = url
+		}
+
+		if existingURL, exists := seenMediaIDs[mediaID]; exists {
+			// Keep the URL with higher quality (prefer orig > large > medium > small)
+			if te.getURLQualityScore(url) > te.getURLQualityScore(existingURL) {
+				seenMediaIDs[mediaID] = url
+			}
+		} else {
+			seenMediaIDs[mediaID] = url
+		}
+	}
+
+	// Collect unique URLs preserving order from original list
 	seen := make(map[string]bool)
 	var uniqueURLs []string
 	for _, url := range cleanURLs {
-		if !seen[url] {
-			seen[url] = true
-			uniqueURLs = append(uniqueURLs, url)
+		mediaID := te.extractMediaID(url)
+		if mediaID == "" {
+			mediaID = url
+		}
+		if !seen[mediaID] {
+			seen[mediaID] = true
+			uniqueURLs = append(uniqueURLs, seenMediaIDs[mediaID])
 		}
 	}
-	
+
 	return uniqueURLs
+}
+
+// extractMediaID extracts the media identifier from a Twitter image URL
+func (te *TwitterExtractor) extractMediaID(url string) string {
+	// Pattern: https://pbs.twimg.com/media/ABC123...
+	re := regexp.MustCompile(`pbs\.twimg\.com/media/([A-Za-z0-9_-]+)`)
+	matches := re.FindStringSubmatch(url)
+	if len(matches) > 1 {
+		return matches[1]
+	}
+
+	return ""
+}
+
+// getURLQualityScore returns a quality score for URL (higher is better)
+func (te *TwitterExtractor) getURLQualityScore(url string) int {
+	if strings.Contains(url, "name=orig") {
+		return 4
+	}
+	if strings.Contains(url, "name=large") {
+		return 3
+	}
+	if strings.Contains(url, "name=medium") {
+		return 2
+	}
+	if strings.Contains(url, "name=small") {
+		return 1
+	}
+
+	return 0 // No quality parameter
 }
 
 func (te *TwitterExtractor) downloadMedia(mediaURL, tweetID string, index int) (*MediaInfo, error) {
@@ -1701,17 +1757,36 @@ func (te *TwitterExtractor) parseFixupxMetaTagsWithAuthor(html string, tweetID s
 			}
 		}
 	}
-	
-	// Remove duplicates
+
+	// Remove duplicates based on media ID
+	seenMediaIDs := make(map[string]string)
+	for _, url := range mediaURLs {
+		mediaID := te.extractMediaID(url)
+		if mediaID == "" {
+			mediaID = url
+		}
+		if existingURL, exists := seenMediaIDs[mediaID]; exists {
+			if te.getURLQualityScore(url) > te.getURLQualityScore(existingURL) {
+				seenMediaIDs[mediaID] = url
+			}
+		} else {
+			seenMediaIDs[mediaID] = url
+		}
+	}
+
 	seen := make(map[string]bool)
 	var uniqueURLs []string
 	for _, url := range mediaURLs {
-		if !seen[url] {
-			seen[url] = true
-			uniqueURLs = append(uniqueURLs, url)
+		mediaID := te.extractMediaID(url)
+		if mediaID == "" {
+			mediaID = url
+		}
+		if !seen[mediaID] {
+			seen[mediaID] = true
+			uniqueURLs = append(uniqueURLs, seenMediaIDs[mediaID])
 		}
 	}
-	
+
 	log.Printf("📸 Extracted %d media URLs from fixupx meta tags: %v", len(uniqueURLs), uniqueURLs)
 	
 	// Download each media item
@@ -1917,16 +1992,35 @@ func (te *TwitterExtractor) extractFixupxMediaURLs(html string) []string {
 		}
 		cleanURLs = append(cleanURLs, url)
 	}
-	
-	// Remove duplicates
+
+	// Remove duplicates based on media ID
+	seenMediaIDs := make(map[string]string)
+	for _, url := range cleanURLs {
+		mediaID := te.extractMediaID(url)
+		if mediaID == "" {
+			mediaID = url
+		}
+		if existingURL, exists := seenMediaIDs[mediaID]; exists {
+			if te.getURLQualityScore(url) > te.getURLQualityScore(existingURL) {
+				seenMediaIDs[mediaID] = url
+			}
+		} else {
+			seenMediaIDs[mediaID] = url
+		}
+	}
+
 	seen := make(map[string]bool)
 	var uniqueURLs []string
 	for _, url := range cleanURLs {
-		if !seen[url] {
-			seen[url] = true
-			uniqueURLs = append(uniqueURLs, url)
+		mediaID := te.extractMediaID(url)
+		if mediaID == "" {
+			mediaID = url
+		}
+		if !seen[mediaID] {
+			seen[mediaID] = true
+			uniqueURLs = append(uniqueURLs, seenMediaIDs[mediaID])
 		}
 	}
-	
+
 	return uniqueURLs
 }
