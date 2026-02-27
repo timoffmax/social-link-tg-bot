@@ -236,6 +236,20 @@ func GetAdminUserID() int64 {
 	return id
 }
 
+// RapidAPI configuration
+func GetRapidAPIKey() string {
+	return os.Getenv("RAPIDAPI_KEY")
+}
+
+func GetRapidAPIInstagramHost() string {
+	host := os.Getenv("RAPIDAPI_INSTAGRAM_HOST")
+	if host == "" {
+		return "instagram120.p.rapidapi.com"
+	}
+
+	return host
+}
+
 // Helper function to parse boolean environment variables
 func getBoolEnv(key string, defaultValue bool) bool {
 	value := strings.ToLower(strings.TrimSpace(os.Getenv(key)))

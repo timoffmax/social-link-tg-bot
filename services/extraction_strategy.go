@@ -22,6 +22,7 @@ const (
 	MethodYtDlp ExtractionMethod = iota
 	MethodBrowser
 	MethodFixedLink
+	MethodStoriesAPI
 	MethodNone
 )
 
@@ -72,7 +73,21 @@ func GetExtractionStrategy(url string) *ExtractionStrategy {
 				FixedLinkDomain: getInstagramFixedDomain(),
 			}
 		}
-		// Instagram stories and other content: try downloading first
+		// Instagram stories: use RapidAPI stories endpoint first
+		if strings.Contains(url, "/stories/") {
+			log.Printf("📖 Instagram story - will use Stories API with fallback")
+			return &ExtractionStrategy{
+				Platform: "instagram",
+				Methods: []ExtractionMethod{
+					MethodStoriesAPI, // RapidAPI stories endpoint
+					MethodBrowser,    // Browser extraction fallback
+					MethodYtDlp,      // yt-dlp fallback
+				},
+				HasFixedLink: false,
+			}
+		}
+
+		// Instagram other content: try downloading first
 		return &ExtractionStrategy{
 			Platform: "instagram",
 			Methods: []ExtractionMethod{
@@ -293,6 +308,8 @@ func (es *ExtractionStrategy) LogStrategy() {
 			methodNames[i] = "browser"
 		case MethodFixedLink:
 			methodNames[i] = "fixed-link"
+		case MethodStoriesAPI:
+			methodNames[i] = "stories-api"
 		default:
 			methodNames[i] = "unknown"
 		}
