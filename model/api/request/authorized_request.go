@@ -4,8 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"github.com/google/go-querystring/query"
-	"github.com/timoffmax/social-link-bot/config"
 	"io"
 	"io/ioutil"
 	"mime/multipart"
@@ -14,6 +12,10 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"time"
+
+	"github.com/google/go-querystring/query"
+	"github.com/timoffmax/social-link-bot/config"
 )
 
 const API_URL = "https://api.telegram.org/bot{{token}}/{{method_name}}"
@@ -284,12 +286,19 @@ func prepareRequestURL(r *AuthorizedRequest) string {
 	return result
 }
 
-/*
-Sends the request and returns the response
-*/
+// telegramHTTPClient is a shared HTTP client for all Telegram API calls.
+// Reusing a single client enables TCP connection pooling and prevents hanging requests.
+var telegramHTTPClient = &http.Client{
+	Timeout: 120 * time.Second,
+	Transport: &http.Transport{
+		MaxIdleConns:        20,
+		MaxIdleConnsPerHost: 10,
+		IdleConnTimeout:     90 * time.Second,
+	},
+}
+
 func sendRequest(r *http.Request) (*http.Response, error) {
-	client := &http.Client{}
-	return client.Do(r)
+	return telegramHTTPClient.Do(r)
 }
 
 /*

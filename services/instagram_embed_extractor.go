@@ -32,10 +32,6 @@ func (e *InstagramEmbedExtractor) ExtractViaEmbed(instagramURL string) ([]*Media
 	// Instagram oEmbed endpoint
 	embedURL := fmt.Sprintf("https://api.instagram.com/oembed?url=%s", url.QueryEscape(instagramURL))
 	
-	client := &http.Client{
-		Timeout: 10 * time.Second,
-	}
-	
 	req, err := http.NewRequest("GET", embedURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %v", err)
@@ -47,12 +43,12 @@ func (e *InstagramEmbedExtractor) ExtractViaEmbed(instagramURL string) ([]*Media
 	req.Header.Set("Accept-Language", "en-US,en;q=0.9")
 	req.Header.Set("Referer", "https://www.instagram.com/")
 	
-	resp, err := client.Do(req)
+	resp, err := SharedHTTPClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch embed data: %v", err)
 	}
 	defer resp.Body.Close()
-	
+
 	if resp.StatusCode != 200 {
 		return nil, fmt.Errorf("embed API returned status %d", resp.StatusCode)
 	}
@@ -200,11 +196,7 @@ func min(a, b int) int {
 
 // downloadFile downloads a file from URL and saves it to tempDir
 func downloadFile(url, tempDir, filenamePrefix string) (string, error) {
-	client := &http.Client{
-		Timeout: 30 * time.Second,
-	}
-	
-	resp, err := client.Get(url)
+	resp, err := SharedHTTPClient.Get(url)
 	if err != nil {
 		return "", err
 	}

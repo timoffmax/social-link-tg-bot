@@ -1169,15 +1169,14 @@ func (cbe *CliBrowserExtractor) extractYouTubeCommunityPostFromAPI(youtubePostUR
 	// Call YouTube operational API
 	apiURL := fmt.Sprintf("https://yt.lemnoslife.com/community?part=snippet,contentDetails&id=%s", postID)
 	
-	client := &http.Client{Timeout: 30 * time.Second}
 	req, err := http.NewRequest("GET", apiURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create API request: %v", err)
 	}
-	
+
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-	
-	resp, err := client.Do(req)
+
+	resp, err := SharedHTTPClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("API request failed: %v", err)
 	}

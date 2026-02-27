@@ -34,12 +34,8 @@ type TwitterTweetData struct {
 }
 
 func NewTwitterExtractor(workingDir, tempDir string) *TwitterExtractor {
-	client := &http.Client{
-		Timeout: 120 * time.Second, // Increased for large video downloads
-	}
-	
 	return &TwitterExtractor{
-		client:     client,
+		client:     SharedDownloadClient,
 		cookiesPath: filepath.Join(workingDir, "cookies", "twitter_cookies.txt"),
 		tempDir:    tempDir,
 		workingDir: workingDir,

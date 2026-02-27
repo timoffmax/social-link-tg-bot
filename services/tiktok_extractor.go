@@ -34,12 +34,8 @@ type TikTokPostData struct {
 }
 
 func NewTikTokExtractor(workingDir, tempDir string) *TikTokExtractor {
-	client := &http.Client{
-		Timeout: 30 * time.Second,
-	}
-	
 	return &TikTokExtractor{
-		client:     client,
+		client:     SharedHTTPClient,
 		cookiesPath: filepath.Join(workingDir, "tiktok_cookies.txt"),
 		tempDir:    tempDir,
 		workingDir: workingDir,

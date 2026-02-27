@@ -56,22 +56,18 @@ func (e *InstagramGraphQLExtractor) ExtractViaGraphQL(instagramURL string) ([]*M
 		},
 	}
 	
-	client := &http.Client{
-		Timeout: 15 * time.Second,
-	}
-	
 	for _, endpoint := range endpoints {
 		log.Printf("🔄 Trying %s endpoint", endpoint.name)
-		
+
 		req, err := http.NewRequest("GET", endpoint.url, nil)
 		if err != nil {
 			continue
 		}
-		
+
 		// Set headers to mimic a real browser request
 		e.setHeaders(req)
-		
-		resp, err := client.Do(req)
+
+		resp, err := SharedHTTPClient.Do(req)
 		if err != nil {
 			log.Printf("❌ %s request failed: %v", endpoint.name, err)
 			continue
@@ -320,11 +316,7 @@ func (e *InstagramGraphQLExtractor) findMediaURLsInJSON(jsonStr string) []string
 
 // downloadFile downloads a file from URL
 func (e *InstagramGraphQLExtractor) downloadFile(url, filename string) error {
-	client := &http.Client{
-		Timeout: 30 * time.Second,
-	}
-	
-	resp, err := client.Get(url)
+	resp, err := SharedDownloadClient.Get(url)
 	if err != nil {
 		return err
 	}

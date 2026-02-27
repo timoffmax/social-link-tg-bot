@@ -33,6 +33,16 @@ func NewUniversalBrowserExtractor(workingDir, tempDir string) *UniversalBrowserE
 
 // ExtractMedia is the universal fallback method for all social media platforms
 func (ube *UniversalBrowserExtractor) ExtractMedia(mediaURL string) ([]*MediaInfo, error) {
+	return ube.ExtractMediaWithContext(context.Background(), mediaURL)
+}
+
+// ExtractMediaWithContext performs browser extraction respecting the parent context deadline.
+// If the parent context is cancelled or expires, extraction will be aborted.
+func (ube *UniversalBrowserExtractor) ExtractMediaWithContext(ctx context.Context, mediaURL string) ([]*MediaInfo, error) {
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+
 	log.Printf("🌐 Starting universal headless browser extraction for: %s", mediaURL)
 
 	// Determine platform and use appropriate extraction strategy
@@ -655,11 +665,7 @@ func (ube *UniversalBrowserExtractor) tryImproved9GAGFallback(pageURL string) (s
 // Keep old method as backup
 func (ube *UniversalBrowserExtractor) trySimple9GAGFallback(pageURL string) (string, error) {
 	log.Printf("🌐 Trying 9GAG HTTP fallback")
-	
-	client := &http.Client{
-		Timeout: 10 * time.Second,
-	}
-	
+
 	req, err := http.NewRequest("GET", pageURL, nil)
 	if err != nil {
 		return "", err
@@ -673,8 +679,8 @@ func (ube *UniversalBrowserExtractor) trySimple9GAGFallback(pageURL string) (str
 	req.Header.Set("DNT", "1")
 	req.Header.Set("Connection", "keep-alive")
 	req.Header.Set("Upgrade-Insecure-Requests", "1")
-	
-	resp, err := client.Do(req)
+
+	resp, err := SharedHTTPClient.Do(req)
 	if err != nil {
 		return "", err
 	}
@@ -1584,11 +1590,6 @@ func (ube *UniversalBrowserExtractor) downloadMediaFile(mediaURL, platform, medi
 	timestamp := time.Now().Unix()
 	filename := filepath.Join(ube.tempDir, fmt.Sprintf("%d_%s_%s_%d%s", timestamp, platform, mediaType, index, ext))
 
-	// Create HTTP client with timeout
-	client := &http.Client{
-		Timeout: 30 * time.Second,
-	}
-
 	// Create request with proper headers
 	req, err := http.NewRequest("GET", mediaURL, nil)
 	if err != nil {
@@ -1599,7 +1600,7 @@ func (ube *UniversalBrowserExtractor) downloadMediaFile(mediaURL, platform, medi
 	ube.addPlatformHeaders(req, platform)
 
 	// Download the file
-	resp, err := client.Do(req)
+	resp, err := SharedDownloadClient.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("failed to download: %v", err)
 	}
@@ -2533,8 +2534,7 @@ func (ube *UniversalBrowserExtractor) extractYouTubeCommunityPostViaAPI(mediaURL
 	apiURL := fmt.Sprintf("https://yt.lemnoslife.com/community?part=snippet,contentDetails&id=%s", postID)
 	log.Printf("📺 Calling API: %s", apiURL)
 	
-	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Get(apiURL)
+	resp, err := SharedHTTPClient.Get(apiURL)
 	if err != nil {
 		return nil, fmt.Errorf("API request failed: %v", err)
 	}

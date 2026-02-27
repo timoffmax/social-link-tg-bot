@@ -1,12 +1,16 @@
 package app
 
 import (
-	"github.com/joho/godotenv"
-	"github.com/timoffmax/social-link-bot/services"
+	"context"
 	"log"
 	"os"
+	"os/signal"
 	"path/filepath"
+	"syscall"
 	"time"
+
+	"github.com/joho/godotenv"
+	"github.com/timoffmax/social-link-bot/services"
 )
 
 func Run() {
@@ -15,14 +19,29 @@ func Run() {
 	initDatabase()
 	runStartupChecks()
 	startCleanupTask()
+
 	defer services.CloseLogger()
 	defer func() {
-		// Only try to close database if it was initialized
 		if services.IsDBInitialized() {
 			services.CloseDatabase()
 		}
 	}()
-	listenForUpdates()
+
+	// Create a cancellable context for graceful shutdown
+	ctx, cancel := context.WithCancel(context.Background())
+
+	// Listen for OS signals to trigger graceful shutdown
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+
+	go func() {
+		sig := <-sigCh
+		log.Printf("🛑 Received signal %v, initiating graceful shutdown...", sig)
+		cancel()
+	}()
+
+	listenForUpdates(ctx)
+	log.Printf("👋 Bot stopped gracefully")
 }
 
 func initApp() {
@@ -30,17 +49,14 @@ func initApp() {
 }
 
 func initLogging() {
-	// Get current working directory
 	workingDir, err := os.Getwd()
 	if err != nil {
 		log.Printf("Warning: Could not get working directory: %v", err)
 		workingDir = "."
 	}
-	
-	// Create logs directory path
+
 	logDir := filepath.Join(workingDir, "logs")
-	
-	// Initialize file logging
+
 	err = services.InitLogger(logDir)
 	if err != nil {
 		log.Printf("Warning: Could not initialize file logging: %v", err)
@@ -51,13 +67,11 @@ func initLogging() {
 func runStartupChecks() {
 	checker := services.NewStartupChecker()
 	checker.RunStartupChecks()
-	
-	// Set bot commands for Telegram menu
+
 	if err := services.SetBotCommands(); err != nil {
 		log.Printf("⚠️ Warning: Failed to set bot commands: %v", err)
 	}
-	
-	// Startup testing removed - tests can be run on-demand via services.NewRealLinkTester().RunQuickTest()
+
 	log.Printf("✅ Startup complete. Use services.NewRealLinkTester().RunQuickTest() for on-demand testing")
 }
 
@@ -71,10 +85,10 @@ func loadEnvFile() {
 
 func initDatabase() {
 	err := services.InitDatabase()
+
 	if err != nil {
 		log.Printf("⚠️  Database initialization failed: %v", err)
 		log.Printf("📌 Bot will continue without database features (stats, limits)")
-		// Don't exit - bot can work without database
 	} else {
 		log.Printf("✅ Database initialized successfully")
 	}
@@ -82,12 +96,11 @@ func initDatabase() {
 
 func startCleanupTask() {
 	downloader := services.NewYtDlpDownloader()
-	
-	// Start a goroutine to clean up temp files every hour
+
 	go func() {
 		ticker := time.NewTicker(1 * time.Hour)
 		defer ticker.Stop()
-		
+
 		for {
 			select {
 			case <-ticker.C:
@@ -100,6 +113,6 @@ func startCleanupTask() {
 			}
 		}
 	}()
-	
+
 	log.Println("Started cleanup task")
 }

@@ -97,13 +97,7 @@ func (md *MediaDownloader) getInstagramMediaURL(postID string) (string, string, 
 }
 
 func (md *MediaDownloader) downloadFile(url, filepath string) error {
-	// Create HTTP client with timeout
-	client := &http.Client{
-		Timeout: 30 * time.Second,
-	}
-	
-	// Make request
-	resp, err := client.Get(url)
+	resp, err := SharedDownloadClient.Get(url)
 	if err != nil {
 		return err
 	}

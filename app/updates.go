@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"html"
@@ -27,7 +28,14 @@ import (
 var (
 	processedUpdates = make(map[int64]bool)
 	updatesMutex     sync.RWMutex
-	botUsername      string // Bot's username, fetched on startup
+	botUsername       string // Bot's username, fetched on startup
+
+	// updateSemaphore limits the number of concurrent update-processing goroutines
+	// to prevent resource exhaustion under heavy load.
+	updateSemaphore = make(chan struct{}, 10)
+
+	// updateWg tracks all in-flight update goroutines for graceful shutdown.
+	updateWg sync.WaitGroup
 )
 
 // fetchBotInfo fetches the bot's info using the getMe API and stores the username
@@ -35,7 +43,7 @@ func fetchBotInfo() error {
 	token := config.GetTgBotToken()
 	url := fmt.Sprintf("https://api.telegram.org/bot%s/getMe", token)
 
-	resp, err := (&http.Client{}).Get(url)
+	resp, err := (&http.Client{Timeout: 10 * time.Second}).Get(url)
 	if err != nil {
 		return fmt.Errorf("failed to fetch bot info: %w", err)
 	}
@@ -111,7 +119,7 @@ func loadTimezoneWithFallback(timezoneStr string) *time.Location {
 	return time.UTC
 }
 
-func listenForUpdates() {
+func listenForUpdates(ctx context.Context) {
 	// Fetch bot info on startup
 	if err := fetchBotInfo(); err != nil {
 		log.Printf("⚠️ Warning: Could not fetch bot info: %v", err)
@@ -125,19 +133,34 @@ func listenForUpdates() {
 	go func() {
 		ticker := time.NewTicker(10 * time.Minute)
 		defer ticker.Stop()
-		for range ticker.C {
-			cleanupOldUpdates()
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				cleanupOldUpdates()
+			}
 		}
 	}()
 
 	for {
-		lastProcessedUpd := processRecentUpdates(offset, isFirstRun)
+		select {
+		case <-ctx.Done():
+			log.Printf("🛑 Shutdown signal received, stopping update polling...")
+			log.Printf("⏳ Waiting for %d in-flight updates to complete...", len(updateSemaphore))
+			updateWg.Wait()
+			log.Printf("✅ All in-flight updates completed, shutdown clean")
+			return
+		default:
+			lastProcessedUpd := processRecentUpdates(offset, isFirstRun)
 
-		if nil != lastProcessedUpd {
-			offset = lastProcessedUpd.UpdateId + 1
+			if nil != lastProcessedUpd {
+				offset = lastProcessedUpd.UpdateId + 1
+			}
+
+			isFirstRun = false
 		}
-		
-		isFirstRun = false
 	}
 }
 
@@ -163,22 +186,30 @@ func processRecentUpdates(offset int, isFirstRun bool) *response.TgUpdate {
 	// Process ALL updates concurrently, even single ones
 	if len(validUpdates) > 0 {
 		log.Printf("🚀 [CONCURRENT] Starting concurrent processing of %d update(s)", len(validUpdates))
-		
-		// Process each update in its own goroutine
+
+		// Process each update in its own goroutine, bounded by semaphore
 		for i, update := range validUpdates {
+			updateWg.Add(1)
+
 			go func(index int, upd *response.TgUpdate) {
-				log.Printf("📱 [UPDATE-THREAD-%d] START: Processing update %d from user %d", 
+				defer updateWg.Done()
+
+				// Acquire semaphore slot (blocks if 10 goroutines are already running)
+				updateSemaphore <- struct{}{}
+				defer func() { <-updateSemaphore }()
+
+				log.Printf("📱 [UPDATE-THREAD-%d] START: Processing update %d from user %d",
 					index+1, upd.UpdateId, upd.Message.From.Id)
 				processUpdate(upd)
-				log.Printf("✅ [UPDATE-THREAD-%d] DONE: Finished update %d from user %d", 
+				log.Printf("✅ [UPDATE-THREAD-%d] DONE: Finished update %d from user %d",
 					index+1, upd.UpdateId, upd.Message.From.Id)
 			}(i, update)
 		}
-		
+
 		// Don't wait for goroutines to complete - let them run in background
 		// This allows the bot to immediately fetch and process new updates
 		log.Printf("🏃 [CONCURRENT] Launched %d update thread(s), continuing to poll for new updates", len(validUpdates))
-		
+
 		// Return the last update in the batch for offset tracking
 		lastProcessedUpd = validUpdates[len(validUpdates)-1]
 	}
@@ -339,7 +370,40 @@ func sendFixedLinks(origMessage *response.TgMessage, origChat *response.TgChat) 
 
 func processMediaDownload(url string, origChat *response.TgChat, origMessage *response.TgMessage, downloader *services.SmartDownloader) {
 	log.Printf("🚀 [DEBUG] Starting processMediaDownload for URL: %s", url)
-	
+
+	// Start sending chat action indicators so users see "uploading video..." while we work
+	stopAction := make(chan struct{})
+
+	go func() {
+		action := payload.ChatActionUploadVideo
+
+		if strings.Contains(url, "/p/") || strings.Contains(url, "/photo/") {
+			action = payload.ChatActionUploadPhoto
+		}
+
+		actionPayload := payload.TgPlSendChatAction{
+			ChatId: origChat.Id,
+			Action: action,
+		}
+
+		// Send immediately, then every 4 seconds (Telegram expires actions after 5s)
+		message.NewSendChatAction(actionPayload)
+
+		ticker := time.NewTicker(4 * time.Second)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-stopAction:
+				return
+			case <-ticker.C:
+				message.NewSendChatAction(actionPayload)
+			}
+		}
+	}()
+
+	defer close(stopAction)
+
 	// Send status message for Instagram photos/carousels (which may take time to download)
 	if (strings.Contains(url, "instagram.com") || strings.Contains(url, "kkinstagram.com")) && strings.Contains(url, "/p/") {
 		statusMsg := payload.TgPlSendMessage{

@@ -2,6 +2,7 @@ package services
 
 import (
 	"compress/gzip"
+	"context"
 	"crypto/md5"
 	"encoding/json"
 	"fmt"
@@ -15,7 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	
+
 	"github.com/timoffmax/social-link-bot/config"
 )
 
@@ -352,11 +353,15 @@ func (yd *YtDlpDownloader) attemptDownload(url string, outputTemplate string, pr
 	// Extract timestamp from output template
 	var timestamp int64
 	fmt.Sscanf(filepath.Base(outputTemplate), "%d_", &timestamp)
-	
+
 	// Build arguments with specific proxy
 	args := yd.buildDownloadArgsWithProxy(url, outputTemplate, proxy)
-	
-	cmd := exec.Command(yd.BinaryPath, args...)
+
+	// Use a 60-second per-attempt timeout so individual yt-dlp calls don't hang
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, yd.BinaryPath, args...)
 	
 	// Create safe command string for logging (hide passwords)
 	safeArgs := make([]string, len(args))
@@ -1273,15 +1278,21 @@ func (yd *YtDlpDownloader) buildDownloadArgs(url string, outputTemplate string) 
 		"--no-playlist",
 		"--output", outputTemplate,
 		"--format", "best[filesize<50M]/best",
-		"--extractor-retries", "2",        // Reduced retries for faster response
-		"--geo-bypass",                    // Bypass geographic restrictions
-		"--geo-bypass-country", "US",      // Use US geolocation
-		"--ignore-errors",                 // Continue on download errors
-		"--no-check-certificate",          // Ignore SSL certificate errors (for proxies)
-		"--cache-dir", cacheDir,           // Set cache directory to avoid permission issues
-		"--write-info-json",               // Write metadata for better handling
+		"--extractor-retries", "2",
+		"--geo-bypass",
+		"--geo-bypass-country", "US",
+		"--ignore-errors",
+		"--no-check-certificate",
+		"--cache-dir", cacheDir,
+		"--write-info-json",
 	}
-	
+
+	// Point yt-dlp to ffmpeg for stream merging (needed for HLS/DASH)
+	ffmpegPath := findFFmpegPath()
+	if ffmpegPath != "" {
+		baseArgs = append(baseArgs, "--ffmpeg-location", ffmpegPath)
+	}
+
 	// Note: Platform-specific cookies are added in the platform-specific sections below
 	
 	// Platform-specific optimizations
@@ -1408,8 +1419,24 @@ func (yd *YtDlpDownloader) buildDownloadArgs(url string, outputTemplate string) 
 		
 		baseArgs = append(baseArgs, twitterArgs...)
 	} else if strings.Contains(url, "youtube.com") || strings.Contains(url, "youtu.be") {
+		// YouTube now often only provides separate audio/video HLS streams.
+		// Replace the default format with one that merges audio+video tracks.
+		var newBaseArgs []string
+		i := 0
+		for i < len(baseArgs) {
+			if baseArgs[i] == "--format" && i+1 < len(baseArgs) {
+				i += 2
+			} else {
+				newBaseArgs = append(newBaseArgs, baseArgs[i])
+				i++
+			}
+		}
+		baseArgs = newBaseArgs
+
 		// YouTube-specific args with server-IP authenticated cookies
 		youtubeArgs := []string{
+			"--format", "bestvideo[height<=1080][filesize<50M]+bestaudio/bestvideo[height<=1080]+bestaudio/best[filesize<50M]/best",
+			"--merge-output-format", "mp4",
 			"--referer", "https://www.youtube.com/",
 		}
 		
@@ -1590,6 +1617,30 @@ func (yd *YtDlpDownloader) IsAvailable() bool {
 	return testYtDlpBinary(yd.BinaryPath)
 }
 
+// findFFmpegPath locates the ffmpeg binary across common locations.
+// Returns empty string if not found.
+func findFFmpegPath() string {
+	homeDir := os.Getenv("HOME")
+	candidates := []string{
+		filepath.Join(homeDir, "bin", "ffmpeg"),
+		"/usr/bin/ffmpeg",
+		"/usr/local/bin/ffmpeg",
+	}
+
+	for _, candidate := range candidates {
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate
+		}
+	}
+
+	// Try PATH as last resort
+	if path, err := exec.LookPath("ffmpeg"); err == nil {
+		return path
+	}
+
+	return ""
+}
+
 // testYtDlpBinary tests if a yt-dlp binary path works by running --version
 func testYtDlpBinary(path string) bool {
 	cmd := exec.Command(path, "--version")
@@ -1737,11 +1788,6 @@ func (yd *YtDlpDownloader) downloadInstagramDirect(url string) ([]*MediaInfo, er
 	// Try regular Instagram URL first (simpler approach)
 	log.Printf("📱 Trying direct Instagram URL: %s", url)
 	
-	// Create HTTP client with Instagram-compatible headers
-	client := &http.Client{
-		Timeout: 15 * time.Second,
-	}
-	
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %v", err)
@@ -1786,12 +1832,12 @@ func (yd *YtDlpDownloader) downloadInstagramDirect(url string) ([]*MediaInfo, er
 		log.Printf("🚫 Instagram cookies disabled for direct extraction")
 	}
 	
-	resp, err := client.Do(req)
+	resp, err := SharedHTTPClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch Instagram page: %v", err)
 	}
 	defer resp.Body.Close()
-	
+
 	if resp.StatusCode != 200 {
 		log.Printf("❌ Instagram HTTP error: %d %s", resp.StatusCode, resp.Status)
 		return nil, fmt.Errorf("Instagram returned HTTP %d", resp.StatusCode)
@@ -2368,11 +2414,6 @@ func (yd *YtDlpDownloader) downloadImageFromURL(imageURL string, uniquePrefix st
 
 // attemptImageDownload performs a single download attempt
 func (yd *YtDlpDownloader) attemptImageDownload(imageURL string, uniquePrefix string, index int) (string, error) {
-	// Create HTTP client that exactly mimics browser behavior
-	client := &http.Client{
-		Timeout: 30 * time.Second,
-	}
-	
 	req, err := http.NewRequest("GET", imageURL, nil)
 	if err != nil {
 		return "", err
@@ -2412,12 +2453,12 @@ func (yd *YtDlpDownloader) attemptImageDownload(imageURL string, uniquePrefix st
 		}
 	}
 	
-	resp, err := client.Do(req)
+	resp, err := SharedHTTPClient.Do(req)
 	if err != nil {
 		return "", err
 	}
 	defer resp.Body.Close()
-	
+
 	if resp.StatusCode != 200 {
 		// Try to read response body for more detailed error info
 		body, _ := io.ReadAll(resp.Body)
