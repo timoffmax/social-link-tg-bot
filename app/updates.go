@@ -1815,43 +1815,47 @@ func handleStartCommand(origMessage *response.TgMessage, origChat *response.TgCh
 	isGroupChat := origChat.Type != "private"
 	
 	menuText.WriteString("🤖 <b>Social Link Bot</b>\n\n")
-	menuText.WriteString("I download and send actual media files from social media platforms!\n\n")
-	
+	menuText.WriteString("I download and send actual media files from social media platforms — no more link previews!\n\n")
+
 	// Platform support
 	menuText.WriteString("🌐 <b>Supported Platforms:</b>\n")
-	menuText.WriteString("📷 <b>Instagram:</b> Photos, Videos, Albums, Stories\n")
-	menuText.WriteString("   <i>⚠️ Instagram support is limited due to strict bot limitations</i>\n")
-	menuText.WriteString("🎵 <b>TikTok:</b> Videos, Photo Slideshows\n")
-	menuText.WriteString("🐦 <b>Twitter/X:</b> Photos, Videos, GIFs\n")
-	menuText.WriteString("📺 <b>YouTube:</b> Videos, Shorts\n")
-	menuText.WriteString("🔴 <b>Reddit:</b> Videos, Images, Galleries, Text Posts\n")
-	menuText.WriteString("👥 <b>Facebook:</b> Videos, Photos\n\n")
-	
-	// How to use
-	menuText.WriteString("📝 <b>How to use:</b>\n")
-	menuText.WriteString("Just send me a link from any supported platform and I'll download the media for you!\n\n")
-	
+	menuText.WriteString("📷 <b>Instagram</b> — Photos, Videos, Albums, Stories\n")
+	menuText.WriteString("🎵 <b>TikTok</b> — Videos, Photo Slideshows\n")
+	menuText.WriteString("🐦 <b>Twitter/X</b> — Photos, Videos, GIFs\n")
+	menuText.WriteString("📺 <b>YouTube</b> — Videos, Shorts\n")
+	menuText.WriteString("🔴 <b>Reddit</b> — Videos, Images, Galleries, Text Posts\n")
+	menuText.WriteString("👥 <b>Facebook</b> — Videos, Photos\n\n")
+
+	// How to use — context-dependent
+	if isGroupChat {
+		menuText.WriteString("👥 <b>How to use in group chats:</b>\n")
+		menuText.WriteString("Anyone posts a supported link — I'll automatically download and send the media. Group admins can manage limits and settings.\n\n")
+	} else {
+		menuText.WriteString("💬 <b>How to use:</b>\n")
+		menuText.WriteString("Just send me any supported link and I'll reply with the actual media file.\n\n")
+	}
+
 	// Commands
 	menuText.WriteString("⚡ <b>Commands:</b>\n")
-	menuText.WriteString("• /start, /help, or /menu - Show this menu\n")
-	menuText.WriteString("• /stats [period] - View media statistics\n")
+	menuText.WriteString("• /start, /help — Show this menu\n")
+	menuText.WriteString("• /stats [period] — View media statistics\n")
 	menuText.WriteString("  <i>Periods: today, week, month, year</i>\n")
-	menuText.WriteString("• /mylimit - Check your daily media limit\n")
-	menuText.WriteString("• /donate - Support the bot development\n")
+	menuText.WriteString("• /mylimit — Check your daily media limit\n")
+	menuText.WriteString("• /donate — Support the bot development\n")
 
 	// Admin commands (only in groups)
 	if isGroupChat {
 		menuText.WriteString("\n👮 <b>Admin Commands:</b>\n")
-		menuText.WriteString("• /setlimit @user [limit] - Set user's daily limit\n")
-		menuText.WriteString("  <i>Reply to message or use user ID</i>\n")
-		menuText.WriteString("  <i>Set to 0 to remove limit</i>\n")
-		menuText.WriteString("• /setgrouplimit [limit] - Set group default limit\n")
-		menuText.WriteString("• /setgrouptimezone [timezone] - Set group timezone\n")
+		menuText.WriteString("• /setlimit @user [limit] — Set user's daily limit\n")
+		menuText.WriteString("  <i>Reply to message or use user ID. Set to 0 to remove limit.</i>\n")
+		menuText.WriteString("• /setgrouplimit [limit] — Set group default limit\n")
+		menuText.WriteString("• /setgrouptimezone [timezone] — Set group timezone\n")
 		menuText.WriteString("  <i>Example: America/New_York, Europe/London</i>\n")
 	}
-	
+
 	// Footer
 	menuText.WriteString("\n━━━━━━━━━━━━━━━━━━━━\n")
+	menuText.WriteString("💚 Support the bot: /donate\n")
 	menuText.WriteString("💡 <i>Tip: Just paste a link to get started!</i>")
 	
 	// Create interactive keyboard with menu buttons
