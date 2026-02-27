@@ -226,6 +226,25 @@ func GetExtractionStrategy(url string) *ExtractionStrategy {
 		}
 	}
 	
+	// 9GAG: yt-dlp routes to CLI browser extraction, then universal browser fallback
+	if strings.Contains(url, "9gag.com") {
+		if !config.Is9GAGEnabled() {
+			return &ExtractionStrategy{
+				Platform: "9gag",
+				Methods:  []ExtractionMethod{},
+				HasFixedLink: false,
+			}
+		}
+		return &ExtractionStrategy{
+			Platform: "9gag",
+			Methods: []ExtractionMethod{
+				MethodYtDlp,
+				MethodBrowser,
+			},
+			HasFixedLink: false,
+		}
+	}
+
 	// Default: try yt-dlp then browser
 	return &ExtractionStrategy{
 		Platform: "generic",

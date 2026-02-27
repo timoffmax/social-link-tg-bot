@@ -42,6 +42,11 @@ func GetAllLinks(message *response.TgMessage) []string {
 		result = append(result, facebookLinks...)
 	}
 
+	if config.Is9GAGEnabled() {
+		ninegagLinks := Get9GAGLinks(message)
+		result = append(result, ninegagLinks...)
+	}
+
 	return result
 }
 
@@ -77,6 +82,11 @@ func GetAllSocialLinks(message *response.TgMessage, chatID int64) []string {
 	if config.IsFacebookEnabled() && services.IsPlatformEnabledForChat(chatID, "facebook") {
 		facebookLinks := GetOriginalFacebookLinks(message)
 		result = append(result, facebookLinks...)
+	}
+
+	if config.Is9GAGEnabled() && services.IsPlatformEnabledForChat(chatID, "9gag") {
+		ninegagLinks := GetOriginal9GAGLinks(message)
+		result = append(result, ninegagLinks...)
 	}
 
 	return result
@@ -239,5 +249,15 @@ func GetFacebookLinks(message *response.TgMessage) []string {
 
 func GetOriginalFacebookLinks(message *response.TgMessage) []string {
 	regex := regexp.MustCompile(`https?:\/\/(www\.|m\.|mobile\.)?facebook\.com\/[^\s]+`)
+	return regex.FindAllString(message.Text, -1)
+}
+
+func Get9GAGLinks(message *response.TgMessage) []string {
+	regex := regexp.MustCompile(`https?:\/\/(www\.)?9gag\.com\/gag\/[^\s]+`)
+	return regex.FindAllString(message.Text, -1)
+}
+
+func GetOriginal9GAGLinks(message *response.TgMessage) []string {
+	regex := regexp.MustCompile(`https?:\/\/(www\.)?9gag\.com\/gag\/[^\s]+`)
 	return regex.FindAllString(message.Text, -1)
 }

@@ -418,12 +418,14 @@ func processMediaDownload(url string, origChat *response.TgChat, origMessage *re
 		log.Printf("Failed to download media from %s: %v", url, err)
 		
 		// Skip error notifications for platforms that commonly fail (silently fail)
-		if strings.Contains(url, "reddit.com") || strings.Contains(url, "facebook.com") {
+		if strings.Contains(url, "reddit.com") || strings.Contains(url, "facebook.com") || strings.Contains(url, "9gag.com") {
 			platformName := "Reddit"
 			if strings.Contains(url, "reddit.com") {
 				platformName = "Reddit"
 			} else if strings.Contains(url, "facebook.com") {
 				platformName = "Facebook"
+			} else if strings.Contains(url, "9gag.com") {
+				platformName = "9GAG"
 			}
 			log.Printf("🤐 Skipping error notification for %s link", platformName)
 			services.LogTelegramMessage(origChat.Id, "error-skipped", false, "")
@@ -619,6 +621,8 @@ func detectPlatformFromUrl(url string) string {
 		return "reddit"
 	} else if strings.Contains(url, "facebook.com") {
 		return "facebook"
+	} else if strings.Contains(url, "9gag.com") {
+		return "9gag"
 	}
 	return ""
 }
@@ -1824,7 +1828,8 @@ func handleStartCommand(origMessage *response.TgMessage, origChat *response.TgCh
 	menuText.WriteString("🐦 <b>Twitter/X</b> — Photos, Videos, GIFs\n")
 	menuText.WriteString("📺 <b>YouTube</b> — Videos, Shorts\n")
 	menuText.WriteString("🔴 <b>Reddit</b> — Videos, Images, Galleries, Text Posts\n")
-	menuText.WriteString("👥 <b>Facebook</b> — Videos, Photos\n\n")
+	menuText.WriteString("👥 <b>Facebook</b> — Videos, Photos\n")
+	menuText.WriteString("😂 <b>9GAG</b> — Videos, Images\n\n")
 
 	// How to use — context-dependent
 	if isGroupChat {
@@ -3780,6 +3785,11 @@ func guessChatAction(url string) string {
 	// Instagram stories/reels are video
 	if strings.Contains(url, "/reel/") || strings.Contains(url, "/reels/") || strings.Contains(url, "/stories/") {
 		return payload.ChatActionUploadVideo
+	}
+
+	// 9GAG is mostly images
+	if strings.Contains(url, "9gag.com") {
+		return payload.ChatActionUploadPhoto
 	}
 
 	// Default to upload_video for other platforms
