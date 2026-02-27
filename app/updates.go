@@ -2557,39 +2557,39 @@ func handleBroadcastCommand(origMessage *response.TgMessage, origChat *response.
 		errorMsg := payload.TgPlSendMessage{
 			ChatId:    origChat.Id,
 			ParseMode: payload.ParseModeHTML,
-			Text:      "❌ Usage: <code>/broadcast Your message here</code>\n\nThe message will be sent to all chats that have used the bot.",
+			Text:      "❌ Usage: <code>/broadcast Your message here</code>\n\nThe message will be sent as a private message to all individual users.",
 		}
 		message.NewSendMessage(errorMsg)
 		return
 	}
 
-	// Get all chat IDs
-	chatIDs, err := services.GetAllDistinctChatIDs()
+	// Get all individual user IDs (no groups)
+	userIDs, err := services.GetAllDistinctUserIDs()
 	if err != nil {
-		log.Printf("❌ Failed to get chat IDs for broadcast: %v", err)
+		log.Printf("❌ Failed to get user IDs for broadcast: %v", err)
 		errorMsg := payload.TgPlSendMessage{
 			ChatId:    origChat.Id,
 			ParseMode: payload.ParseModeHTML,
-			Text:      fmt.Sprintf("❌ Failed to get chat list: %v", err),
+			Text:      fmt.Sprintf("❌ Failed to get user list: %v", err),
 		}
 		message.NewSendMessage(errorMsg)
 		return
 	}
 
-	if len(chatIDs) == 0 {
+	if len(userIDs) == 0 {
 		errorMsg := payload.TgPlSendMessage{
 			ChatId:    origChat.Id,
 			ParseMode: payload.ParseModeHTML,
-			Text:      "⚠️ No chats found in the database.",
+			Text:      "⚠️ No users found in the database.",
 		}
 		message.NewSendMessage(errorMsg)
 		return
 	}
 
-	// TESTING MODE: only send to admin
+	// TESTING MODE: only send to owner
 	testMode := true
 	if testMode {
-		log.Printf("📢 Broadcast (TEST MODE): sending only to admin %d", adminUserID)
+		log.Printf("📢 Broadcast (TEST MODE): sending only to owner %d", adminUserID)
 		msgPayload := payload.TgPlSendMessage{
 			ChatId:                adminUserID,
 			ParseMode:             payload.ParseModeHTML,
@@ -2601,20 +2601,20 @@ func handleBroadcastCommand(origMessage *response.TgMessage, origChat *response.
 		confirmMsg := payload.TgPlSendMessage{
 			ChatId:    origChat.Id,
 			ParseMode: payload.ParseModeHTML,
-			Text:      fmt.Sprintf("✅ <b>TEST broadcast sent to you only.</b>\n\nTotal chats in DB: %d\n\nTo enable real broadcast, update <code>testMode</code> in the code.", len(chatIDs)),
+			Text:      fmt.Sprintf("✅ <b>TEST broadcast sent to you only.</b>\n\nTotal individual users in DB: %d\n\nTo enable real broadcast, update <code>testMode</code> in the code.", len(userIDs)),
 		}
 		message.NewSendMessage(confirmMsg)
 		return
 	}
 
-	// PRODUCTION MODE: send to all chats (uncomment testMode = false above when ready)
-	log.Printf("📢 Broadcasting to %d chats", len(chatIDs))
+	// PRODUCTION MODE: send to all individual users
+	log.Printf("📢 Broadcasting to %d users", len(userIDs))
 	sent := 0
 	failed := 0
 
-	for _, chatID := range chatIDs {
+	for _, userID := range userIDs {
 		msgPayload := payload.TgPlSendMessage{
-			ChatId:                chatID,
+			ChatId:                userID,
 			ParseMode:             payload.ParseModeHTML,
 			Text:                  broadcastText,
 			DisableNotification:   true,
@@ -2632,7 +2632,7 @@ func handleBroadcastCommand(origMessage *response.TgMessage, origChat *response.
 	confirmMsg := payload.TgPlSendMessage{
 		ChatId:    origChat.Id,
 		ParseMode: payload.ParseModeHTML,
-		Text:      fmt.Sprintf("✅ <b>Broadcast complete!</b>\n\nSent: %d\nFailed: %d\nTotal chats: %d", sent, failed, len(chatIDs)),
+		Text:      fmt.Sprintf("✅ <b>Broadcast complete!</b>\n\nSent: %d\nFailed: %d\nTotal users: %d", sent, failed, len(userIDs)),
 	}
 	message.NewSendMessage(confirmMsg)
 }

@@ -806,13 +806,13 @@ func GetAllChatsWithStats(period string) ([]ChatStats, error) {
 	return result, nil
 }
 
-// GetAllDistinctChatIDs returns all unique chat IDs from media_stats
-func GetAllDistinctChatIDs() ([]int64, error) {
+// GetAllDistinctUserIDs returns all unique user IDs from media_stats (for broadcast to individual users)
+func GetAllDistinctUserIDs() ([]int64, error) {
 	if !IsDBInitialized() {
 		return nil, nil
 	}
 
-	query := `SELECT DISTINCT chat_id FROM media_stats ORDER BY chat_id`
+	query := `SELECT DISTINCT user_id FROM media_stats WHERE user_id > 0 ORDER BY user_id`
 	rows, err := GetDB().Query(query)
 	if err != nil {
 		return nil, err
@@ -821,11 +821,11 @@ func GetAllDistinctChatIDs() ([]int64, error) {
 
 	var result []int64
 	for rows.Next() {
-		var chatID int64
-		if err := rows.Scan(&chatID); err != nil {
+		var userID int64
+		if err := rows.Scan(&userID); err != nil {
 			return nil, err
 		}
-		result = append(result, chatID)
+		result = append(result, userID)
 	}
 
 	return result, nil
