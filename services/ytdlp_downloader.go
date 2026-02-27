@@ -868,16 +868,21 @@ func (yd *YtDlpDownloader) DownloadTikTokMedia(url string) ([]*MediaInfo, error)
 	log.Printf("Normal download failed, trying thumbnails-only approach for TikTok")
 	mediaInfos, err = yd.downloadThumbnailsOnly(url, "TikTok")
 	if err == nil && len(mediaInfos) > 0 {
-		return mediaInfos, nil
+		// Filter out TikTok cover thumbnails (.image files) - they are not real content
+		if !isTikTokCoverOnly(mediaInfos) {
+			return mediaInfos, nil
+		}
+
+		log.Printf("⚠️ Thumbnails-only returned only cover images (.image), skipping to custom extractor")
 	}
-	
-	// Strategy 3: Use custom TikTok extractor as fallback for photo slideshows
-	log.Printf("yt-dlp failed completely, trying custom TikTok extractor")
+
+	// Strategy 3: Use custom TikTok extractor (direct HTML scraping for video/photo URLs)
+	log.Printf("Trying custom TikTok extractor for direct video/photo extraction")
 	tiktokExtractor := NewTikTokExtractor(yd.WorkingDir, yd.TempDir)
-	
+
 	// For TikTok, we need to resolve short URLs first before extraction
 	resolvedURL := url
-	if strings.Contains(url, "vm.tiktok.com") {
+	if strings.Contains(url, "vm.tiktok.com") || strings.Contains(url, "vt.tiktok.com") {
 		log.Printf("🔗 Pre-resolving TikTok short URL for custom extractor: %s", url)
 		if resolved, err := yd.resolveRedirectURL(url); err == nil {
 			resolvedURL = resolved
@@ -888,6 +893,17 @@ func (yd *YtDlpDownloader) DownloadTikTokMedia(url string) ([]*MediaInfo, error)
 	}
 	
 	return tiktokExtractor.ExtractTikTokPost(resolvedURL)
+}
+
+// isTikTokCoverOnly returns true if all media items are TikTok cover thumbnails (.image files)
+func isTikTokCoverOnly(mediaInfos []*MediaInfo) bool {
+	for _, mi := range mediaInfos {
+		if !strings.HasSuffix(mi.Filename, ".image") {
+			return false
+		}
+	}
+
+	return true
 }
 
 func (yd *YtDlpDownloader) DownloadTwitterMedia(url string) ([]*MediaInfo, error) {
@@ -1570,7 +1586,7 @@ func (yd *YtDlpDownloader) detectMediaType(filePath string) string {
 	ext := strings.ToLower(filepath.Ext(filePath))
 	
 	switch ext {
-	case ".jpg", ".jpeg", ".png", ".gif", ".webp":
+	case ".jpg", ".jpeg", ".png", ".gif", ".webp", ".image":
 		return "photo"
 	case ".mp4", ".mov", ".avi", ".mkv":
 		return "video"

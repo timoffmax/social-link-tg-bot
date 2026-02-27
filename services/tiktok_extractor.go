@@ -77,7 +77,7 @@ func (te *TikTokExtractor) ExtractTikTokPost(tiktokURL string) ([]*MediaInfo, er
 
 func (te *TikTokExtractor) extractTikTokDetails(tiktokURL string) (string, string, error) {
 	// First, if it's a short URL, resolve it
-	if strings.Contains(tiktokURL, "vm.tiktok.com") {
+	if strings.Contains(tiktokURL, "vm.tiktok.com") || strings.Contains(tiktokURL, "vt.tiktok.com") {
 		log.Printf("🔗 Resolving short TikTok URL: %s", tiktokURL)
 		resolvedURL, err := te.resolveShortURL(tiktokURL)
 		if err != nil {
