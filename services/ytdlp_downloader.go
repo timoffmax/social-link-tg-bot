@@ -1438,6 +1438,8 @@ func (yd *YtDlpDownloader) buildDownloadArgs(url string, outputTemplate string) 
 			"--format", "bestvideo[height<=1080][filesize<50M]+bestaudio/bestvideo[height<=1080]+bestaudio/best[filesize<50M]/best",
 			"--merge-output-format", "mp4",
 			"--referer", "https://www.youtube.com/",
+			"--js-runtimes", "node",
+			"--remote-components", "ejs:github",
 		}
 		
 		// Strategy 1: Use server-IP authenticated cookie file (highest priority)
