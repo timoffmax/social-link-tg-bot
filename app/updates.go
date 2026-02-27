@@ -2532,10 +2532,41 @@ func handleSetGroupTimezoneCommand(origMessage *response.TgMessage, origChat *re
 	log.Printf("🌍 SetGroupTimezone command completed by user %d in chat %d (timezone: %s)", origUser.Id, origChat.Id, timezone)
 }
 
-// handleBroadcastCommand handles /broadcast command (admin only)
-// Usage: /broadcast <message text>
+// getBroadcastAnnouncement returns the predefined announcement message
+func getBroadcastAnnouncement() string {
+	var text strings.Builder
+	text.WriteString("🎉 <b>Social Link Bot — What's New!</b>\n\n")
+
+	text.WriteString("Hey! Here's what's been improved recently:\n\n")
+
+	text.WriteString("🆕 <b>9GAG support</b>\n")
+	text.WriteString("Send any 9gag.com link — videos and images are now downloaded directly!\n\n")
+
+	text.WriteString("🔴 <b>Reddit support</b>\n")
+	text.WriteString("Videos, images, galleries, and even text posts — all extracted and sent to you.\n\n")
+
+	text.WriteString("📸 <b>Instagram improvements</b>\n")
+	text.WriteString("Better photo/carousel downloads, Stories support via API, and more reliable Reels extraction.\n\n")
+
+	text.WriteString("🎬 <b>YouTube improvements</b>\n")
+	text.WriteString("Shorts + Community posts with images now supported. Faster HLS stream processing.\n\n")
+
+	text.WriteString("🐦 <b>Twitter/X improvements</b>\n")
+	text.WriteString("Full tweet text with author info, plus better media extraction.\n\n")
+
+	text.WriteString("━━━━━━━━━━━━━━━━━━━━\n\n")
+
+	text.WriteString("💡 <b>Tip:</b> Add me to a group chat — I'll automatically download media from links shared by anyone in the group!\n\n")
+
+	text.WriteString("💚 Like this bot? Use /donate to support development!")
+
+	return text.String()
+}
+
+// handleBroadcastCommand handles /broadcast command (owner only)
+// Usage: /broadcast (sends predefined announcement) or /broadcast custom text
 func handleBroadcastCommand(origMessage *response.TgMessage, origChat *response.TgChat, origUser *response.TgUser) {
-	// Check if user is admin
+	// Check if user is the bot owner
 	adminUserID := config.GetAdminUserID()
 	if adminUserID == 0 {
 		log.Printf("⚠️ Broadcast requested but ADMIN_USER_ID not configured")
@@ -2547,20 +2578,15 @@ func handleBroadcastCommand(origMessage *response.TgMessage, origChat *response.
 		return
 	}
 
-	// Parse broadcast text: everything after "/broadcast "
+	// Parse optional custom text after "/broadcast "
 	broadcastText := ""
 	if idx := strings.Index(origMessage.Text, " "); idx >= 0 {
 		broadcastText = strings.TrimSpace(origMessage.Text[idx+1:])
 	}
 
+	// If no custom text, use the predefined announcement
 	if broadcastText == "" {
-		errorMsg := payload.TgPlSendMessage{
-			ChatId:    origChat.Id,
-			ParseMode: payload.ParseModeHTML,
-			Text:      "❌ Usage: <code>/broadcast Your message here</code>\n\nThe message will be sent as a private message to all individual users.",
-		}
-		message.NewSendMessage(errorMsg)
-		return
+		broadcastText = getBroadcastAnnouncement()
 	}
 
 	// Get all individual user IDs (no groups)
