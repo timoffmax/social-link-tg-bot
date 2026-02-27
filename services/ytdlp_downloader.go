@@ -1035,10 +1035,234 @@ func (yd *YtDlpDownloader) DownloadFacebookMedia(url string) ([]*MediaInfo, erro
 }
 
 func (yd *YtDlpDownloader) Download9GAGMedia(url string) ([]*MediaInfo, error) {
-	// For 9GAG, skip yt-dlp entirely (always fails with 403) and use CLI browser directly
-	log.Printf("🚀 Using CLI browser directly for 9GAG (yt-dlp always fails with 403)")
+	log.Printf("🎭 9GAG download: trying yt-dlp with browser impersonation first")
+
+	// Extract post ID from URL
+	re := regexp.MustCompile(`9gag\.com/gag/([a-zA-Z0-9]+)`)
+	matches := re.FindStringSubmatch(url)
+	postID := ""
+	if len(matches) > 1 {
+		postID = matches[1]
+	}
+
+	// Step 1: Try yt-dlp first (handles video/"Animated" posts via curl_cffi impersonation)
+	if err := os.MkdirAll(yd.TempDir, 0755); err != nil {
+		return nil, fmt.Errorf("failed to create temp directory: %v", err)
+	}
+
+	timestamp := time.Now().Unix()
+	urlHash := strings.ToUpper(fmt.Sprintf("%x", md5.Sum([]byte(url))))[:8]
+	outputTemplate := filepath.Join(yd.TempDir, fmt.Sprintf("%d_%s_%%(title)s.%%(ext)s", timestamp, urlHash))
+
+	result, err := yd.attemptDownload(url, outputTemplate, "")
+	if err == nil {
+		log.Printf("✅ 9GAG video downloaded via yt-dlp")
+		return result, nil
+	}
+
+	ytdlpErr := err.Error()
+	log.Printf("yt-dlp failed for 9GAG: %s", ytdlpErr)
+
+	// Step 2: If yt-dlp failed (likely a photo post), try the Python API fetcher
+	if postID != "" {
+		log.Printf("📸 Trying 9GAG API fetch for post %s (may be a photo post)", postID)
+		apiResult, apiErr := yd.fetch9GAGPostViaAPI(postID, url, timestamp, urlHash)
+		if apiErr == nil {
+			return apiResult, nil
+		}
+		log.Printf("9GAG API fetch failed: %v", apiErr)
+	}
+
+	// Step 3: Fall back to CLI browser extraction
+	log.Printf("🔄 Falling back to CLI browser for 9GAG")
 	cliBrowser := NewCliBrowserExtractor(yd.WorkingDir, yd.TempDir)
 	return cliBrowser.Extract9GAGContent(url)
+}
+
+// fetch9GAGPostViaAPI uses a Python helper with curl_cffi to fetch 9GAG post data
+func (yd *YtDlpDownloader) fetch9GAGPostViaAPI(postID, originalURL string, timestamp int64, urlHash string) ([]*MediaInfo, error) {
+	// Find the Python interpreter that has curl_cffi (from yt-dlp's pipx venv)
+	pythonPath := yd.find9GAGPython()
+	if pythonPath == "" {
+		return nil, fmt.Errorf("no Python with curl_cffi found")
+	}
+
+	scriptPath := yd.getFilePath("scripts/9gag_fetch.py")
+	if _, err := os.Stat(scriptPath); err != nil {
+		return nil, fmt.Errorf("9gag_fetch.py not found at %s", scriptPath)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, pythonPath, scriptPath, postID)
+	output, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("9gag_fetch.py failed: %v", err)
+	}
+
+	var postData struct {
+		Error  string `json:"error"`
+		ID     string `json:"id"`
+		Title  string `json:"title"`
+		Type   string `json:"type"`
+		NSFW   int    `json:"nsfw"`
+		Images map[string]struct {
+			URL      string `json:"url"`
+			Width    int    `json:"width"`
+			Height   int    `json:"height"`
+			VP9URL   string `json:"vp9Url"`
+			H265URL  string `json:"h265Url"`
+			Duration int    `json:"duration"`
+			HasAudio int    `json:"hasAudio"`
+		} `json:"images"`
+	}
+
+	if err := json.Unmarshal(output, &postData); err != nil {
+		return nil, fmt.Errorf("failed to parse 9gag_fetch.py output: %v", err)
+	}
+
+	if postData.Error != "" {
+		return nil, fmt.Errorf("9GAG API error: %s", postData.Error)
+	}
+
+	caption := postData.Title
+	if caption != "" {
+		caption = "😂 " + caption + "\n\n🔗 " + originalURL
+	}
+
+	// For video posts, get the best video URL
+	if postData.Type == "Animated" {
+		if sv, ok := postData.Images["image460sv"]; ok {
+			// Prefer H265 MP4 > VP9 WebM > original MP4
+			videoURL := sv.URL
+			if sv.H265URL != "" {
+				videoURL = sv.H265URL
+			}
+
+			filePath, dlErr := yd.download9GAGFile(videoURL, timestamp, urlHash, "video")
+			if dlErr != nil {
+				return nil, fmt.Errorf("failed to download 9GAG video: %v", dlErr)
+			}
+
+			mediaResult := []*MediaInfo{{
+				Type:     "video",
+				URL:      videoURL,
+				Filename: filePath,
+				Caption:  caption,
+			}}
+			log.Printf("✅ 9GAG video downloaded via API: %s", postData.Title)
+			return mediaResult, nil
+		}
+	}
+
+	// For photo posts, get the largest image
+	if img700, ok := postData.Images["image700"]; ok && img700.URL != "" {
+		filePath, dlErr := yd.download9GAGFile(img700.URL, timestamp, urlHash, "photo")
+		if dlErr != nil {
+			return nil, fmt.Errorf("failed to download 9GAG image: %v", dlErr)
+		}
+
+		mediaResult := []*MediaInfo{{
+			Type:     "photo",
+			URL:      img700.URL,
+			Filename: filePath,
+			Caption:  caption,
+		}}
+		log.Printf("✅ 9GAG photo downloaded via API: %s", postData.Title)
+		return mediaResult, nil
+	}
+
+	// Try image460 as fallback
+	if img460, ok := postData.Images["image460"]; ok && img460.URL != "" {
+		filePath, dlErr := yd.download9GAGFile(img460.URL, timestamp, urlHash, "photo")
+		if dlErr != nil {
+			return nil, fmt.Errorf("failed to download 9GAG image: %v", dlErr)
+		}
+
+		mediaResult := []*MediaInfo{{
+			Type:     "photo",
+			URL:      img460.URL,
+			Filename: filePath,
+			Caption:  caption,
+		}}
+		log.Printf("✅ 9GAG photo downloaded via API (460): %s", postData.Title)
+		return mediaResult, nil
+	}
+
+	return nil, fmt.Errorf("no downloadable media found in 9GAG post")
+}
+
+// download9GAGFile downloads a file from 9GAG CDN
+func (yd *YtDlpDownloader) download9GAGFile(fileURL string, timestamp int64, urlHash string, mediaType string) (string, error) {
+	ext := ".jpg"
+	if mediaType == "video" {
+		if strings.HasSuffix(fileURL, ".webm") {
+			ext = ".webm"
+		} else {
+			ext = ".mp4"
+		}
+	}
+
+	filename := fmt.Sprintf("%d_%s_9gag%s", timestamp, urlHash, ext)
+	filePath := filepath.Join(yd.TempDir, filename)
+
+	req, err := http.NewRequest("GET", fileURL, nil)
+	if err != nil {
+		return "", err
+	}
+
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+	req.Header.Set("Accept", "*/*")
+	req.Header.Set("Accept-Language", "en-US,en;q=0.9")
+	req.Header.Set("Referer", "https://9gag.com/")
+
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("HTTP request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		return "", fmt.Errorf("HTTP %d downloading %s", resp.StatusCode, fileURL)
+	}
+
+	outFile, err := os.Create(filePath)
+	if err != nil {
+		return "", fmt.Errorf("failed to create file: %v", err)
+	}
+	defer outFile.Close()
+
+	written, err := io.Copy(outFile, resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("failed to write file: %v", err)
+	}
+
+	log.Printf("📥 Downloaded 9GAG %s: %s (%d bytes)", mediaType, filename, written)
+	return filePath, nil
+}
+
+// find9GAGPython finds a Python interpreter that has curl_cffi installed
+func (yd *YtDlpDownloader) find9GAGPython() string {
+	// Try system Python first, then pipx venv Python
+	candidates := []string{
+		"python3",
+		"python",
+		filepath.Join(os.Getenv("HOME"), ".local/share/pipx/venvs/yt-dlp/bin/python3"),
+		filepath.Join(os.Getenv("HOME"), ".local/share/pipx/venvs/yt-dlp/bin/python"),
+	}
+
+	for _, candidate := range candidates {
+		cmd := exec.Command(candidate, "-c", "import curl_cffi")
+		if err := cmd.Run(); err == nil {
+			log.Printf("✅ Found Python with curl_cffi: %s", candidate)
+			return candidate
+		}
+	}
+
+	log.Printf("⚠️ No Python with curl_cffi found")
+	return ""
 }
 
 // downloadThumbnailsOnly tries to download only thumbnails and metadata for posts
