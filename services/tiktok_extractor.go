@@ -587,9 +587,11 @@ func (te *TikTokExtractor) parseHTMLForMedia(html string, postID string, usernam
 		} else if strings.Contains(url, ".jpeg") || strings.Contains(url, ".jpg") || 
 				  strings.Contains(url, ".png") || strings.Contains(url, ".webp") ||
 				  strings.Contains(url, "photomode-image") {
-			// Only include actual content images, filter out avatars and covers
+			// Only include actual content images, filter out avatars, covers, and placeholders
 			if !strings.Contains(url, "cropcenter") && !strings.Contains(url, "zoomcover") &&
-			   !strings.Contains(url, "avatar") && !strings.Contains(url, "profile") {
+			   !strings.Contains(url, "avatar") && !strings.Contains(url, "profile") &&
+			   !strings.Contains(url, "placeholder") && !strings.Contains(url, "origin.image") &&
+			   !strings.Contains(url, "origin-cover") {
 				imageURLs = append(imageURLs, url)
 			}
 		} else {
@@ -645,25 +647,11 @@ func (te *TikTokExtractor) parseHTMLForMedia(html string, postID string, usernam
 		}
 	}
 	
-	// If we couldn't download any videos but there were video URLs, try images as fallback
-	if len(mediaInfos) == 0 && len(videoURLs) > 0 && len(imageURLs) > 0 {
-		log.Printf("🔄 Video downloads failed, trying image fallback")
-		for i, mediaURL := range imageURLs {
-			mediaInfo, err := te.downloadMedia(mediaURL, postID, i)
-			if err != nil {
-				log.Printf("⚠️ Failed to download fallback image %d: %v", i, err)
-				continue
-			}
-			
-			// Use post text as caption
-			if postText != "" {
-				mediaInfo.Caption = postText
-			} else if mediaInfo.Caption == "" && i == 0 {
-				mediaInfo.Caption = "🎵 TikTok (video unavailable)"
-			}
-			
-			mediaInfos = append(mediaInfos, mediaInfo)
-		}
+	// If video downloads failed (e.g. 403), do NOT fall back to cover images.
+	// Return empty to let the next extraction method (e.g. vxTikTok proxy) try instead.
+	if len(mediaInfos) == 0 && len(videoURLs) > 0 {
+		log.Printf("❌ Video downloads failed (likely 403), skipping image fallback to try next method")
+		return nil, fmt.Errorf("video downloads failed, letting next extraction method try")
 	}
 	
 	// If no media found, return empty (let fallback handle it)
@@ -1488,9 +1476,15 @@ func (te *TikTokExtractor) downloadMedia(mediaURL, postID string, index int) (*M
 	}, nil
 }
 
-func (te *TikTokExtractor) getFileExtension(url, contentType string) string {
+func (te *TikTokExtractor) getFileExtension(rawURL, contentType string) string {
+	// Strip query params before checking extension
+	cleanURL := rawURL
+	if idx := strings.Index(cleanURL, "?"); idx != -1 {
+		cleanURL = cleanURL[:idx]
+	}
+
 	// Try to get extension from URL
-	if ext := filepath.Ext(url); ext != "" {
+	if ext := filepath.Ext(cleanURL); ext != "" {
 		return ext
 	}
 	
