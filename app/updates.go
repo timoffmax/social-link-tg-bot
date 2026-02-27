@@ -1829,10 +1829,15 @@ func handleStartCommand(origMessage *response.TgMessage, origChat *response.TgCh
 	// How to use — context-dependent
 	if isGroupChat {
 		menuText.WriteString("👥 <b>How to use in group chats:</b>\n")
-		menuText.WriteString("Anyone posts a supported link — I'll automatically download and send the media. Group admins can manage limits and settings.\n\n")
+		menuText.WriteString("Anyone posts a supported link — I'll automatically download and send the media.\n")
+		menuText.WriteString("Group admins can manage limits and settings.\n\n")
 	} else {
-		menuText.WriteString("💬 <b>How to use:</b>\n")
+		menuText.WriteString("💬 <b>How to use in private chat:</b>\n")
 		menuText.WriteString("Just send me any supported link and I'll reply with the actual media file.\n\n")
+		menuText.WriteString("👥 <b>How to use in group chats:</b>\n")
+		menuText.WriteString("1. Add me to your group\n")
+		menuText.WriteString("2. Make sure <b>Group Privacy</b> is disabled via @BotFather\n")
+		menuText.WriteString("3. Anyone posts a supported link — I'll download and send the media automatically\n\n")
 	}
 
 	// Commands
