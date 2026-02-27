@@ -1128,7 +1128,7 @@ func (yd *YtDlpDownloader) fetch9GAGPostViaAPI(postID, originalURL string, times
 
 	caption := postData.Title
 	if caption != "" {
-		caption = "😂 " + caption + "\n\n🔗 " + originalURL
+		caption = "😂 " + caption
 	}
 
 	// For video posts, get the best video URL
