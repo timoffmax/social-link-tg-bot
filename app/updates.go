@@ -1874,8 +1874,8 @@ func handleDonateCommand(origMessage *response.TgMessage, origChat *response.TgC
 
 	text.WriteString("💚 <b>Support Social Link Bot</b>\n\n")
 	text.WriteString("If you find this bot useful, consider supporting its development!\n\n")
-	text.WriteString("💳 <b>Donate with card or crypto:</b>\n")
-	text.WriteString("Use the button below to donate via NOWPayments (card, USDT, BTC, and 300+ cryptos)\n\n")
+	text.WriteString("🪙 <b>Donate with any crypto:</b>\n")
+	text.WriteString("Use the button below to donate via NOWPayments (USDT, BTC, ETH, and 300+ cryptos)\n\n")
 	text.WriteString("━━━━━━━━━━━━━━━━━━━━\n\n")
 	text.WriteString("💰 <b>Or send USDT directly:</b>\n\n")
 	text.WriteString("<b>ERC-20:</b>\n")
@@ -1887,7 +1887,7 @@ func handleDonateCommand(origMessage *response.TgMessage, origChat *response.TgC
 	keyboard := &api.TgInlineKeyboardMarkup{
 		InlineKeyboard: [][]api.TgInlineKeyboardButton{
 			{
-				{Text: "💳 Donate via NOWPayments", URL: "https://nowpayments.io/donation/sociallinkbot"},
+				{Text: "🪙 Donate via NOWPayments", URL: "https://nowpayments.io/donation/sociallinkbot"},
 			},
 			{
 				{Text: "◀️ Back to Menu", CallbackData: "/help"},
