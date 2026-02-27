@@ -23,6 +23,7 @@ const (
 	MethodBrowser
 	MethodFixedLink
 	MethodStoriesAPI
+	MethodRedditAPI
 	MethodNone
 )
 
@@ -186,7 +187,7 @@ func GetExtractionStrategy(url string) *ExtractionStrategy {
 	}
 	
 	
-	// Reddit: yt-dlp works well for video posts, browser fallback for images
+	// Reddit: JSON API via proxy first, then yt-dlp and browser fallback
 	if strings.Contains(url, "reddit.com") {
 		if !config.IsRedditEnabled() {
 			return &ExtractionStrategy{
@@ -198,6 +199,7 @@ func GetExtractionStrategy(url string) *ExtractionStrategy {
 		return &ExtractionStrategy{
 			Platform: "reddit",
 			Methods: []ExtractionMethod{
+				MethodRedditAPI,
 				MethodYtDlp,
 				MethodBrowser,
 			},
@@ -310,6 +312,8 @@ func (es *ExtractionStrategy) LogStrategy() {
 			methodNames[i] = "fixed-link"
 		case MethodStoriesAPI:
 			methodNames[i] = "stories-api"
+		case MethodRedditAPI:
+			methodNames[i] = "reddit-api"
 		default:
 			methodNames[i] = "unknown"
 		}

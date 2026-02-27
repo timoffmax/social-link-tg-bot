@@ -22,6 +22,7 @@ type SmartDownloader struct {
 	browser  *UniversalBrowserExtractor
 	embedez  *EmbedezExtractor
 	stories  *InstagramStoriesExtractor
+	reddit   *RedditExtractor
 	tempDir  string
 	workingDir string
 }
@@ -42,6 +43,7 @@ func NewSmartDownloader() *SmartDownloader {
 		browser:    NewUniversalBrowserExtractor(workingDir, tempDir),
 		embedez:    NewEmbedezExtractor(),
 		stories:    NewInstagramStoriesExtractor(tempDir),
+		reddit:     NewRedditExtractor(tempDir),
 		tempDir:    tempDir,
 		workingDir: workingDir,
 	}
@@ -263,6 +265,26 @@ func (sd *SmartDownloader) executeStrategy(
 
 		log.Printf("❌ Stories API extraction failed: %v", err)
 		LogExtraction(strategy.Platform, mediaURL, "stories-api", false, 0, methodDuration)
+		return nil, err
+
+	case MethodRedditAPI:
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+
+		log.Printf("🟠 Trying Reddit JSON API extraction")
+		mediaInfos, err := sd.reddit.ExtractRedditPost(mediaURL)
+		methodDuration := time.Since(methodStartTime)
+
+		if (err == nil) && (len(mediaInfos) > 0) {
+			log.Printf("✅ Reddit API extraction succeeded with %d items", len(mediaInfos))
+			LogExtraction(strategy.Platform, mediaURL, "reddit-api", true, len(mediaInfos), time.Since(overallStart))
+			appendOriginalURL(mediaInfos, mediaURL)
+			return mediaInfos, nil
+		}
+
+		log.Printf("❌ Reddit API extraction failed: %v", err)
+		LogExtraction(strategy.Platform, mediaURL, "reddit-api", false, 0, methodDuration)
 		return nil, err
 
 	case MethodFixedLink:
