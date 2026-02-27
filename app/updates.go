@@ -1820,6 +1820,10 @@ func handleBotCommand(origMessage *response.TgMessage, origChat *response.TgChat
 		handleBroadcastCommand(origMessage, origChat, origUser)
 	case "/donate":
 		handleDonateCommand(origMessage, origChat, origUser)
+	case "/report":
+		handleReportCommand(origMessage, origChat, origUser)
+	case "/reply":
+		handleReplyCommand(origMessage, origChat, origUser)
 	default:
 		// Unknown command - ignore it
 		log.Printf("🚫 Ignoring unknown command: %s from user %d", command, origUser.Id)
@@ -4045,6 +4049,9 @@ func createOwnerMenuKeyboard() *api.TgInlineKeyboardMarkup {
 				{Text: "📢 Broadcast", CallbackData: "/owner_broadcast"},
 			},
 			{
+				{Text: "🐛 Reports", CallbackData: "/owner_reports"},
+			},
+			{
 				{Text: "📊 Admin Stats", CallbackData: "/owner_adminstats"},
 				{Text: "📋 Admin Chats", CallbackData: "/owner_adminchats"},
 			},
@@ -4070,6 +4077,8 @@ func handleOwnerCallback(callbackQuery *response.TgCallbackQuery) {
 		showBlogList(chatID, messageID)
 	case "/owner_broadcast":
 		showBroadcastPostList(chatID, messageID)
+	case "/owner_reports":
+		handleReportsCallback(chatID, messageID)
 	case "/owner_adminstats":
 		fakeMessage := response.TgMessage{
 			MessageId: messageID,
@@ -4680,6 +4689,204 @@ func executeBroadcast(chatID int64, messageID int, postID int, audience string) 
 		editMessage(chatID, messageID, resultText, createBackToBroadcastKeyboard(postID))
 		log.Printf("📢 Broadcast to groups complete: %d sent, %d failed", sent, failed)
 	}
+}
+
+// handleReportCommand handles /report command - forwards user feedback to the bot owner
+func handleReportCommand(origMessage *response.TgMessage, origChat *response.TgChat, origUser *response.TgUser) {
+	adminUserID := config.GetAdminUserID()
+	if adminUserID == 0 {
+		return
+	}
+
+	// Parse report text after "/report "
+	reportText := ""
+	if idx := strings.Index(origMessage.Text, " "); idx >= 0 {
+		reportText = strings.TrimSpace(origMessage.Text[idx+1:])
+	}
+
+	if reportText == "" {
+		msg := payload.TgPlSendMessage{
+			ChatId:              origChat.Id,
+			ParseMode:           payload.ParseModeHTML,
+			Text:                "🐛 <b>Report an issue</b>\n\nUsage: <code>/report your message here</code>\n\nDescribe the problem — include the link that didn't work and what happened.\n\n<i>Example:</i>\n<code>/report Instagram reel link doesn't download: https://...</code>",
+			ReplyToMessageId:    origMessage.MessageId,
+			DisableNotification: true,
+		}
+
+		message.NewSendMessage(msg)
+		return
+	}
+
+	// Build report message for the owner
+	var report strings.Builder
+	report.WriteString("🐛 <b>New Report</b>\n\n")
+	report.WriteString(fmt.Sprintf("👤 From: %s", html.EscapeString(origUser.FirstName)))
+
+	if origUser.LastName != "" {
+		report.WriteString(fmt.Sprintf(" %s", html.EscapeString(origUser.LastName)))
+	}
+
+	if origUser.Username != "" {
+		report.WriteString(fmt.Sprintf(" (@%s)", origUser.Username))
+	}
+
+	report.WriteString(fmt.Sprintf("\n🆔 User ID: <code>%d</code>\n", origUser.Id))
+
+	if origChat.Type != "private" {
+		report.WriteString(fmt.Sprintf("💬 Chat: %s (<code>%d</code>)\n", html.EscapeString(origChat.Title), origChat.Id))
+	}
+
+	report.WriteString(fmt.Sprintf("\n📝 <b>Message:</b>\n%s", html.EscapeString(reportText)))
+
+	// Save to database
+	chatTitle := origChat.Title
+	if origChat.Type == "private" {
+		chatTitle = "Private Chat"
+	}
+
+	reportID, dbErr := services.CreateReport(int64(origUser.Id), origUser.Username, origUser.FirstName, origChat.Id, chatTitle, reportText)
+	if dbErr != nil {
+		log.Printf("❌ Failed to save report to DB: %v", dbErr)
+	} else {
+		report.WriteString(fmt.Sprintf("\n\n📌 Report ID: <code>#%d</code>", reportID))
+		report.WriteString(fmt.Sprintf("\n💬 Reply: <code>/reply %d your answer</code>", reportID))
+	}
+
+	// Send to owner
+	ownerMsg := payload.TgPlSendMessage{
+		ChatId:                adminUserID,
+		ParseMode:             payload.ParseModeHTML,
+		Text:                  report.String(),
+		DisableWebPagePreview: true,
+	}
+
+	message.NewSendMessage(ownerMsg)
+
+	// Confirm to user
+	confirmMsg := payload.TgPlSendMessage{
+		ChatId:              origChat.Id,
+		ParseMode:           payload.ParseModeHTML,
+		Text:                "✅ Your report has been sent to the developer. Thank you!",
+		ReplyToMessageId:    origMessage.MessageId,
+		DisableNotification: true,
+	}
+
+	message.NewSendMessage(confirmMsg)
+	log.Printf("🐛 Report #%d from user %d: %s", reportID, origUser.Id, reportText)
+}
+
+// handleReplyCommand handles /reply command - owner replies to a report
+func handleReplyCommand(origMessage *response.TgMessage, origChat *response.TgChat, origUser *response.TgUser) {
+	if !isOwner(origUser.Id) {
+		return
+	}
+
+	// Parse: /reply <report_id> <text>
+	args := strings.Fields(origMessage.Text)
+	if len(args) < 3 {
+		msg := payload.TgPlSendMessage{
+			ChatId:    origChat.Id,
+			ParseMode: payload.ParseModeHTML,
+			Text:      "Usage: <code>/reply [report_id] your answer</code>",
+		}
+
+		message.NewSendMessage(msg)
+		return
+	}
+
+	reportID, err := strconv.Atoi(args[1])
+	if err != nil {
+		msg := payload.TgPlSendMessage{
+			ChatId:    origChat.Id,
+			ParseMode: payload.ParseModeHTML,
+			Text:      "Invalid report ID.",
+		}
+
+		message.NewSendMessage(msg)
+		return
+	}
+
+	report, err := services.GetReport(reportID)
+	if err != nil {
+		msg := payload.TgPlSendMessage{
+			ChatId:    origChat.Id,
+			ParseMode: payload.ParseModeHTML,
+			Text:      fmt.Sprintf("Report #%d not found.", reportID),
+		}
+
+		message.NewSendMessage(msg)
+		return
+	}
+
+	// Extract reply text (everything after "/reply <id> ")
+	replyText := strings.TrimSpace(origMessage.Text[len(args[0])+len(args[1])+2:])
+
+	// Send reply to the user
+	userMsg := payload.TgPlSendMessage{
+		ChatId:    report.UserID,
+		ParseMode: payload.ParseModeHTML,
+		Text:      fmt.Sprintf("💬 <b>Reply from the developer:</b>\n\n%s", replyText),
+	}
+
+	message.NewSendMessage(userMsg)
+
+	// Mark as resolved
+	services.ResolveReport(reportID)
+
+	// Confirm to owner
+	confirmMsg := payload.TgPlSendMessage{
+		ChatId:    origChat.Id,
+		ParseMode: payload.ParseModeHTML,
+		Text:      fmt.Sprintf("✅ Reply sent to user %d (report #%d resolved).", report.UserID, reportID),
+	}
+
+	message.NewSendMessage(confirmMsg)
+	log.Printf("💬 Owner replied to report #%d (user %d)", reportID, report.UserID)
+}
+
+// handleReportsCallback shows open reports in owner panel
+func handleReportsCallback(chatID int64, messageID int) {
+	reports, err := services.GetOpenReports()
+	if err != nil {
+		log.Printf("❌ Failed to get reports: %v", err)
+		return
+	}
+
+	var text strings.Builder
+	text.WriteString("🐛 <b>Open Reports</b>\n\n")
+
+	if len(reports) == 0 {
+		text.WriteString("<i>No open reports.</i>\n")
+	}
+
+	for _, r := range reports {
+		text.WriteString(fmt.Sprintf("<b>#%d</b> ", r.ID))
+		text.WriteString(fmt.Sprintf("from %s", html.EscapeString(r.FirstName)))
+
+		if r.Username != "" {
+			text.WriteString(fmt.Sprintf(" (@%s)", r.Username))
+		}
+
+		text.WriteString(fmt.Sprintf("\n📅 %s\n", r.CreatedAt.Format("2006-01-02 15:04")))
+
+		msg := r.Message
+		if len(msg) > 100 {
+			msg = msg[:100] + "..."
+		}
+
+		text.WriteString(fmt.Sprintf("📝 %s\n", html.EscapeString(msg)))
+		text.WriteString(fmt.Sprintf("💬 <code>/reply %d your answer</code>\n\n", r.ID))
+	}
+
+	keyboard := &api.TgInlineKeyboardMarkup{
+		InlineKeyboard: [][]api.TgInlineKeyboardButton{
+			{
+				{Text: "⬅️ Back to Owner", CallbackData: "/owner"},
+			},
+		},
+	}
+
+	editMessage(chatID, messageID, text.String(), keyboard)
 }
 
 // createBackToBroadcastKeyboard creates a back button keyboard

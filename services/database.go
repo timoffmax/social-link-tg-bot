@@ -806,6 +806,86 @@ func GetAllChatsWithStats(period string) ([]ChatStats, error) {
 	return result, nil
 }
 
+// Report represents a user report
+type Report struct {
+	ID        int
+	UserID    int64
+	Username  string
+	FirstName string
+	ChatID    int64
+	ChatTitle string
+	Message   string
+	Resolved  bool
+	CreatedAt time.Time
+}
+
+// CreateReport saves a user report to the database
+func CreateReport(userID int64, username, firstName string, chatID int64, chatTitle, msg string) (int, error) {
+	if !IsDBInitialized() {
+		return 0, fmt.Errorf("database not initialized")
+	}
+
+	var id int
+	query := `INSERT INTO reports (user_id, username, first_name, chat_id, chat_title, message) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`
+	err := GetDB().QueryRow(query, userID, username, firstName, chatID, chatTitle, msg).Scan(&id)
+
+	return id, err
+}
+
+// GetOpenReports returns all unresolved reports
+func GetOpenReports() ([]*Report, error) {
+	if !IsDBInitialized() {
+		return nil, nil
+	}
+
+	query := `SELECT id, user_id, username, first_name, chat_id, chat_title, message, resolved, created_at FROM reports WHERE resolved = false ORDER BY created_at DESC`
+	rows, err := GetDB().Query(query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var result []*Report
+	for rows.Next() {
+		var r Report
+		if err := rows.Scan(&r.ID, &r.UserID, &r.Username, &r.FirstName, &r.ChatID, &r.ChatTitle, &r.Message, &r.Resolved, &r.CreatedAt); err != nil {
+			return nil, err
+		}
+		result = append(result, &r)
+	}
+
+	return result, nil
+}
+
+// GetReport returns a single report by ID
+func GetReport(id int) (*Report, error) {
+	if !IsDBInitialized() {
+		return nil, fmt.Errorf("database not initialized")
+	}
+
+	var r Report
+	query := `SELECT id, user_id, username, first_name, chat_id, chat_title, message, resolved, created_at FROM reports WHERE id = $1`
+	err := GetDB().QueryRow(query, id).Scan(&r.ID, &r.UserID, &r.Username, &r.FirstName, &r.ChatID, &r.ChatTitle, &r.Message, &r.Resolved, &r.CreatedAt)
+
+	if err == sql.ErrNoRows {
+		return nil, fmt.Errorf("report %d not found", id)
+	}
+
+	return &r, err
+}
+
+// ResolveReport marks a report as resolved
+func ResolveReport(id int) error {
+	if !IsDBInitialized() {
+		return fmt.Errorf("database not initialized")
+	}
+
+	query := `UPDATE reports SET resolved = true WHERE id = $1`
+	_, err := GetDB().Exec(query, id)
+
+	return err
+}
+
 // BlogPost represents a blog post
 type BlogPost struct {
 	ID        int
