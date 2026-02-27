@@ -1801,6 +1801,8 @@ func handleBotCommand(origMessage *response.TgMessage, origChat *response.TgChat
 		handleSetGroupTimezoneCommand(origMessage, origChat, origUser)
 	case "/adminstats":
 		handleAdminStatsCommand(origMessage, origChat, origUser)
+	case "/donate":
+		handleDonateCommand(origMessage, origChat, origUser)
 	default:
 		// Unknown command - ignore it
 		log.Printf("🚫 Ignoring unknown command: %s from user %d", command, origUser.Id)
@@ -1835,7 +1837,8 @@ func handleStartCommand(origMessage *response.TgMessage, origChat *response.TgCh
 	menuText.WriteString("• /stats [period] - View media statistics\n")
 	menuText.WriteString("  <i>Periods: today, week, month, year</i>\n")
 	menuText.WriteString("• /mylimit - Check your daily media limit\n")
-	
+	menuText.WriteString("• /donate - Support the bot development\n")
+
 	// Admin commands (only in groups)
 	if isGroupChat {
 		menuText.WriteString("\n👮 <b>Admin Commands:</b>\n")
@@ -1863,6 +1866,30 @@ func handleStartCommand(origMessage *response.TgMessage, origChat *response.TgCh
 	
 	message.NewSendMessage(helpMsg)
 	log.Printf("✅ Sent interactive help/start message to user %d", origUser.Id)
+}
+
+// handleDonateCommand handles the /donate command
+func handleDonateCommand(origMessage *response.TgMessage, origChat *response.TgChat, origUser *response.TgUser) {
+	var text strings.Builder
+
+	text.WriteString("💚 <b>Support Social Link Bot</b>\n\n")
+	text.WriteString("If you find this bot useful, consider supporting its development!\n\n")
+	text.WriteString("💰 <b>USDT (ERC-20):</b>\n")
+	text.WriteString("<code>0xb3D102eA95Bf2376619730b8f3149131cc3F951B</code>\n\n")
+	text.WriteString("💰 <b>USDT (TRC-20):</b>\n")
+	text.WriteString("<code>TWRfDPJ1TFUYJj47JcghvTEBnKcZWqgqcz</code>\n\n")
+	text.WriteString("<i>Tap the address to copy it. Thank you!</i> 🙏")
+
+	donateMsg := payload.TgPlSendMessage{
+		ChatId:              origChat.Id,
+		ParseMode:           payload.ParseModeHTML,
+		Text:                text.String(),
+		ReplyToMessageId:    origMessage.MessageId,
+		DisableNotification: true,
+	}
+
+	message.NewSendMessage(donateMsg)
+	log.Printf("💚 Sent donate info to user %d", origUser.Id)
 }
 
 // handleStatsCommand handles /stats command with actual database functionality
@@ -2733,7 +2760,12 @@ func createMainMenuKeyboard(isGroupChat bool) *api.TgInlineKeyboardMarkup {
 		})
 	}
 	
-	// Fifth row - Help (refresh menu)
+	// Donate row
+	buttons = append(buttons, []api.TgInlineKeyboardButton{
+		{Text: "💚 Donate (USDT)", CallbackData: "/donate"},
+	})
+
+	// Last row - Help (refresh menu)
 	buttons = append(buttons, []api.TgInlineKeyboardButton{
 		{Text: "🔄 Refresh Menu", CallbackData: "/help"},
 	})
@@ -2761,6 +2793,8 @@ func handleCallbackQuery(callbackQuery *response.TgCallbackQuery) {
 		handleStatsCommand(&fakeMessage, &callbackQuery.Message.Chat, &callbackQuery.From)
 	} else if strings.HasPrefix(callbackQuery.Data, "/mylimit") {
 		handleMyLimitCommand(&fakeMessage, &callbackQuery.Message.Chat, &callbackQuery.From)
+	} else if callbackQuery.Data == "/donate" {
+		handleDonateCommand(&fakeMessage, &callbackQuery.Message.Chat, &callbackQuery.From)
 	} else if strings.HasPrefix(callbackQuery.Data, "/help") {
 		handleStartCommand(&fakeMessage, &callbackQuery.Message.Chat, &callbackQuery.From)
 	} else if callbackQuery.Data == "/setlimit_start" {
