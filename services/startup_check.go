@@ -211,7 +211,7 @@ func (sc *StartupChecker) printPlatformSupport() {
 		{
 			Name:      "🎵 TikTok",
 			Supported: []string{"Videos", "Photo Slideshows"},
-			FixedLink: "vxtiktok.com",
+			FixedLink: "tiktxk.com",
 		},
 		{
 			Name:      "🐦 Twitter/X",

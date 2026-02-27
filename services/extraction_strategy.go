@@ -119,7 +119,7 @@ func GetExtractionStrategy(url string) *ExtractionStrategy {
 					MethodFixedLink,
 				},
 				HasFixedLink: true,
-				FixedLinkDomain: "vxtiktok.com",
+				FixedLinkDomain: "tiktxk.com",
 			}
 		}
 		// Regular videos: yt-dlp first, then fixed link for fallback
@@ -130,7 +130,7 @@ func GetExtractionStrategy(url string) *ExtractionStrategy {
 				MethodFixedLink,
 			},
 			HasFixedLink: true,
-			FixedLinkDomain: "vxtiktok.com",
+			FixedLinkDomain: "tiktxk.com",
 		}
 	}
 	

@@ -3,18 +3,39 @@ package services
 import (
 	"compress/gzip"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
-	
+
 	"github.com/chromedp/chromedp"
 )
+
+// tikwmResponse represents the tikwm.com API response
+type tikwmResponse struct {
+	Code int    `json:"code"`
+	Msg  string `json:"msg"`
+	Data struct {
+		ID       string `json:"id"`
+		Title    string `json:"title"`
+		Duration int    `json:"duration"`
+		Play     string `json:"play"`
+		Images   []struct {
+			URL string `json:"url"`
+		} `json:"images"`
+		Author struct {
+			UniqueID string `json:"unique_id"`
+			Nickname string `json:"nickname"`
+		} `json:"author"`
+	} `json:"data"`
+}
 
 type TikTokExtractor struct {
 	client     *http.Client
@@ -57,7 +78,7 @@ func (te *TikTokExtractor) ExtractTikTokPost(tiktokURL string) ([]*MediaInfo, er
 	methods := []func(string, string, string) ([]*MediaInfo, error){
 		te.extractViaDirectScraping,
 		te.extractViaSlideshowAPI,
-		te.extractViaVxTikTokProxy,
+		te.extractViaTikWMAPI,
 		te.extractViaHeadlessBrowser,
 		te.extractViaSimpleTextFallback,
 	}
@@ -273,41 +294,81 @@ func (te *TikTokExtractor) extractViaSlideshowAPI(tiktokURL string, postID strin
 	return nil, fmt.Errorf("all TikTok API endpoints failed")
 }
 
-func (te *TikTokExtractor) extractViaVxTikTokProxy(tiktokURL string, postID string, username string) ([]*MediaInfo, error) {
-	log.Printf("🔄 Trying vxtiktok.com extraction for post %s by @%s", postID, username)
-	
-	// Convert to vxtiktok URL
-	vxURL := strings.Replace(tiktokURL, "tiktok.com", "vxtiktok.com", 1)
-	vxURL = strings.Replace(vxURL, "vm.tiktok.com", "vm.vxtiktok.com", 1)
-	
-	// Create request
-	req, err := http.NewRequest("GET", vxURL, nil)
+func (te *TikTokExtractor) extractViaTikWMAPI(tiktokURL string, postID string, username string) ([]*MediaInfo, error) {
+	log.Printf("🔄 Trying tikwm.com API extraction for post %s by @%s", postID, username)
+
+	resp, err := te.client.PostForm("https://www.tikwm.com/api/", url.Values{
+		"url": {tiktokURL},
+	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to create vxtiktok request: %v", err)
-	}
-	
-	req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; TikTokBot/1.0)")
-	
-	resp, err := te.client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to fetch vxtiktok page: %v", err)
+		return nil, fmt.Errorf("tikwm API request failed: %v", err)
 	}
 	defer resp.Body.Close()
-	
+
 	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("vxtiktok HTTP %d: %s", resp.StatusCode, resp.Status)
+		return nil, fmt.Errorf("tikwm API HTTP %d", resp.StatusCode)
 	}
-	
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read vxtiktok response: %v", err)
+
+	var apiResp tikwmResponse
+
+	if err := json.NewDecoder(resp.Body).Decode(&apiResp); err != nil {
+		return nil, fmt.Errorf("failed to decode tikwm response: %v", err)
 	}
-	
-	bodyStr := string(body)
-	log.Printf("🔍 VxTikTok response length: %d bytes", len(bodyStr))
-	
-	// Parse vxtiktok HTML for media
-	return te.parseVxTikTokHTML(bodyStr, postID, username)
+
+	if apiResp.Code != 0 {
+		return nil, fmt.Errorf("tikwm API error: %s", apiResp.Msg)
+	}
+
+	// Build caption
+	displayName := apiResp.Data.Author.Nickname
+	authorUsername := apiResp.Data.Author.UniqueID
+
+	if authorUsername == "" {
+		authorUsername = username
+	}
+
+	caption := strings.TrimRight(FormatAuthorCaption("tiktok", displayName, authorUsername, apiResp.Data.Title), "\n")
+
+	var mediaInfos []*MediaInfo
+
+	// Check if it's a photo slideshow
+	if len(apiResp.Data.Images) > 0 {
+		log.Printf("📸 tikwm: Found %d slideshow images", len(apiResp.Data.Images))
+
+		for i, img := range apiResp.Data.Images {
+			mediaInfo, err := te.downloadMedia(img.URL, postID, i)
+			if err != nil {
+				log.Printf("⚠️ Failed to download tikwm image %d: %v", i, err)
+				continue
+			}
+
+			if i == 0 {
+				mediaInfo.Caption = caption
+			}
+
+			mediaInfo.URL = tiktokURL
+			mediaInfos = append(mediaInfos, mediaInfo)
+		}
+	} else if apiResp.Data.Play != "" {
+		log.Printf("🎥 tikwm: Found video URL: %s", apiResp.Data.Play)
+
+		mediaInfo, err := te.downloadMedia(apiResp.Data.Play, postID, 0)
+		if err != nil {
+			return nil, fmt.Errorf("failed to download tikwm video: %v", err)
+		}
+
+		mediaInfo.Caption = caption
+		mediaInfo.URL = tiktokURL
+		mediaInfos = append(mediaInfos, mediaInfo)
+	}
+
+	if len(mediaInfos) == 0 {
+		return nil, fmt.Errorf("no media found in tikwm response")
+	}
+
+	log.Printf("✅ tikwm: Successfully extracted %d media items", len(mediaInfos))
+
+	return mediaInfos, nil
 }
 
 func (te *TikTokExtractor) extractViaHeadlessBrowser(tiktokURL string, postID string, username string) ([]*MediaInfo, error) {
@@ -550,18 +611,14 @@ func (te *TikTokExtractor) extractSlideshowFromHTML(html string, postID string, 
 
 func (te *TikTokExtractor) extractViaSimpleTextFallback(tiktokURL string, postID string, username string) ([]*MediaInfo, error) {
 	log.Printf("📝 Trying simple text fallback for TikTok post %s by @%s", postID, username)
-	
-	// As a last resort, just return a message with the vxtiktok link
-	vxURL := strings.Replace(tiktokURL, "tiktok.com", "vxtiktok.com", 1)
-	vxURL = strings.Replace(vxURL, "vm.tiktok.com", "vm.vxtiktok.com", 1)
-	
+
 	textMediaInfo := &MediaInfo{
-		Type:    "text",
-		URL:     tiktokURL,
-		Caption: fmt.Sprintf("🎵 TikTok content (photos may be available): %s", vxURL),
+		Type:     "text",
+		URL:      tiktokURL,
+		Caption:  fmt.Sprintf("🎵 TikTok content: %s", tiktokURL),
 		Filename: "",
 	}
-	
+
 	return []*MediaInfo{textMediaInfo}, nil
 }
 
@@ -648,7 +705,7 @@ func (te *TikTokExtractor) parseHTMLForMedia(html string, postID string, usernam
 	}
 	
 	// If video downloads failed (e.g. 403), do NOT fall back to cover images.
-	// Return empty to let the next extraction method (e.g. vxTikTok proxy) try instead.
+	// Return empty to let the next extraction method (e.g. tikwm API) try instead.
 	if len(mediaInfos) == 0 && len(videoURLs) > 0 {
 		log.Printf("❌ Video downloads failed (likely 403), skipping image fallback to try next method")
 		return nil, fmt.Errorf("video downloads failed, letting next extraction method try")
@@ -658,49 +715,6 @@ func (te *TikTokExtractor) parseHTMLForMedia(html string, postID string, usernam
 	if len(mediaInfos) == 0 {
 		log.Printf("📝 No TikTok media found, returning empty for fallback")
 		return nil, fmt.Errorf("no media extracted from TikTok post")
-	}
-	
-	return mediaInfos, nil
-}
-
-func (te *TikTokExtractor) parseVxTikTokHTML(html string, postID string, username string) ([]*MediaInfo, error) {
-	log.Printf("🔍 Parsing VxTikTok HTML for slideshow images")
-	
-	var mediaInfos []*MediaInfo
-	
-	// Extract post text from vxtiktok HTML
-	postText := te.extractTextFromVxTikTok(html)
-	log.Printf("📝 Extracted VxTikTok text: %.200s", postText)
-	
-	// Look for vxtiktok-specific media patterns
-	mediaURLs := te.extractVxTikTokMediaURLs(html)
-	log.Printf("📸 Extracted %d VxTikTok media URLs: %v", len(mediaURLs), mediaURLs)
-	
-	// Download each media item
-	for i, mediaURL := range mediaURLs {
-		mediaInfo, err := te.downloadMedia(mediaURL, postID, i)
-		if err != nil {
-			log.Printf("⚠️ Failed to download VxTikTok media %d: %v", i, err)
-			continue
-		}
-		
-		// Use post text as caption
-		if postText != "" {
-			mediaInfo.Caption = postText
-		} else if mediaInfo.Caption == "" {
-			// Only set default caption for the first media item
-			if i == 0 {
-				mediaInfo.Caption = "🎵 TikTok"
-			}
-		}
-		
-		mediaInfos = append(mediaInfos, mediaInfo)
-	}
-	
-	// If no media found, return empty (let fallback handle it)
-	if len(mediaInfos) == 0 {
-		log.Printf("📝 No VxTikTok media found, returning empty for fallback")
-		return nil, fmt.Errorf("no media extracted from VxTikTok")
 	}
 	
 	return mediaInfos, nil
@@ -1557,129 +1571,6 @@ func (te *TikTokExtractor) addCookiesToRequest(req *http.Request) {
 	}
 	
 	log.Printf("🍪 Added TikTok cookies to request")
-}
-
-func (te *TikTokExtractor) extractTextFromVxTikTok(html string) string {
-	// VxTikTok-specific patterns for text extraction
-	patterns := []string{
-		// Meta tags
-		`<meta[^>]*property="og:description"[^>]*content="([^"]*)"`,
-		`<meta[^>]*name="description"[^>]*content="([^"]*)"`,
-		`<meta[^>]*property="og:title"[^>]*content="([^"]*)"`,
-		
-		// VxTikTok specific elements
-		`<title[^>]*>([^<]*?)(?: - vxtiktok| on TikTok|$)</title>`,
-		`<div[^>]*class="[^"]*caption[^"]*"[^>]*>(.*?)</div>`,
-		`<p[^>]*class="[^"]*description[^"]*"[^>]*>(.*?)</p>`,
-		
-		// JSON embedded in script tags
-		`"desc":"([^"]*)"`,
-		`"description":"([^"]*)"`,
-		`"title":"([^"]*)"`,
-	}
-	
-	for _, pattern := range patterns {
-		re := regexp.MustCompile(`(?s)` + pattern)
-		matches := re.FindStringSubmatch(html)
-		if len(matches) > 1 {
-			text := matches[1]
-			
-			// Clean up and decode
-			text = strings.ReplaceAll(text, `\"`, `"`)
-			text = strings.ReplaceAll(text, `\\n`, "\n")
-			text = strings.ReplaceAll(text, `\\t`, "\t")
-			text = strings.ReplaceAll(text, `\\r`, "\r")
-			
-			// Clean up HTML tags
-			text = regexp.MustCompile(`<[^>]*>`).ReplaceAllString(text, "")
-			
-			text = strings.TrimSpace(text)
-			if text != "" && text != "null" && !strings.Contains(strings.ToLower(text), "vxtiktok") && !strings.Contains(strings.ToLower(text), "company") {
-				return text
-			}
-		}
-	}
-	
-	return ""
-}
-
-func (te *TikTokExtractor) extractVxTikTokMediaURLs(html string) []string {
-	var urls []string
-	
-	// VxTikTok-specific patterns
-	patterns := []string{
-		// Direct download links from vxtiktok
-		`href="(https://[^"]*\.(?:jpg|jpeg|png|gif|webp|mp4)[^"]*)"[^>]*>(?:Download|Download Image|Save)`,
-		`<a[^>]*download[^>]*href="(https://[^"]*\.(?:jpg|jpeg|png|gif|webp|mp4)[^"]*)"`,
-		
-		// Image sources on the page
-		`<img[^>]*src="(https://[^"]*\.(?:jpg|jpeg|png|gif|webp)[^"]*)"`,
-		`<video[^>]*src="(https://[^"]*\.mp4[^"]*)"`,
-		
-		// JSON embedded URLs
-		`"imagePost"[^}]*"url":"([^"]*)"`,
-		`"images":\[[^\]]*"url":"([^"]*)"`,
-		`"url":"(https://[^"]*\.(?:tiktokcdn\.com|tiktokcdn-us\.com|muscdn\.com|vxtiktok\.com)/[^"]*\.(?:jpg|jpeg|png|gif|webp|mp4)[^"]*)"`,
-		
-		// VxTikTok proxy URLs
-		`https://[^"]*\.vxtiktok\.com/[^"]*\.(?:jpg|jpeg|png|gif|webp|mp4)`,
-	}
-	
-	for i, pattern := range patterns {
-		re := regexp.MustCompile(pattern)
-		if strings.Contains(pattern, "(") {
-			// Pattern has capture group
-			matches := re.FindAllStringSubmatch(html, -1)
-			if len(matches) > 0 {
-				log.Printf("🎯 Pattern %d matched %d times: %s", i+1, len(matches), truncateString(pattern, 50))
-			}
-			for _, match := range matches {
-				if len(match) > 1 {
-					// Special handling for array patterns like "images":[...]
-					if strings.Contains(pattern, "images\":") || strings.Contains(pattern, "imageURLs\":") {
-						// Extract URLs from JSON array
-						arrayURLs := te.extractURLsFromJSONArray(match[1])
-						urls = append(urls, arrayURLs...)
-					} else if strings.Contains(pattern, "DivPhotoVideoContainer") && strings.Contains(pattern, ">(.*?)</div>") {
-						// Extract all img src URLs from DivPhotoVideoContainer content
-						containerURLs := te.extractImagesFromContainer(match[1])
-						urls = append(urls, containerURLs...)
-					} else {
-						// Clean up URL: remove HTML entities, JSON escaping, and quotes
-						url := te.cleanURL(match[1])
-						if url != "" {
-							urls = append(urls, url)
-						}
-					}
-				}
-			}
-		} else {
-			// Pattern matches full URL
-			matches := re.FindAllString(html, -1)
-			if len(matches) > 0 {
-				log.Printf("🎯 Pattern %d matched %d times: %s", i+1, len(matches), truncateString(pattern, 50))
-			}
-			for _, match := range matches {
-				// Clean up URL: remove HTML entities, JSON escaping, and quotes
-				url := te.cleanURL(match)
-				if url != "" {
-					urls = append(urls, url)
-				}
-			}
-		}
-	}
-	
-	// Remove duplicates
-	seen := make(map[string]bool)
-	var uniqueURLs []string
-	for _, url := range urls {
-		if !seen[url] && url != "" {
-			seen[url] = true
-			uniqueURLs = append(uniqueURLs, url)
-		}
-	}
-	
-	return uniqueURLs
 }
 
 // extractDisplayNameFromHTML extracts display name from TikTok HTML using similar patterns to universal browser extractor

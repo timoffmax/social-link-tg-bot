@@ -613,7 +613,7 @@ func processMediaDownload(url string, origChat *response.TgChat, origMessage *re
 func detectPlatformFromUrl(url string) string {
 	if strings.Contains(url, "instagram.com") || strings.Contains(url, "kkinstagram.com") {
 		return "instagram"
-	} else if strings.Contains(url, "tiktok.com") || strings.Contains(url, "vxtiktok.com") {
+	} else if strings.Contains(url, "tiktok.com") || strings.Contains(url, "tiktxk.com") {
 		return "tiktok"
 	} else if strings.Contains(url, "twitter.com") || strings.Contains(url, "x.com") || strings.Contains(url, "fixupx.com") {
 		return "twitter"
@@ -978,7 +978,7 @@ func getFixedUrl(url string) string {
 	
 	// TikTok
 	if strings.Contains(url, "tiktok.com") {
-		return strings.Replace(url, "tiktok.com", "vxtiktok.com", 1)
+		return strings.Replace(url, "tiktok.com", "tiktxk.com", 1)
 	}
 	
 	// Twitter/X

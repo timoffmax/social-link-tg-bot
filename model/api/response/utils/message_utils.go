@@ -143,7 +143,7 @@ func fixInstagramLink(link string) string {
 
 func fixTikTokLink(link string) string {
 	searchFor := "tiktok"
-	replaceWith := "vxtiktok"
+	replaceWith := "tiktxk"
 	result := strings.Replace(link, searchFor, replaceWith, -1)
 
 	return result
