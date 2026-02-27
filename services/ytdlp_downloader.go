@@ -1438,10 +1438,18 @@ func (yd *YtDlpDownloader) buildDownloadArgs(url string, outputTemplate string) 
 			"--format", "bestvideo[height<=1080][filesize<50M]+bestaudio/bestvideo[height<=1080]+bestaudio/best[filesize<50M]/best",
 			"--merge-output-format", "mp4",
 			"--referer", "https://www.youtube.com/",
-			"--js-runtimes", "node",
 			"--remote-components", "ejs:github",
 		}
-		
+
+		// Add Node.js runtime with explicit path for EJS challenge solving
+		nodePath := findNodePath()
+		if nodePath != "" {
+			youtubeArgs = append(youtubeArgs, "--js-runtimes", "node:"+nodePath)
+		} else {
+			youtubeArgs = append(youtubeArgs, "--js-runtimes", "node")
+			log.Printf("⚠️ No suitable Node.js (v16+) found. YouTube EJS challenge solving may fail.")
+		}
+
 		// Strategy 1: Use server-IP authenticated cookie file (highest priority)
 		cookieSuccess := false
 		youtubeCookiesPath := yd.getFilePath("cookies/youtube_cookies.txt")
@@ -1617,6 +1625,59 @@ func (yd *YtDlpDownloader) CleanupTempFiles() error {
 
 func (yd *YtDlpDownloader) IsAvailable() bool {
 	return testYtDlpBinary(yd.BinaryPath)
+}
+
+// findNodePath locates a suitable Node.js binary (v16+) for yt-dlp EJS challenge solving.
+// Returns empty string if not found.
+func findNodePath() string {
+	workingDir, _ := os.Getwd()
+	candidates := []string{
+		filepath.Join(workingDir, "bin", "node"),
+		filepath.Join(os.Getenv("HOME"), "bin", "node"),
+		"/usr/local/bin/node",
+		"/usr/bin/node",
+	}
+
+	for _, candidate := range candidates {
+		if _, err := os.Stat(candidate); err == nil {
+			cmd := exec.Command(candidate, "--version")
+			if output, err := cmd.Output(); err == nil {
+				version := strings.TrimSpace(string(output))
+				if strings.HasPrefix(version, "v") {
+					parts := strings.Split(version[1:], ".")
+					if len(parts) > 0 {
+						major := 0
+						fmt.Sscanf(parts[0], "%d", &major)
+						if major >= 16 {
+							log.Printf("Found suitable Node.js %s at %s", version, candidate)
+							return candidate
+						}
+						log.Printf("Skipping Node.js %s at %s (too old, need v16+)", version, candidate)
+					}
+				}
+			}
+		}
+	}
+
+	if path, err := exec.LookPath("node"); err == nil {
+		cmd := exec.Command(path, "--version")
+		if output, err := cmd.Output(); err == nil {
+			version := strings.TrimSpace(string(output))
+			if strings.HasPrefix(version, "v") {
+				parts := strings.Split(version[1:], ".")
+				if len(parts) > 0 {
+					major := 0
+					fmt.Sscanf(parts[0], "%d", &major)
+					if major >= 16 {
+						log.Printf("Found suitable Node.js %s in PATH at %s", version, path)
+						return path
+					}
+				}
+			}
+		}
+	}
+
+	return ""
 }
 
 // findFFmpegPath locates the ffmpeg binary across common locations.
