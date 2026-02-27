@@ -307,9 +307,9 @@ func (re *RedditExtractor) extractMedia(post *redditPostData, originalURL string
 		return re.downloadAndReturn(imageURL, "photo", caption, originalURL)
 	}
 
-	// Text-only post
+	// Text-only post — send the selftext as a message
 	if post.IsSelf {
-		return nil, fmt.Errorf("text-only post, no media to extract")
+		return re.extractTextPost(post, caption, originalURL)
 	}
 
 	return nil, fmt.Errorf("unsupported Reddit post type (external link): %s", post.URL)
@@ -396,6 +396,33 @@ func (re *RedditExtractor) extractVideo(post *redditPostData, caption, originalU
 		URL:      originalURL,
 		Caption:  caption,
 		Filename: videoFilename,
+	}}
+
+	return result, nil
+}
+
+// extractTextPost returns the selftext content as a text message
+func (re *RedditExtractor) extractTextPost(post *redditPostData, caption, originalURL string) ([]*MediaInfo, error) {
+	text := post.Selftext
+	if text == "" {
+		text = post.Title
+	}
+
+	// Build full message: author caption + selftext
+	fullText := caption
+	if (fullText != "") && (text != "") && (text != post.Title) {
+		fullText = fullText + "\n\n" + text
+	} else if (fullText == "") && (text != "") {
+		fullText = text
+	}
+
+	log.Printf("📝 Reddit text-only post (%d chars)", len(fullText))
+
+	result := []*MediaInfo{{
+		Type:     "text",
+		URL:      originalURL,
+		Caption:  fullText,
+		Filename: "",
 	}}
 
 	return result, nil
