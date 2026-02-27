@@ -19,6 +19,7 @@ type BotCommand struct {
 // SetBotCommands sets the bot commands for the Telegram bot menu
 func SetBotCommands() error {
 	commands := []BotCommand{
+		{Command: "menu", Description: "Show main menu"},
 		{Command: "start", Description: "Show main menu and help"},
 		{Command: "help", Description: "Show main menu and help"},
 		{Command: "stats", Description: "View media statistics (today/week/month/year)"},
