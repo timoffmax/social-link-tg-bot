@@ -1836,8 +1836,8 @@ func handleStartCommand(origMessage *response.TgMessage, origChat *response.TgCh
 		menuText.WriteString("Just send me any supported link and I'll reply with the actual media file.\n\n")
 		menuText.WriteString("👥 <b>How to use in group chats:</b>\n")
 		menuText.WriteString("1. Add me to your group\n")
-		menuText.WriteString("2. Make sure <b>Group Privacy</b> is disabled via @BotFather\n")
-		menuText.WriteString("3. Anyone posts a supported link — I'll download and send the media automatically\n\n")
+		menuText.WriteString("2. Anyone posts a supported link — I'll download and send the media automatically\n")
+		menuText.WriteString("3. Group admins can manage daily limits and settings\n\n")
 	}
 
 	// Commands
