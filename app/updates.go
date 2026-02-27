@@ -375,11 +375,7 @@ func processMediaDownload(url string, origChat *response.TgChat, origMessage *re
 	stopAction := make(chan struct{})
 
 	go func() {
-		action := payload.ChatActionUploadVideo
-
-		if strings.Contains(url, "/p/") || strings.Contains(url, "/photo/") {
-			action = payload.ChatActionUploadPhoto
-		}
+		action := guessChatAction(url)
 
 		actionPayload := payload.TgPlSendChatAction{
 			ChatId: origChat.Id,
@@ -3688,15 +3684,46 @@ func handleDescriptionDisableAllCallback(callbackQuery response.TgCallbackQuery)
 	log.Printf("📝 User %d disabling descriptions for all platforms in chat %d", userID, chatID)
 	
 	platforms := []string{"instagram", "tiktok", "twitter", "youtube", "reddit", "facebook"}
-	
+
 	for _, platform := range platforms {
 		err := services.SetChatDescriptionEnabled(chatID, platform, false)
 		if err != nil {
 			log.Printf("Error disabling descriptions for platform %s: %v", platform, err)
 		}
 	}
-	
+
 	// Refresh the description settings menu
 	handleDescriptionSettingsCallback(&callbackQuery.Message.Chat, &callbackQuery.From, callbackQuery.Message.MessageId)
+}
+
+// guessChatAction picks the appropriate Telegram chat action based on the URL
+func guessChatAction(url string) string {
+	// Photo URLs
+	if strings.Contains(url, "/p/") || strings.Contains(url, "/photo/") {
+		return payload.ChatActionUploadPhoto
+	}
+
+	// Reddit: could be text, image, or video — use typing since we don't know yet
+	if strings.Contains(url, "reddit.com") {
+		return payload.ChatActionTyping
+	}
+
+	// YouTube is always video
+	if strings.Contains(url, "youtube.com") || strings.Contains(url, "youtu.be") {
+		return payload.ChatActionUploadVideo
+	}
+
+	// TikTok is mostly video
+	if strings.Contains(url, "tiktok.com") {
+		return payload.ChatActionUploadVideo
+	}
+
+	// Instagram stories/reels are video
+	if strings.Contains(url, "/reel/") || strings.Contains(url, "/reels/") || strings.Contains(url, "/stories/") {
+		return payload.ChatActionUploadVideo
+	}
+
+	// Default to upload_video for other platforms
+	return payload.ChatActionUploadVideo
 }
 
