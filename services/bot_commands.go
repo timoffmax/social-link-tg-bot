@@ -27,6 +27,7 @@ func SetBotCommands() error {
 		{Command: "setgrouplimit", Description: "Set group default limit (admin only)"},
 		{Command: "setgrouptimezone", Description: "Set group timezone (admin only)"},
 		{Command: "donate", Description: "Support the bot development (USDT)"},
+		{Command: "owner", Description: "Owner panel (owner only)"},
 	}
 
 	// Prepare the API request

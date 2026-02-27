@@ -277,6 +277,11 @@ func processUpdate(upd *response.TgUpdate) {
 		return
 	}
 
+	// Handle admin state text input (blog add/edit flows)
+	if handleAdminStateInput(&origMessage, &origChat, &origUser) {
+		return
+	}
+
 	// Get original social media links
 	socialLinks := utils.GetAllSocialLinks(&origMessage, origChat.Id)
 	
@@ -1803,6 +1808,12 @@ func handleBotCommand(origMessage *response.TgMessage, origChat *response.TgChat
 		handleSetGroupLimitCommand(origMessage, origChat, origUser)
 	case "/setgrouptimezone":
 		handleSetGroupTimezoneCommand(origMessage, origChat, origUser)
+	case "/owner":
+		handleOwnerCommand(origMessage, origChat, origUser)
+	case "/admin":
+		handleAdminCommand(origMessage, origChat, origUser)
+	case "/blog":
+		handleOwnerCommand(origMessage, origChat, origUser)
 	case "/adminstats":
 		handleAdminStatsCommand(origMessage, origChat, origUser)
 	case "/broadcast":
@@ -1871,7 +1882,7 @@ func handleStartCommand(origMessage *response.TgMessage, origChat *response.TgCh
 	menuText.WriteString("💡 <i>Tip: Just paste a link to get started!</i>")
 	
 	// Create interactive keyboard with menu buttons
-	keyboard := createMainMenuKeyboard(isGroupChat)
+	keyboard := createMainMenuKeyboard(isGroupChat, origUser.Id)
 	
 	helpMsg := payload.TgPlSendMessage{
 		ChatId:      origChat.Id,
@@ -2889,7 +2900,7 @@ func handleAdminChatsCommand(origMessage *response.TgMessage, origChat *response
 }
 
 // createMainMenuKeyboard creates the interactive main menu keyboard
-func createMainMenuKeyboard(isGroupChat bool) *api.TgInlineKeyboardMarkup {
+func createMainMenuKeyboard(isGroupChat bool, userID int) *api.TgInlineKeyboardMarkup {
 	// First row - Today and Week stats
 	buttons := [][]api.TgInlineKeyboardButton{
 		{
@@ -2897,21 +2908,21 @@ func createMainMenuKeyboard(isGroupChat bool) *api.TgInlineKeyboardMarkup {
 			{Text: "📊 Week Stats", CallbackData: "/stats week"},
 		},
 	}
-	
+
 	// Second row - Month and Year stats
 	buttons = append(buttons, []api.TgInlineKeyboardButton{
 		{Text: "📉 Month Stats", CallbackData: "/stats month"},
 		{Text: "📋 Year Stats", CallbackData: "/stats year"},
 	})
-	
+
 	// Third row - User actions
 	if isGroupChat {
 		// Group chat - show user limit check
 		buttons = append(buttons, []api.TgInlineKeyboardButton{
 			{Text: "🚫 My Limit", CallbackData: "/mylimit"},
 		})
-		
-		// Fourth row - Admin actions
+
+		// Group admin actions
 		buttons = append(buttons, []api.TgInlineKeyboardButton{
 			{Text: "👮 Set User Limit", CallbackData: "/setlimit_start"},
 			{Text: "🏢 Group Settings", CallbackData: "/group_settings"},
@@ -2922,7 +2933,14 @@ func createMainMenuKeyboard(isGroupChat bool) *api.TgInlineKeyboardMarkup {
 			{Text: "🚫 My Limit", CallbackData: "/mylimit"},
 		})
 	}
-	
+
+	// Owner panel button (only for the bot owner)
+	if isOwner(userID) {
+		buttons = append(buttons, []api.TgInlineKeyboardButton{
+			{Text: "🔧 Owner Panel", CallbackData: "/owner"},
+		})
+	}
+
 	// Donate row
 	buttons = append(buttons, []api.TgInlineKeyboardButton{
 		{Text: "💚 Donate (USDT)", CallbackData: "/donate"},
@@ -2932,7 +2950,7 @@ func createMainMenuKeyboard(isGroupChat bool) *api.TgInlineKeyboardMarkup {
 	buttons = append(buttons, []api.TgInlineKeyboardButton{
 		{Text: "🔄 Refresh Menu", CallbackData: "/help"},
 	})
-	
+
 	return &api.TgInlineKeyboardMarkup{
 		InlineKeyboard: buttons,
 	}
@@ -2988,10 +3006,16 @@ func handleCallbackQuery(callbackQuery *response.TgCallbackQuery) {
 		handleDescriptionEnableAllCallback(*callbackQuery)
 	} else if callbackQuery.Data == "/description_disable_all" {
 		handleDescriptionDisableAllCallback(*callbackQuery)
+	} else if strings.HasPrefix(callbackQuery.Data, "/owner") {
+		handleOwnerCallback(callbackQuery)
+	} else if strings.HasPrefix(callbackQuery.Data, "/blog_") {
+		handleBlogCallback(callbackQuery)
+	} else if strings.HasPrefix(callbackQuery.Data, "/broadcast_") {
+		handleBroadcastCallback(callbackQuery)
 	} else {
 		log.Printf("🤷 Unknown callback query: %s", callbackQuery.Data)
 	}
-	
+
 	// Answer the callback query to remove the loading state
 	answerCallbackQuery(callbackQuery.Id)
 }
@@ -3405,9 +3429,9 @@ func handleSetTimezoneCallback(callbackQuery *response.TgCallbackQuery) {
 
 // answerCallbackQuery sends an answer to a callback query
 func answerCallbackQuery(callbackQueryId string) {
-	// For now, we'll just log this since we need to implement the answerCallbackQuery API method
-	log.Printf("📱 Answering callback query: %s", callbackQueryId)
-	// TODO: Implement message.NewAnswerCallbackQuery when the API method is available
+	message.NewAnswerCallbackQuery(payload.TgPlAnswerCallbackQuery{
+		CallbackQueryId: callbackQueryId,
+	})
 }
 
 // shouldEnforceLimit checks if a user has exceeded their daily media limit
@@ -3927,5 +3951,748 @@ func guessChatAction(url string) string {
 
 	// Default to upload_video for other platforms
 	return payload.ChatActionUploadVideo
+}
+
+// isOwner checks if the user is the bot owner
+func isOwner(userID int) bool {
+	adminUserID := config.GetAdminUserID()
+
+	return (adminUserID != 0) && (int64(userID) == adminUserID)
+}
+
+// editMessage edits an existing message using editMessageText API
+func editMessage(chatID int64, messageID int, text string, keyboard *api.TgInlineKeyboardMarkup) {
+	editPayload := payload.TgPlEditMessageText{
+		ChatId:    chatID,
+		MessageId: messageID,
+		Text:      text,
+		ParseMode: payload.ParseModeHTML,
+	}
+
+	if keyboard != nil {
+		editPayload.ReplyMarkup = keyboard
+	}
+
+	message.NewEditMessageText(editPayload)
+}
+
+// handleOwnerCommand handles /owner command - shows owner-only panel
+func handleOwnerCommand(origMessage *response.TgMessage, origChat *response.TgChat, origUser *response.TgUser) {
+	if !isOwner(origUser.Id) {
+		return
+	}
+
+	text := "🔧 <b>Owner Panel</b>\n\nChoose an action:"
+	keyboard := createOwnerMenuKeyboard()
+
+	msg := payload.TgPlSendMessage{
+		ChatId:    origChat.Id,
+		ParseMode: payload.ParseModeHTML,
+		Text:      text,
+		ReplyMarkup: keyboard,
+	}
+
+	message.NewSendMessage(msg)
+}
+
+// handleAdminCommand handles /admin command - shows group admin panel
+func handleAdminCommand(origMessage *response.TgMessage, origChat *response.TgChat, origUser *response.TgUser) {
+	if origChat.Type == "private" {
+		msg := payload.TgPlSendMessage{
+			ChatId:    origChat.Id,
+			ParseMode: payload.ParseModeHTML,
+			Text:      "This command is only available in group chats.",
+		}
+
+		message.NewSendMessage(msg)
+		return
+	}
+
+	text := "👥 <b>Group Admin Panel</b>\n\nManage group settings:"
+	keyboard := &api.TgInlineKeyboardMarkup{
+		InlineKeyboard: [][]api.TgInlineKeyboardButton{
+			{
+				{Text: "⚙️ Set User Limit", CallbackData: "/setlimit_start"},
+				{Text: "🌍 Set Timezone", CallbackData: "/timezone_menu"},
+			},
+			{
+				{Text: "📊 Group Stats", CallbackData: "/stats today"},
+				{Text: "🔧 Platform Settings", CallbackData: "/platform_settings"},
+			},
+			{
+				{Text: "📝 Description Settings", CallbackData: "/description_settings"},
+				{Text: "🏢 Group Settings", CallbackData: "/group_settings"},
+			},
+		},
+	}
+
+	msg := payload.TgPlSendMessage{
+		ChatId:      origChat.Id,
+		ParseMode:   payload.ParseModeHTML,
+		Text:        text,
+		ReplyMarkup: keyboard,
+	}
+
+	message.NewSendMessage(msg)
+}
+
+// createOwnerMenuKeyboard creates the owner panel keyboard
+func createOwnerMenuKeyboard() *api.TgInlineKeyboardMarkup {
+	return &api.TgInlineKeyboardMarkup{
+		InlineKeyboard: [][]api.TgInlineKeyboardButton{
+			{
+				{Text: "📝 Blog Posts", CallbackData: "/owner_blog"},
+				{Text: "📢 Broadcast", CallbackData: "/owner_broadcast"},
+			},
+			{
+				{Text: "📊 Admin Stats", CallbackData: "/owner_adminstats"},
+				{Text: "📋 Admin Chats", CallbackData: "/owner_adminchats"},
+			},
+		},
+	}
+}
+
+// handleOwnerCallback routes owner-related callback queries
+func handleOwnerCallback(callbackQuery *response.TgCallbackQuery) {
+	if !isOwner(callbackQuery.From.Id) {
+		return
+	}
+
+	chatID := callbackQuery.Message.Chat.Id
+	messageID := callbackQuery.Message.MessageId
+
+	switch callbackQuery.Data {
+	case "/owner":
+		text := "🔧 <b>Owner Panel</b>\n\nChoose an action:"
+
+		editMessage(chatID, messageID, text, createOwnerMenuKeyboard())
+	case "/owner_blog":
+		showBlogList(chatID, messageID)
+	case "/owner_broadcast":
+		showBroadcastPostList(chatID, messageID)
+	case "/owner_adminstats":
+		fakeMessage := response.TgMessage{
+			MessageId: messageID,
+			From:      callbackQuery.From,
+			Chat:      callbackQuery.Message.Chat,
+			Text:      "/adminstats all",
+			Date:      int(time.Now().Unix()),
+		}
+
+		handleAdminStatsCommand(&fakeMessage, &callbackQuery.Message.Chat, &callbackQuery.From)
+	case "/owner_adminchats":
+		fakeMessage := response.TgMessage{
+			MessageId: messageID,
+			From:      callbackQuery.From,
+			Chat:      callbackQuery.Message.Chat,
+			Text:      "/adminstats chats all",
+			Date:      int(time.Now().Unix()),
+		}
+
+		handleAdminStatsCommand(&fakeMessage, &callbackQuery.Message.Chat, &callbackQuery.From)
+	}
+}
+
+// showBlogList shows all blog posts with management buttons
+func showBlogList(chatID int64, messageID int) {
+	posts, err := services.GetAllBlogPosts()
+	if err != nil {
+		log.Printf("❌ Failed to get blog posts: %v", err)
+		return
+	}
+
+	var text strings.Builder
+	text.WriteString("📝 <b>Blog Posts</b>\n\n")
+
+	if len(posts) == 0 {
+		text.WriteString("<i>No blog posts yet.</i>\n")
+	}
+
+	for i, post := range posts {
+		status := "📝"
+
+		if post.Published {
+			status = "✅"
+		}
+
+		text.WriteString(fmt.Sprintf("%d. %s <b>%s</b>\n", i+1, status, html.EscapeString(post.Title)))
+	}
+
+	buttons := [][]api.TgInlineKeyboardButton{}
+
+	// Add view buttons for each post
+	for _, post := range posts {
+		label := post.Title
+		if len(label) > 30 {
+			label = label[:30] + "..."
+		}
+
+		buttons = append(buttons, []api.TgInlineKeyboardButton{
+			{Text: fmt.Sprintf("👁 %s", label), CallbackData: fmt.Sprintf("/blog_view_%d", post.ID)},
+		})
+	}
+
+	// Add New Post and Back buttons
+	buttons = append(buttons, []api.TgInlineKeyboardButton{
+		{Text: "➕ Add New Post", CallbackData: "/blog_add"},
+	})
+	buttons = append(buttons, []api.TgInlineKeyboardButton{
+		{Text: "⬅️ Back to Owner", CallbackData: "/owner"},
+	})
+
+	keyboard := &api.TgInlineKeyboardMarkup{InlineKeyboard: buttons}
+
+	editMessage(chatID, messageID, text.String(), keyboard)
+}
+
+// handleBlogCallback routes blog-related callback queries
+func handleBlogCallback(callbackQuery *response.TgCallbackQuery) {
+	if !isOwner(callbackQuery.From.Id) {
+		return
+	}
+
+	chatID := callbackQuery.Message.Chat.Id
+	messageID := callbackQuery.Message.MessageId
+	data := callbackQuery.Data
+
+	if data == "/blog_add" {
+		handleBlogAdd(chatID, messageID, int64(callbackQuery.From.Id))
+		return
+	}
+
+	if strings.HasPrefix(data, "/blog_view_") {
+		idStr := strings.TrimPrefix(data, "/blog_view_")
+		id, err := strconv.Atoi(idStr)
+		if err != nil {
+			return
+		}
+
+		showBlogPost(chatID, messageID, id)
+		return
+	}
+
+	if strings.HasPrefix(data, "/blog_edit_") {
+		idStr := strings.TrimPrefix(data, "/blog_edit_")
+		id, err := strconv.Atoi(idStr)
+		if err != nil {
+			return
+		}
+
+		handleBlogEditStart(chatID, messageID, int64(callbackQuery.From.Id), id)
+		return
+	}
+
+	if strings.HasPrefix(data, "/blog_toggle_") {
+		idStr := strings.TrimPrefix(data, "/blog_toggle_")
+		id, err := strconv.Atoi(idStr)
+		if err != nil {
+			return
+		}
+
+		handleBlogToggle(chatID, messageID, id)
+		return
+	}
+
+	if strings.HasPrefix(data, "/blog_delete_confirm_") {
+		idStr := strings.TrimPrefix(data, "/blog_delete_confirm_")
+		id, err := strconv.Atoi(idStr)
+		if err != nil {
+			return
+		}
+
+		handleBlogDeleteConfirm(chatID, messageID, id)
+		return
+	}
+
+	if strings.HasPrefix(data, "/blog_delete_") {
+		idStr := strings.TrimPrefix(data, "/blog_delete_")
+		id, err := strconv.Atoi(idStr)
+		if err != nil {
+			return
+		}
+
+		handleBlogDeletePrompt(chatID, messageID, id)
+		return
+	}
+}
+
+// showBlogPost shows a single blog post with action buttons
+func showBlogPost(chatID int64, messageID int, postID int) {
+	post, err := services.GetBlogPost(postID)
+	if err != nil {
+		log.Printf("❌ Blog post %d not found: %v", postID, err)
+		return
+	}
+
+	status := "📝 Draft"
+
+	if post.Published {
+		status = "✅ Published"
+	}
+
+	var text strings.Builder
+	text.WriteString(fmt.Sprintf("📝 <b>%s</b>\n", html.EscapeString(post.Title)))
+	text.WriteString(fmt.Sprintf("Status: %s\n", status))
+	text.WriteString(fmt.Sprintf("Created: %s\n", post.CreatedAt.Format("2006-01-02 15:04")))
+	text.WriteString(fmt.Sprintf("Updated: %s\n\n", post.UpdatedAt.Format("2006-01-02 15:04")))
+	text.WriteString("━━━━━━━━━━━━━━━━━━━━\n\n")
+	text.WriteString(post.Content)
+
+	toggleLabel := "✅ Publish"
+	if post.Published {
+		toggleLabel = "📝 Unpublish"
+	}
+
+	keyboard := &api.TgInlineKeyboardMarkup{
+		InlineKeyboard: [][]api.TgInlineKeyboardButton{
+			{
+				{Text: "✏️ Edit", CallbackData: fmt.Sprintf("/blog_edit_%d", postID)},
+				{Text: toggleLabel, CallbackData: fmt.Sprintf("/blog_toggle_%d", postID)},
+			},
+			{
+				{Text: "🗑 Delete", CallbackData: fmt.Sprintf("/blog_delete_%d", postID)},
+			},
+			{
+				{Text: "⬅️ Back to Blog List", CallbackData: "/owner_blog"},
+			},
+		},
+	}
+
+	editMessage(chatID, messageID, text.String(), keyboard)
+}
+
+// handleBlogAdd starts the blog post creation flow
+func handleBlogAdd(chatID int64, messageID int, userID int64) {
+	services.SetAdminState(userID, &services.AdminState{
+		Step: services.StepBlogAddTitle,
+	})
+
+	text := "📝 <b>New Blog Post</b>\n\nSend me the <b>title</b> for the new post.\n\n<i>Type /cancel to cancel.</i>"
+
+	editMessage(chatID, messageID, text, nil)
+}
+
+// handleBlogEditStart starts the blog post editing flow
+func handleBlogEditStart(chatID int64, messageID int, userID int64, postID int) {
+	post, err := services.GetBlogPost(postID)
+	if err != nil {
+		return
+	}
+
+	services.SetAdminState(userID, &services.AdminState{
+		Step:   services.StepBlogEditTitle,
+		BlogID: postID,
+	})
+
+	text := fmt.Sprintf("✏️ <b>Edit Blog Post</b>\n\nCurrent title: <b>%s</b>\n\nSend me the new <b>title</b>, or send <code>.</code> to keep the current one.\n\n<i>Type /cancel to cancel.</i>",
+		html.EscapeString(post.Title))
+
+	editMessage(chatID, messageID, text, nil)
+}
+
+// handleBlogToggle toggles the published status of a blog post
+func handleBlogToggle(chatID int64, messageID int, postID int) {
+	err := services.ToggleBlogPostPublished(postID)
+	if err != nil {
+		log.Printf("❌ Failed to toggle blog post %d: %v", postID, err)
+		return
+	}
+
+	showBlogPost(chatID, messageID, postID)
+}
+
+// handleBlogDeletePrompt shows a delete confirmation
+func handleBlogDeletePrompt(chatID int64, messageID int, postID int) {
+	post, err := services.GetBlogPost(postID)
+	if err != nil {
+		return
+	}
+
+	text := fmt.Sprintf("🗑 <b>Delete Blog Post?</b>\n\n<b>%s</b>\n\nThis action cannot be undone.", html.EscapeString(post.Title))
+
+	keyboard := &api.TgInlineKeyboardMarkup{
+		InlineKeyboard: [][]api.TgInlineKeyboardButton{
+			{
+				{Text: "🗑 Yes, Delete", CallbackData: fmt.Sprintf("/blog_delete_confirm_%d", postID)},
+				{Text: "⬅️ Cancel", CallbackData: fmt.Sprintf("/blog_view_%d", postID)},
+			},
+		},
+	}
+
+	editMessage(chatID, messageID, text, keyboard)
+}
+
+// handleBlogDeleteConfirm executes blog post deletion
+func handleBlogDeleteConfirm(chatID int64, messageID int, postID int) {
+	err := services.DeleteBlogPost(postID)
+	if err != nil {
+		log.Printf("❌ Failed to delete blog post %d: %v", postID, err)
+		return
+	}
+
+	showBlogList(chatID, messageID)
+}
+
+// handleAdminStateInput handles text input when an admin state is active
+// Returns true if the input was handled (caller should stop processing)
+func handleAdminStateInput(origMessage *response.TgMessage, origChat *response.TgChat, origUser *response.TgUser) bool {
+	state := services.GetAdminState(int64(origUser.Id))
+	if state == nil {
+		return false
+	}
+
+	// Handle /cancel
+	if origMessage.Text == "/cancel" {
+		services.ClearAdminState(int64(origUser.Id))
+
+		msg := payload.TgPlSendMessage{
+			ChatId:    origChat.Id,
+			ParseMode: payload.ParseModeHTML,
+			Text:      "❌ Operation cancelled.",
+		}
+
+		message.NewSendMessage(msg)
+		return true
+	}
+
+	switch state.Step {
+	case services.StepBlogAddTitle:
+		state.TempTitle = origMessage.Text
+		state.Step = services.StepBlogAddContent
+		services.SetAdminState(int64(origUser.Id), state)
+
+		msg := payload.TgPlSendMessage{
+			ChatId:    origChat.Id,
+			ParseMode: payload.ParseModeHTML,
+			Text:      fmt.Sprintf("📝 Title: <b>%s</b>\n\nNow send me the <b>content</b> for the post.\nYou can use HTML formatting.\n\n<i>Type /cancel to cancel.</i>", html.EscapeString(state.TempTitle)),
+		}
+
+		message.NewSendMessage(msg)
+		return true
+
+	case services.StepBlogAddContent:
+		id, err := services.CreateBlogPost(state.TempTitle, origMessage.Text)
+		services.ClearAdminState(int64(origUser.Id))
+
+		if err != nil {
+			log.Printf("❌ Failed to create blog post: %v", err)
+
+			msg := payload.TgPlSendMessage{
+				ChatId:    origChat.Id,
+				ParseMode: payload.ParseModeHTML,
+				Text:      fmt.Sprintf("❌ Failed to create post: %v", err),
+			}
+
+			message.NewSendMessage(msg)
+			return true
+		}
+
+		msg := payload.TgPlSendMessage{
+			ChatId:    origChat.Id,
+			ParseMode: payload.ParseModeHTML,
+			Text:      fmt.Sprintf("✅ Blog post <b>#%d</b> created!\n\nUse /owner to manage your posts.", id),
+		}
+
+		message.NewSendMessage(msg)
+		return true
+
+	case services.StepBlogEditTitle:
+		title := origMessage.Text
+		if title == "." {
+			post, err := services.GetBlogPost(state.BlogID)
+			if err != nil {
+				services.ClearAdminState(int64(origUser.Id))
+				return true
+			}
+
+			title = post.Title
+		}
+
+		state.TempTitle = title
+		state.Step = services.StepBlogEditContent
+		services.SetAdminState(int64(origUser.Id), state)
+
+		msg := payload.TgPlSendMessage{
+			ChatId:    origChat.Id,
+			ParseMode: payload.ParseModeHTML,
+			Text:      fmt.Sprintf("✏️ Title: <b>%s</b>\n\nNow send me the new <b>content</b>, or send <code>.</code> to keep the current content.\n\n<i>Type /cancel to cancel.</i>", html.EscapeString(title)),
+		}
+
+		message.NewSendMessage(msg)
+		return true
+
+	case services.StepBlogEditContent:
+		content := origMessage.Text
+		if content == "." {
+			post, err := services.GetBlogPost(state.BlogID)
+			if err != nil {
+				services.ClearAdminState(int64(origUser.Id))
+				return true
+			}
+
+			content = post.Content
+		}
+
+		err := services.UpdateBlogPost(state.BlogID, state.TempTitle, content)
+		blogID := state.BlogID
+		services.ClearAdminState(int64(origUser.Id))
+
+		if err != nil {
+			log.Printf("❌ Failed to update blog post: %v", err)
+
+			msg := payload.TgPlSendMessage{
+				ChatId:    origChat.Id,
+				ParseMode: payload.ParseModeHTML,
+				Text:      fmt.Sprintf("❌ Failed to update post: %v", err),
+			}
+
+			message.NewSendMessage(msg)
+			return true
+		}
+
+		msg := payload.TgPlSendMessage{
+			ChatId:    origChat.Id,
+			ParseMode: payload.ParseModeHTML,
+			Text:      fmt.Sprintf("✅ Blog post <b>#%d</b> updated!\n\nUse /owner to manage your posts.", blogID),
+		}
+
+		message.NewSendMessage(msg)
+		return true
+	}
+
+	return false
+}
+
+// showBroadcastPostList shows published posts for broadcast selection
+func showBroadcastPostList(chatID int64, messageID int) {
+	posts, err := services.GetPublishedBlogPosts()
+	if err != nil {
+		log.Printf("❌ Failed to get published blog posts: %v", err)
+		return
+	}
+
+	var text strings.Builder
+	text.WriteString("📢 <b>Broadcast</b>\n\nSelect a published post to broadcast:\n\n")
+
+	if len(posts) == 0 {
+		text.WriteString("<i>No published posts. Create and publish a post in Blog first.</i>\n")
+	}
+
+	for i, post := range posts {
+		text.WriteString(fmt.Sprintf("%d. <b>%s</b>\n", i+1, html.EscapeString(post.Title)))
+	}
+
+	buttons := [][]api.TgInlineKeyboardButton{}
+
+	for _, post := range posts {
+		label := post.Title
+		if len(label) > 35 {
+			label = label[:35] + "..."
+		}
+
+		buttons = append(buttons, []api.TgInlineKeyboardButton{
+			{Text: fmt.Sprintf("📢 %s", label), CallbackData: fmt.Sprintf("/broadcast_preview_%d", post.ID)},
+		})
+	}
+
+	buttons = append(buttons, []api.TgInlineKeyboardButton{
+		{Text: "⬅️ Back to Owner", CallbackData: "/owner"},
+	})
+
+	keyboard := &api.TgInlineKeyboardMarkup{InlineKeyboard: buttons}
+
+	editMessage(chatID, messageID, text.String(), keyboard)
+}
+
+// handleBroadcastCallback routes broadcast-related callback queries
+func handleBroadcastCallback(callbackQuery *response.TgCallbackQuery) {
+	if !isOwner(callbackQuery.From.Id) {
+		return
+	}
+
+	chatID := callbackQuery.Message.Chat.Id
+	messageID := callbackQuery.Message.MessageId
+	data := callbackQuery.Data
+
+	if strings.HasPrefix(data, "/broadcast_preview_") {
+		idStr := strings.TrimPrefix(data, "/broadcast_preview_")
+		id, err := strconv.Atoi(idStr)
+		if err != nil {
+			return
+		}
+
+		showBroadcastPreview(chatID, messageID, id)
+		return
+	}
+
+	if strings.HasPrefix(data, "/broadcast_test_") {
+		idStr := strings.TrimPrefix(data, "/broadcast_test_")
+		id, err := strconv.Atoi(idStr)
+		if err != nil {
+			return
+		}
+
+		executeBroadcast(chatID, messageID, id, "test")
+		return
+	}
+
+	if strings.HasPrefix(data, "/broadcast_users_") {
+		idStr := strings.TrimPrefix(data, "/broadcast_users_")
+		id, err := strconv.Atoi(idStr)
+		if err != nil {
+			return
+		}
+
+		executeBroadcast(chatID, messageID, id, "users")
+		return
+	}
+
+	if strings.HasPrefix(data, "/broadcast_groups_") {
+		idStr := strings.TrimPrefix(data, "/broadcast_groups_")
+		id, err := strconv.Atoi(idStr)
+		if err != nil {
+			return
+		}
+
+		executeBroadcast(chatID, messageID, id, "groups")
+		return
+	}
+}
+
+// showBroadcastPreview shows a preview of the post with audience selection
+func showBroadcastPreview(chatID int64, messageID int, postID int) {
+	post, err := services.GetBlogPost(postID)
+	if err != nil {
+		return
+	}
+
+	userIDs, _ := services.GetAllDistinctUserIDs()
+	groupIDs, _ := services.GetAllDistinctChatIDs()
+
+	var text strings.Builder
+	text.WriteString("📢 <b>Broadcast Preview</b>\n\n")
+	text.WriteString("━━━━━━━━━━━━━━━━━━━━\n\n")
+	text.WriteString(post.Content)
+	text.WriteString("\n\n━━━━━━━━━━━━━━━━━━━━\n\n")
+	text.WriteString(fmt.Sprintf("👤 Individual users: %d\n", len(userIDs)))
+	text.WriteString(fmt.Sprintf("👥 Groups: %d\n\n", len(groupIDs)))
+	text.WriteString("Choose audience:")
+
+	keyboard := &api.TgInlineKeyboardMarkup{
+		InlineKeyboard: [][]api.TgInlineKeyboardButton{
+			{
+				{Text: "🧪 Test (send to me)", CallbackData: fmt.Sprintf("/broadcast_test_%d", postID)},
+			},
+			{
+				{Text: fmt.Sprintf("👤 Users (%d)", len(userIDs)), CallbackData: fmt.Sprintf("/broadcast_users_%d", postID)},
+				{Text: fmt.Sprintf("👥 Groups (%d)", len(groupIDs)), CallbackData: fmt.Sprintf("/broadcast_groups_%d", postID)},
+			},
+			{
+				{Text: "⬅️ Back to Post List", CallbackData: "/owner_broadcast"},
+			},
+		},
+	}
+
+	editMessage(chatID, messageID, text.String(), keyboard)
+}
+
+// executeBroadcast sends the blog post to the selected audience
+func executeBroadcast(chatID int64, messageID int, postID int, audience string) {
+	post, err := services.GetBlogPost(postID)
+	if err != nil {
+		return
+	}
+
+	adminUserID := config.GetAdminUserID()
+
+	switch audience {
+	case "test":
+		msgPayload := payload.TgPlSendMessage{
+			ChatId:                adminUserID,
+			ParseMode:             payload.ParseModeHTML,
+			Text:                  post.Content,
+			DisableWebPagePreview: true,
+		}
+
+		message.NewSendMessage(msgPayload)
+
+		editMessage(chatID, messageID, "✅ <b>Test broadcast sent to you.</b>\n\nCheck the message above.", createBackToBroadcastKeyboard(postID))
+
+	case "users":
+		userIDs, err := services.GetAllDistinctUserIDs()
+		if err != nil {
+			log.Printf("❌ Failed to get user IDs: %v", err)
+			return
+		}
+
+		editMessage(chatID, messageID, fmt.Sprintf("📢 Broadcasting to %d users...", len(userIDs)), nil)
+
+		sent := 0
+		failed := 0
+
+		for _, userID := range userIDs {
+			msgPayload := payload.TgPlSendMessage{
+				ChatId:                userID,
+				ParseMode:             payload.ParseModeHTML,
+				Text:                  post.Content,
+				DisableNotification:   true,
+				DisableWebPagePreview: true,
+			}
+
+			message.NewSendMessage(msgPayload)
+			sent++
+			time.Sleep(50 * time.Millisecond)
+		}
+
+		resultText := fmt.Sprintf("✅ <b>Broadcast to users complete!</b>\n\nSent: %d\nFailed: %d\nTotal: %d", sent, failed, len(userIDs))
+
+		editMessage(chatID, messageID, resultText, createBackToBroadcastKeyboard(postID))
+		log.Printf("📢 Broadcast to users complete: %d sent, %d failed", sent, failed)
+
+	case "groups":
+		groupIDs, err := services.GetAllDistinctChatIDs()
+		if err != nil {
+			log.Printf("❌ Failed to get group IDs: %v", err)
+			return
+		}
+
+		editMessage(chatID, messageID, fmt.Sprintf("📢 Broadcasting to %d groups...", len(groupIDs)), nil)
+
+		sent := 0
+		failed := 0
+
+		for _, groupID := range groupIDs {
+			msgPayload := payload.TgPlSendMessage{
+				ChatId:                groupID,
+				ParseMode:             payload.ParseModeHTML,
+				Text:                  post.Content,
+				DisableNotification:   true,
+				DisableWebPagePreview: true,
+			}
+
+			message.NewSendMessage(msgPayload)
+			sent++
+			time.Sleep(50 * time.Millisecond)
+		}
+
+		resultText := fmt.Sprintf("✅ <b>Broadcast to groups complete!</b>\n\nSent: %d\nFailed: %d\nTotal: %d", sent, failed, len(groupIDs))
+
+		editMessage(chatID, messageID, resultText, createBackToBroadcastKeyboard(postID))
+		log.Printf("📢 Broadcast to groups complete: %d sent, %d failed", sent, failed)
+	}
+}
+
+// createBackToBroadcastKeyboard creates a back button keyboard
+func createBackToBroadcastKeyboard(postID int) *api.TgInlineKeyboardMarkup {
+	return &api.TgInlineKeyboardMarkup{
+		InlineKeyboard: [][]api.TgInlineKeyboardButton{
+			{
+				{Text: "⬅️ Back to Preview", CallbackData: fmt.Sprintf("/broadcast_preview_%d", postID)},
+			},
+			{
+				{Text: "⬅️ Back to Owner", CallbackData: "/owner"},
+			},
+		},
+	}
 }
 

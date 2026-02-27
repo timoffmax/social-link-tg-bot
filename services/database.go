@@ -806,6 +806,193 @@ func GetAllChatsWithStats(period string) ([]ChatStats, error) {
 	return result, nil
 }
 
+// BlogPost represents a blog post
+type BlogPost struct {
+	ID        int
+	Title     string
+	Content   string
+	Published bool
+	CreatedAt time.Time
+	UpdatedAt time.Time
+}
+
+// CreateBlogPost creates a new blog post and returns its ID
+func CreateBlogPost(title, content string) (int, error) {
+	if !IsDBInitialized() {
+		return 0, fmt.Errorf("database not initialized")
+	}
+
+	var id int
+	query := `INSERT INTO blog_posts (title, content) VALUES ($1, $2) RETURNING id`
+	err := GetDB().QueryRow(query, title, content).Scan(&id)
+
+	return id, err
+}
+
+// GetBlogPost returns a single blog post by ID
+func GetBlogPost(id int) (*BlogPost, error) {
+	if !IsDBInitialized() {
+		return nil, fmt.Errorf("database not initialized")
+	}
+
+	var post BlogPost
+	query := `SELECT id, title, content, published, created_at, updated_at FROM blog_posts WHERE id = $1`
+	err := GetDB().QueryRow(query, id).Scan(&post.ID, &post.Title, &post.Content, &post.Published, &post.CreatedAt, &post.UpdatedAt)
+
+	if err == sql.ErrNoRows {
+		return nil, fmt.Errorf("blog post %d not found", id)
+	}
+
+	return &post, err
+}
+
+// GetAllBlogPosts returns all blog posts ordered by creation date (newest first)
+func GetAllBlogPosts() ([]*BlogPost, error) {
+	if !IsDBInitialized() {
+		return nil, nil
+	}
+
+	query := `SELECT id, title, content, published, created_at, updated_at FROM blog_posts ORDER BY created_at DESC`
+	rows, err := GetDB().Query(query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var result []*BlogPost
+	for rows.Next() {
+		var post BlogPost
+		if err := rows.Scan(&post.ID, &post.Title, &post.Content, &post.Published, &post.CreatedAt, &post.UpdatedAt); err != nil {
+			return nil, err
+		}
+		result = append(result, &post)
+	}
+
+	return result, nil
+}
+
+// GetPublishedBlogPosts returns only published blog posts
+func GetPublishedBlogPosts() ([]*BlogPost, error) {
+	if !IsDBInitialized() {
+		return nil, nil
+	}
+
+	query := `SELECT id, title, content, published, created_at, updated_at FROM blog_posts WHERE published = true ORDER BY created_at DESC`
+	rows, err := GetDB().Query(query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var result []*BlogPost
+	for rows.Next() {
+		var post BlogPost
+		if err := rows.Scan(&post.ID, &post.Title, &post.Content, &post.Published, &post.CreatedAt, &post.UpdatedAt); err != nil {
+			return nil, err
+		}
+		result = append(result, &post)
+	}
+
+	return result, nil
+}
+
+// UpdateBlogPost updates a blog post's title and content
+func UpdateBlogPost(id int, title, content string) error {
+	if !IsDBInitialized() {
+		return fmt.Errorf("database not initialized")
+	}
+
+	query := `UPDATE blog_posts SET title = $1, content = $2 WHERE id = $3`
+	result, err := GetDB().Exec(query, title, content, id)
+	if err != nil {
+		return err
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+
+	if rowsAffected == 0 {
+		return fmt.Errorf("blog post %d not found", id)
+	}
+
+	return nil
+}
+
+// ToggleBlogPostPublished toggles the published flag of a blog post
+func ToggleBlogPostPublished(id int) error {
+	if !IsDBInitialized() {
+		return fmt.Errorf("database not initialized")
+	}
+
+	query := `UPDATE blog_posts SET published = NOT published WHERE id = $1`
+	result, err := GetDB().Exec(query, id)
+	if err != nil {
+		return err
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+
+	if rowsAffected == 0 {
+		return fmt.Errorf("blog post %d not found", id)
+	}
+
+	return nil
+}
+
+// DeleteBlogPost deletes a blog post by ID
+func DeleteBlogPost(id int) error {
+	if !IsDBInitialized() {
+		return fmt.Errorf("database not initialized")
+	}
+
+	query := `DELETE FROM blog_posts WHERE id = $1`
+	result, err := GetDB().Exec(query, id)
+	if err != nil {
+		return err
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+
+	if rowsAffected == 0 {
+		return fmt.Errorf("blog post %d not found", id)
+	}
+
+	return nil
+}
+
+// GetAllDistinctChatIDs returns all unique chat IDs from media_stats (for broadcast to groups)
+func GetAllDistinctChatIDs() ([]int64, error) {
+	if !IsDBInitialized() {
+		return nil, nil
+	}
+
+	query := `SELECT DISTINCT chat_id FROM media_stats WHERE chat_id < 0 ORDER BY chat_id`
+	rows, err := GetDB().Query(query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var result []int64
+	for rows.Next() {
+		var chatID int64
+		if err := rows.Scan(&chatID); err != nil {
+			return nil, err
+		}
+		result = append(result, chatID)
+	}
+
+	return result, nil
+}
+
 // GetAllDistinctUserIDs returns all unique user IDs from media_stats (for broadcast to individual users)
 func GetAllDistinctUserIDs() ([]int64, error) {
 	if !IsDBInitialized() {
