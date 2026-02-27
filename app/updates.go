@@ -1822,7 +1822,7 @@ func handleStartCommand(origMessage *response.TgMessage, origChat *response.TgCh
 	menuText.WriteString("🎵 <b>TikTok:</b> Videos, Photo Slideshows\n")
 	menuText.WriteString("🐦 <b>Twitter/X:</b> Photos, Videos, GIFs\n")
 	menuText.WriteString("📺 <b>YouTube:</b> Videos, Shorts\n")
-	menuText.WriteString("🔴 <b>Reddit:</b> Videos, Images, Galleries\n")
+	menuText.WriteString("🔴 <b>Reddit:</b> Videos, Images, Galleries, Text Posts\n")
 	menuText.WriteString("👥 <b>Facebook:</b> Videos, Photos\n\n")
 	
 	// How to use

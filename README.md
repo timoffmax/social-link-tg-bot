@@ -7,7 +7,7 @@ Downloads and sends actual media files from social media platforms instead of ju
 - TikTok (videos, photo slideshows via tikwm.com API)
 - Twitter/X (photos, videos, GIFs)
 - YouTube (videos, shorts with HLS stream merging)
-- Reddit (videos, images, galleries)
+- Reddit (videos, images, galleries, text posts)
 - Facebook (videos, photos)
 - 9GAG (videos, images - configurable)
 

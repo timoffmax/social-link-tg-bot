@@ -225,7 +225,7 @@ func (sc *StartupChecker) printPlatformSupport() {
 		},
 		{
 			Name:      "🔴 Reddit",
-			Supported: []string{"Videos", "Images", "Galleries"},
+			Supported: []string{"Videos", "Images", "Galleries", "Text Posts"},
 			FixedLink: "none",
 		},
 		{
