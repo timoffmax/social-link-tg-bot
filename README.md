@@ -3,11 +3,13 @@
 Downloads and sends actual media files from social media platforms instead of just providing fixed links.
 
 ## Supported Platforms
-- Instagram (photos, videos, carousels, stories)
-- TikTok (videos, photo slideshows)
-- Twitter/X (photos, videos)
-- 9GAG (videos, images)
-- YouTube Shorts
+- Instagram (photos, videos, carousels, stories via RapidAPI)
+- TikTok (videos, photo slideshows via tikwm.com API)
+- Twitter/X (photos, videos, GIFs)
+- YouTube (videos, shorts with HLS stream merging)
+- Reddit (videos, images, galleries)
+- Facebook (videos, photos)
+- 9GAG (videos, images - configurable)
 
 ## Quick Start
 

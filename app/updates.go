@@ -1821,7 +1821,7 @@ func handleStartCommand(origMessage *response.TgMessage, origChat *response.TgCh
 	
 	// Platform support
 	menuText.WriteString("🌐 <b>Supported Platforms:</b>\n")
-	menuText.WriteString("📷 <b>Instagram:</b> Photos, Videos, Albums (limited support)\n")
+	menuText.WriteString("📷 <b>Instagram:</b> Photos, Videos, Albums, Stories\n")
 	menuText.WriteString("   <i>⚠️ Instagram support is limited due to strict bot limitations</i>\n")
 	menuText.WriteString("🎵 <b>TikTok:</b> Videos, Photo Slideshows\n")
 	menuText.WriteString("🐦 <b>Twitter/X:</b> Photos, Videos, GIFs\n")
