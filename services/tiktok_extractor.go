@@ -327,7 +327,7 @@ func (te *TikTokExtractor) extractViaTikWMAPI(tiktokURL string, postID string, u
 		authorUsername = username
 	}
 
-	caption := strings.TrimRight(FormatAuthorCaption("tiktok", displayName, authorUsername, apiResp.Data.Title), "\n")
+	caption := FormatAuthorCaption("tiktok", displayName, authorUsername, apiResp.Data.Title)
 
 	var mediaInfos []*MediaInfo
 

@@ -10,7 +10,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"strings"
 	"time"
 
 	"github.com/timoffmax/social-link-bot/config"
@@ -96,7 +95,7 @@ func (e *InstagramStoriesExtractor) ExtractStory(storyURL string) ([]*MediaInfo,
 		return nil, fmt.Errorf("failed to download story media: %v", err)
 	}
 
-	caption := strings.TrimRight(FormatAuthorCaption("instagram", "", username, ""), "\n")
+	caption := FormatAuthorCaption("instagram", "", username, "")
 
 	result := []*MediaInfo{{
 		Type:     mediaType,
