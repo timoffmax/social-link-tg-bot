@@ -1805,6 +1805,8 @@ func handleBotCommand(origMessage *response.TgMessage, origChat *response.TgChat
 		handleSetGroupTimezoneCommand(origMessage, origChat, origUser)
 	case "/adminstats":
 		handleAdminStatsCommand(origMessage, origChat, origUser)
+	case "/broadcast":
+		handleBroadcastCommand(origMessage, origChat, origUser)
 	case "/donate":
 		handleDonateCommand(origMessage, origChat, origUser)
 	default:
@@ -2528,6 +2530,111 @@ func handleSetGroupTimezoneCommand(origMessage *response.TgMessage, origChat *re
 	
 	message.NewSendMessage(successMsg)
 	log.Printf("🌍 SetGroupTimezone command completed by user %d in chat %d (timezone: %s)", origUser.Id, origChat.Id, timezone)
+}
+
+// handleBroadcastCommand handles /broadcast command (admin only)
+// Usage: /broadcast <message text>
+func handleBroadcastCommand(origMessage *response.TgMessage, origChat *response.TgChat, origUser *response.TgUser) {
+	// Check if user is admin
+	adminUserID := config.GetAdminUserID()
+	if adminUserID == 0 {
+		log.Printf("⚠️ Broadcast requested but ADMIN_USER_ID not configured")
+		return
+	}
+
+	if int64(origUser.Id) != adminUserID {
+		log.Printf("🚫 Unauthorized broadcast request from user %d", origUser.Id)
+		return
+	}
+
+	// Parse broadcast text: everything after "/broadcast "
+	broadcastText := ""
+	if idx := strings.Index(origMessage.Text, " "); idx >= 0 {
+		broadcastText = strings.TrimSpace(origMessage.Text[idx+1:])
+	}
+
+	if broadcastText == "" {
+		errorMsg := payload.TgPlSendMessage{
+			ChatId:    origChat.Id,
+			ParseMode: payload.ParseModeHTML,
+			Text:      "❌ Usage: <code>/broadcast Your message here</code>\n\nThe message will be sent to all chats that have used the bot.",
+		}
+		message.NewSendMessage(errorMsg)
+		return
+	}
+
+	// Get all chat IDs
+	chatIDs, err := services.GetAllDistinctChatIDs()
+	if err != nil {
+		log.Printf("❌ Failed to get chat IDs for broadcast: %v", err)
+		errorMsg := payload.TgPlSendMessage{
+			ChatId:    origChat.Id,
+			ParseMode: payload.ParseModeHTML,
+			Text:      fmt.Sprintf("❌ Failed to get chat list: %v", err),
+		}
+		message.NewSendMessage(errorMsg)
+		return
+	}
+
+	if len(chatIDs) == 0 {
+		errorMsg := payload.TgPlSendMessage{
+			ChatId:    origChat.Id,
+			ParseMode: payload.ParseModeHTML,
+			Text:      "⚠️ No chats found in the database.",
+		}
+		message.NewSendMessage(errorMsg)
+		return
+	}
+
+	// TESTING MODE: only send to admin
+	testMode := true
+	if testMode {
+		log.Printf("📢 Broadcast (TEST MODE): sending only to admin %d", adminUserID)
+		msgPayload := payload.TgPlSendMessage{
+			ChatId:                adminUserID,
+			ParseMode:             payload.ParseModeHTML,
+			Text:                  broadcastText,
+			DisableWebPagePreview: true,
+		}
+		message.NewSendMessage(msgPayload)
+
+		confirmMsg := payload.TgPlSendMessage{
+			ChatId:    origChat.Id,
+			ParseMode: payload.ParseModeHTML,
+			Text:      fmt.Sprintf("✅ <b>TEST broadcast sent to you only.</b>\n\nTotal chats in DB: %d\n\nTo enable real broadcast, update <code>testMode</code> in the code.", len(chatIDs)),
+		}
+		message.NewSendMessage(confirmMsg)
+		return
+	}
+
+	// PRODUCTION MODE: send to all chats (uncomment testMode = false above when ready)
+	log.Printf("📢 Broadcasting to %d chats", len(chatIDs))
+	sent := 0
+	failed := 0
+
+	for _, chatID := range chatIDs {
+		msgPayload := payload.TgPlSendMessage{
+			ChatId:                chatID,
+			ParseMode:             payload.ParseModeHTML,
+			Text:                  broadcastText,
+			DisableNotification:   true,
+			DisableWebPagePreview: true,
+		}
+		message.NewSendMessage(msgPayload)
+		sent++
+
+		// Telegram rate limit: ~30 msg/sec, use 50ms delay to be safe
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	log.Printf("📢 Broadcast complete: %d sent, %d failed", sent, failed)
+
+	confirmMsg := payload.TgPlSendMessage{
+		ChatId:    origChat.Id,
+		ParseMode: payload.ParseModeHTML,
+		Text:      fmt.Sprintf("✅ <b>Broadcast complete!</b>\n\nSent: %d\nFailed: %d\nTotal chats: %d", sent, failed, len(chatIDs)),
+	}
+	message.NewSendMessage(confirmMsg)
 }
 
 // handleAdminStatsCommand handles /adminstats command (admin only)
