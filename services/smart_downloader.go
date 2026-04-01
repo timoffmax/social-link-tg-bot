@@ -574,7 +574,7 @@ func FormatOriginalLink(originalURL string) string {
 		linkVerb = "Watch"
 	}
 
-	return fmt.Sprintf("\n\n<a href=\"%s\">%s the original on %s</a>", cleanURL, linkVerb, platform)
+	return fmt.Sprintf("\n\n🔗 <a href=\"%s\">%s the original on %s</a>", cleanURL, linkVerb, platform)
 }
 
 // appendOriginalURL adds the original URL to caption
