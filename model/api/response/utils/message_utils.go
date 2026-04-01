@@ -172,15 +172,15 @@ func fixTwitterLink(link string) string {
 }
 
 func GetOriginalInstagramLinks(message *response.TgMessage) []string {
-	// Match both instagram.com and kkinstagram.com URLs
-	regex := regexp.MustCompile(`https?:\/\/(www\.)?(instagram|kkinstagram)\.com\/[^\s]+`)
+	// Match only original instagram.com URLs, skip fixed link services (kkinstagram, instagramez)
+	regex := regexp.MustCompile(`https?:\/\/(www\.)?instagram\.com\/[^\s]+`)
 	links := regex.FindAllString(message.Text, -1)
-	
+
 	// Clean tracking parameters from Instagram URLs
 	for i, link := range links {
 		links[i] = cleanInstagramURL(link)
 	}
-	
+
 	return links
 }
 

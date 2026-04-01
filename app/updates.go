@@ -478,12 +478,11 @@ func processMediaDownload(url string, origChat *response.TgChat, origMessage *re
 		
 		// Send the fixed link as reply with silent notification
 		fixedLinkMsg := payload.TgPlSendMessage{
-			ChatId:                origChat.Id,
-			ParseMode:             payload.ParseModeHTML,
-			Text:                  textWithURL,
-			ReplyToMessageId:      origMessage.MessageId,
-			DisableNotification:   true,
-			DisableWebPagePreview: true,
+			ChatId:              origChat.Id,
+			ParseMode:           payload.ParseModeHTML,
+			Text:                textWithURL,
+			ReplyToMessageId:    origMessage.MessageId,
+			DisableNotification: true,
 		}
 		response := message.NewSendMessage(fixedLinkMsg)
 		services.LogTelegramMessage(origChat.Id, "fixed-link", response != nil, "")
