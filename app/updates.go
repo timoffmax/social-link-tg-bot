@@ -473,17 +473,17 @@ func processMediaDownload(url string, origChat *response.TgChat, origMessage *re
 	
 	// Check if this is a fixed link response (text-only with no filename)
 	if len(mediaInfos) == 1 && mediaInfos[0].Type == "text" && mediaInfos[0].Filename == "" {
-		// Add clean original URL to text content
-		cleanURL := cleanURLParams(url)
-		textWithURL := mediaInfos[0].Caption + fmt.Sprintf("\n\n🔗 %s", cleanURL)
+		// Add formatted original link to text content
+		textWithURL := mediaInfos[0].Caption + services.FormatOriginalLink(url)
 		
 		// Send the fixed link as reply with silent notification
 		fixedLinkMsg := payload.TgPlSendMessage{
-			ChatId:              origChat.Id,
-			ParseMode:           payload.ParseModeHTML,
-			Text:                textWithURL,
-			ReplyToMessageId:    origMessage.MessageId,
-			DisableNotification: true,
+			ChatId:                origChat.Id,
+			ParseMode:             payload.ParseModeHTML,
+			Text:                  textWithURL,
+			ReplyToMessageId:      origMessage.MessageId,
+			DisableNotification:   true,
+			DisableWebPagePreview: true,
 		}
 		response := message.NewSendMessage(fixedLinkMsg)
 		services.LogTelegramMessage(origChat.Id, "fixed-link", response != nil, "")
@@ -719,10 +719,10 @@ func sendMediaFile(mediaInfo *services.MediaInfo, origChat *response.TgChat, ori
 		len(caption) > 1024 && mediaInfo.Type != "text" {
 		log.Printf("🐦 Twitter post exceeds Telegram limit (%d chars), sending text and media separately", len(caption))
 
-		// Extract URL from caption (it's at the end after "\n\n🔗 ")
+		// Extract URL link from caption (it's at the end after "\n\n<a href=")
 		textPart := caption
 		urlPart := ""
-		if idx := strings.LastIndex(caption, "\n\n🔗 "); idx != -1 {
+		if idx := strings.LastIndex(caption, "\n\n<a href="); idx != -1 {
 			textPart = caption[:idx]
 			urlPart = caption[idx:]
 		}
@@ -765,6 +765,7 @@ func sendMediaFile(mediaInfo *services.MediaInfo, origChat *response.TgChat, ori
 			ChatId:              origChat.Id,
 			Photo:               "photo.jpg", // Simple filename for multipart upload
 			Caption:             caption,
+			ParseMode:           payload.ParseModeHTML,
 			FilePath:            mediaInfo.Filename,
 			ReplyToMessageId:    origMessage.MessageId,
 			DisableNotification: true,
@@ -804,6 +805,7 @@ func sendMediaFile(mediaInfo *services.MediaInfo, origChat *response.TgChat, ori
 						ChatId:              origChat.Id,
 						Document:            "video.webm",
 						Caption:             fmt.Sprintf("🎥 Video (WebM format - conversion failed)\n\n%s", caption),
+						ParseMode:           payload.ParseModeHTML,
 						FilePath:            mediaInfo.Filename,
 						ReplyToMessageId:    origMessage.MessageId,
 						DisableNotification: true,
@@ -839,6 +841,7 @@ func sendMediaFile(mediaInfo *services.MediaInfo, origChat *response.TgChat, ori
 					ChatId:              origChat.Id,
 					Document:            "video.webm",
 					Caption:             fmt.Sprintf("🎥 Video (WebM format)\n\n%s", caption),
+					ParseMode:           payload.ParseModeHTML,
 					FilePath:            mediaInfo.Filename,
 					ReplyToMessageId:    origMessage.MessageId,
 					DisableNotification: true,
@@ -857,6 +860,7 @@ func sendMediaFile(mediaInfo *services.MediaInfo, origChat *response.TgChat, ori
 			ChatId:              origChat.Id,
 			Video:               "video.mp4", // Simple filename for multipart upload
 			Caption:             caption,
+			ParseMode:           payload.ParseModeHTML,
 			FilePath:            finalVideoPath,
 			ReplyToMessageId:    origMessage.MessageId,
 			DisableNotification: true,
@@ -885,6 +889,7 @@ func sendMediaFile(mediaInfo *services.MediaInfo, origChat *response.TgChat, ori
 			ChatId:              origChat.Id,
 			Document:            documentName,
 			Caption:             enhancedCaption,
+			ParseMode:           payload.ParseModeHTML,
 			FilePath:            mediaInfo.Filename,
 			ReplyToMessageId:    origMessage.MessageId,
 			DisableNotification: true,
@@ -920,6 +925,7 @@ func sendPhotosAsMediaGroup(photos []*services.MediaInfo, origChat *response.TgC
 				caption = caption[:1021] + "..."
 			}
 			mediaItem.Caption = caption
+			mediaItem.ParseMode = payload.ParseModeHTML
 		}
 		
 		mediaArray = append(mediaArray, mediaItem)

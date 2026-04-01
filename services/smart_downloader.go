@@ -539,12 +539,49 @@ func (sd *SmartDownloader) GetTempDir() string {
 	return sd.tempDir
 }
 
+// platformDisplayName returns the human-readable platform name for a URL
+func platformDisplayName(originalURL string) string {
+	urlLower := strings.ToLower(originalURL)
+
+	switch {
+	case strings.Contains(urlLower, "instagram.com") || strings.Contains(urlLower, "kkinstagram.com"):
+		return "Instagram"
+	case strings.Contains(urlLower, "tiktok.com"):
+		return "TikTok"
+	case strings.Contains(urlLower, "twitter.com") || strings.Contains(urlLower, "x.com") || strings.Contains(urlLower, "fixupx.com"):
+		return "X"
+	case strings.Contains(urlLower, "youtube.com") || strings.Contains(urlLower, "youtu.be"):
+		return "YouTube"
+	case strings.Contains(urlLower, "reddit.com") || strings.Contains(urlLower, "redd.it"):
+		return "Reddit"
+	case strings.Contains(urlLower, "facebook.com") || strings.Contains(urlLower, "fb.watch"):
+		return "Facebook"
+	case strings.Contains(urlLower, "9gag.com"):
+		return "9GAG"
+	default:
+		return "source"
+	}
+}
+
+// FormatOriginalLink returns a formatted "View the original on Platform" HTML link
+func FormatOriginalLink(originalURL string) string {
+	cleanURL := cleanURLParams(originalURL)
+	platform := platformDisplayName(originalURL)
+
+	linkVerb := "View"
+	if strings.Contains(strings.ToLower(originalURL), "youtu") ||
+		strings.Contains(strings.ToLower(originalURL), "tiktok") {
+		linkVerb = "Watch"
+	}
+
+	return fmt.Sprintf("\n\n<a href=\"%s\">%s the original on %s</a>", cleanURL, linkVerb, platform)
+}
+
 // appendOriginalURL adds the original URL to caption
 // Note: Does NOT truncate - lets the caller (updates.go) handle long captions
 // This allows Twitter long text handling to work properly
 func appendOriginalURL(mediaInfos []*MediaInfo, originalURL string) {
-	cleanURL := cleanURLParams(originalURL)
-	urlSuffix := fmt.Sprintf("\n\n🔗 %s", cleanURL)
+	urlSuffix := FormatOriginalLink(originalURL)
 
 	for _, mediaInfo := range mediaInfos {
 		// Skip text-only media (fixed links)
