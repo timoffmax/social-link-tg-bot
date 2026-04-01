@@ -401,9 +401,38 @@ func (re *RedditExtractor) extractVideo(post *redditPostData, caption, originalU
 	return result, nil
 }
 
+// cleanRedditMarkdown removes Reddit markdown formatting from text
+func cleanRedditMarkdown(text string) string {
+	// Remove bold markers
+	text = strings.ReplaceAll(text, "**", "")
+
+	// Remove Reddit markdown escape backslashes: \- \[ \] \~ \( \) \# \. \! \*
+	replacer := strings.NewReplacer(
+		`\-`, `-`,
+		`\[`, `[`,
+		`\]`, `]`,
+		`\~`, `~`,
+		`\(`, `(`,
+		`\)`, `)`,
+		`\#`, `#`,
+		`\.`, `.`,
+		`\!`, `!`,
+		`\*`, `*`,
+		`\_`, `_`,
+		`\>`, `>`,
+	)
+	text = replacer.Replace(text)
+
+	// Remove heading markers (# ## ### etc.) at the start of lines
+	headingPattern := regexp.MustCompile(`(?m)^#{1,6}\s+`)
+	text = headingPattern.ReplaceAllString(text, "")
+
+	return strings.TrimSpace(text)
+}
+
 // extractTextPost returns the selftext content as a text message
 func (re *RedditExtractor) extractTextPost(post *redditPostData, caption, originalURL string) ([]*MediaInfo, error) {
-	text := post.Selftext
+	text := cleanRedditMarkdown(post.Selftext)
 	if text == "" {
 		text = post.Title
 	}
