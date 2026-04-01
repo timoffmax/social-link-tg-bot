@@ -476,13 +476,18 @@ func processMediaDownload(url string, origChat *response.TgChat, origMessage *re
 		// Add formatted original link to text content
 		textWithURL := mediaInfos[0].Caption + services.FormatOriginalLink(url)
 		
+		// Disable web page preview for extracted content (e.g. Reddit text posts)
+		// but keep it for fixed link responses where the preview IS the content
+		isFixedLink := strings.HasPrefix(strings.TrimSpace(mediaInfos[0].Caption), "http")
+
 		// Send the fixed link as reply with silent notification
 		fixedLinkMsg := payload.TgPlSendMessage{
-			ChatId:              origChat.Id,
-			ParseMode:           payload.ParseModeHTML,
-			Text:                textWithURL,
-			ReplyToMessageId:    origMessage.MessageId,
-			DisableNotification: true,
+			ChatId:                origChat.Id,
+			ParseMode:             payload.ParseModeHTML,
+			Text:                  textWithURL,
+			ReplyToMessageId:      origMessage.MessageId,
+			DisableNotification:   true,
+			DisableWebPagePreview: !isFixedLink,
 		}
 		response := message.NewSendMessage(fixedLinkMsg)
 		services.LogTelegramMessage(origChat.Id, "fixed-link", response != nil, "")
