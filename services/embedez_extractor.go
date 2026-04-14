@@ -13,7 +13,7 @@ import (
 	"time"
 )
 
-// EmbedezExtractor handles video extraction from instagramez/kkinstagram/embedez service
+// EmbedezExtractor handles video extraction from instagramez/kksave/embedez service
 type EmbedezExtractor struct {
 	client *http.Client
 }
@@ -41,7 +41,7 @@ func (e *EmbedezExtractor) ExtractInstagramVideo(instagramURL string) (string, e
 	service := config.GetInstagramService()
 	log.Printf("🔍 [Embedez] Converting to %s URL: %s", service, serviceURL)
 	
-	// Follow service redirect to embedez (or equivalent for kkinstagram)
+	// Follow service redirect to embedez (or equivalent for kksave)
 	embedezURL, err := e.followToEmbedez(serviceURL)
 	if err != nil {
 		return "", fmt.Errorf("failed to get embedez URL: %v", err)
@@ -70,9 +70,9 @@ func (e *EmbedezExtractor) ExtractInstagramVideo(instagramURL string) (string, e
 // convertToServiceURL converts Instagram URL to the configured service URL
 func (e *EmbedezExtractor) convertToServiceURL(instagramURL string) string {
 	service := config.GetInstagramService()
-	if service == "kkinstagram" {
-		result := strings.Replace(instagramURL, "https://www.instagram.com", "https://www.kkinstagram.com", 1)
-		result = strings.Replace(result, "https://instagram.com", "https://www.kkinstagram.com", 1)
+	if service == "kksave" {
+		result := strings.Replace(instagramURL, "https://www.instagram.com", "https://www.kksave.com", 1)
+		result = strings.Replace(result, "https://instagram.com", "https://www.kksave.com", 1)
 		return result
 	}
 	// Default to instagramez

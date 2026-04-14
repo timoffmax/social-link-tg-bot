@@ -544,7 +544,7 @@ func platformDisplayName(originalURL string) string {
 	urlLower := strings.ToLower(originalURL)
 
 	switch {
-	case strings.Contains(urlLower, "instagram.com") || strings.Contains(urlLower, "kkinstagram.com"):
+	case strings.Contains(urlLower, "instagram.com") || strings.Contains(urlLower, "kksave.com"):
 		return "Instagram"
 	case strings.Contains(urlLower, "tiktok.com"):
 		return "TikTok"

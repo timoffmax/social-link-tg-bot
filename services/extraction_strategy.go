@@ -9,8 +9,8 @@ import (
 // getInstagramFixedDomain returns the configured Instagram service domain
 func getInstagramFixedDomain() string {
 	service := config.GetInstagramService()
-	if service == "kkinstagram" {
-		return "kkinstagram.com"
+	if service == "kksave" {
+		return "kksave.com"
 	}
 	return "instagramez.com"
 }
@@ -38,8 +38,8 @@ type ExtractionStrategy struct {
 // GetExtractionStrategy returns the optimal extraction strategy for a given URL
 func GetExtractionStrategy(url string) *ExtractionStrategy {
 	// Instagram: optimized based on test results showing yt-dlp performance is excellent
-	// Also handle kkinstagram.com URLs (already fixed links)
-	if strings.Contains(url, "instagram.com") || strings.Contains(url, "kkinstagram.com") {
+	// Also handle kksave.com URLs (already fixed links)
+	if strings.Contains(url, "instagram.com") || strings.Contains(url, "kksave.com") {
 		if !config.IsInstagramEnabled() {
 			return &ExtractionStrategy{
 				Platform: "instagram",
@@ -267,9 +267,9 @@ func (es *ExtractionStrategy) GetFixedURL(originalURL string) string {
 	case "instagram":
 		// Replace instagram.com with the configured service domain
 		service := config.GetInstagramService()
-		if service == "kkinstagram" {
-			result := strings.Replace(originalURL, "https://www.instagram.com", "https://www.kkinstagram.com", 1)
-			return strings.Replace(result, "https://instagram.com", "https://www.kkinstagram.com", 1)
+		if service == "kksave" {
+			result := strings.Replace(originalURL, "https://www.instagram.com", "https://www.kksave.com", 1)
+			return strings.Replace(result, "https://instagram.com", "https://www.kksave.com", 1)
 		}
 		// Default to instagramez
 		return strings.Replace(strings.Replace(originalURL, "https://www.instagram.com", "https://www.instagramez.com", 1), "https://instagram.com", "https://instagramez.com", 1)
@@ -342,8 +342,8 @@ func (es *ExtractionStrategy) LogStrategy() {
 	if es.HasFixedLink {
 		if es.Platform == "instagram" {
 			service := config.GetInstagramService()
-			if service == "kkinstagram" {
-				log.Printf("   Fixed link: ddinstagram (internal), kkinstagram (user-facing)")
+			if service == "kksave" {
+				log.Printf("   Fixed link: ddinstagram (internal), kksave (user-facing)")
 			} else {
 				log.Printf("   Fixed link: ddinstagram (internal), instagramez (user-facing)")
 			}

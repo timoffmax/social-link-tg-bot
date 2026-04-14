@@ -93,17 +93,17 @@ func GetAllSocialLinks(message *response.TgMessage, chatID int64) []string {
 }
 
 func GetInstagramLinks(message *response.TgMessage) []string {
-	// Match both instagram.com and kkinstagram.com URLs
-	regex := regexp.MustCompile(`https?:\/\/(www\.)?(instagram|kkinstagram)\.com\/[^\s]+`)
+	// Match both instagram.com and kksave.com URLs
+	regex := regexp.MustCompile(`https?:\/\/(www\.)?(instagram|kksave)\.com\/[^\s]+`)
 	result := regex.FindAllString(message.Text, -1)
 
 	for i, url := range result {
-		// Only fix Instagram URLs, leave kkinstagram URLs as-is (they're already fixed)
+		// Only fix Instagram URLs, leave kksave URLs as-is (they're already fixed)
 		if strings.Contains(url, "instagram.com") {
 			fixedUrl := fixInstagramLink(url)
 			result[i] = fixedUrl
 		}
-		// kkinstagram URLs are already "fixed", just return them
+		// kksave URLs are already "fixed", just return them
 	}
 
 	return result
@@ -136,10 +136,10 @@ func GetTwitterLinks(message *response.TgMessage) []string {
 func fixInstagramLink(link string) string {
 	service := config.GetInstagramService()
 	
-	if service == "kkinstagram" {
-		// Transform https://www.instagram.com/reel/XXX to https://www.kkinstagram.com/reel/XXX
-		result := strings.Replace(link, "https://www.instagram.com", "https://www.kkinstagram.com", 1)
-		result = strings.Replace(result, "https://instagram.com", "https://www.kkinstagram.com", 1)
+	if service == "kksave" {
+		// Transform https://www.instagram.com/reel/XXX to https://www.kksave.com/reel/XXX
+		result := strings.Replace(link, "https://www.instagram.com", "https://www.kksave.com", 1)
+		result = strings.Replace(result, "https://instagram.com", "https://www.kksave.com", 1)
 		return result
 	}
 	
@@ -172,7 +172,7 @@ func fixTwitterLink(link string) string {
 }
 
 func GetOriginalInstagramLinks(message *response.TgMessage) []string {
-	// Match only original instagram.com URLs, skip fixed link services (kkinstagram, instagramez)
+	// Match only original instagram.com URLs, skip fixed link services (kksave, instagramez)
 	regex := regexp.MustCompile(`https?:\/\/(www\.)?instagram\.com\/[^\s]+`)
 	links := regex.FindAllString(message.Text, -1)
 

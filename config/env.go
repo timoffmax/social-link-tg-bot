@@ -219,11 +219,11 @@ func GetDefaultDailyMediaLimit() int {
 }
 
 // Instagram service configuration
-// Returns the service to use for Instagram links (instagramez or kkinstagram)
+// Returns the service to use for Instagram links (instagramez or kksave)
 func GetInstagramService() string {
 	service := strings.ToLower(strings.TrimSpace(os.Getenv("INSTAGRAM_SERVICE")))
-	if service == "" {
-		return "kkinstagram" // Default to kkinstagram
+	if service == "" || service == "kkinstagram" {
+		return "kksave" // Default to kksave (kkinstagram is deprecated and aliased to kksave)
 	}
 	return service
 }

@@ -194,8 +194,8 @@ func (sc *StartupChecker) printPlatformSupport() {
 	// Get Instagram service configuration
 	instagramService := config.GetInstagramService()
 	instagramFixedLink := "instagramez.com"
-	if instagramService == "kkinstagram" {
-		instagramFixedLink = "kkinstagram.com"
+	if instagramService == "kksave" {
+		instagramFixedLink = "kksave.com"
 	}
 	
 	platforms := []struct {

@@ -406,7 +406,7 @@ func processMediaDownload(url string, origChat *response.TgChat, origMessage *re
 	defer close(stopAction)
 
 	// Send status message for Instagram photos/carousels (which may take time to download)
-	if (strings.Contains(url, "instagram.com") || strings.Contains(url, "kkinstagram.com")) && strings.Contains(url, "/p/") {
+	if (strings.Contains(url, "instagram.com") || strings.Contains(url, "kksave.com")) && strings.Contains(url, "/p/") {
 		statusMsg := payload.TgPlSendMessage{
 			ChatId:              origChat.Id,
 			Text:                "📸 Processing Instagram photos... This isn't quick, unfortunately, may take a couple of minutes ⏳",
@@ -618,7 +618,7 @@ func processMediaDownload(url string, origChat *response.TgChat, origMessage *re
 
 // detectPlatformFromUrl detects the social media platform from URL
 func detectPlatformFromUrl(url string) string {
-	if strings.Contains(url, "instagram.com") || strings.Contains(url, "kkinstagram.com") {
+	if strings.Contains(url, "instagram.com") || strings.Contains(url, "kksave.com") {
 		return "instagram"
 	} else if strings.Contains(url, "tiktok.com") || strings.Contains(url, "tiktxk.com") {
 		return "tiktok"
@@ -983,9 +983,9 @@ func getFixedUrl(url string) string {
 	// Instagram
 	if strings.Contains(url, "instagram.com") {
 		service := config.GetInstagramService()
-		if service == "kkinstagram" {
-			result := strings.Replace(url, "https://www.instagram.com", "https://www.kkinstagram.com", 1)
-			return strings.Replace(result, "https://instagram.com", "https://www.kkinstagram.com", 1)
+		if service == "kksave" {
+			result := strings.Replace(url, "https://www.instagram.com", "https://www.kksave.com", 1)
+			return strings.Replace(result, "https://instagram.com", "https://www.kksave.com", 1)
 		}
 		// Default to instagramez
 		return strings.Replace(strings.Replace(url, "https://www.instagram.com", "https://www.instagramez.com", 1), "https://instagram.com", "https://instagramez.com", 1)
