@@ -577,9 +577,11 @@ func FormatOriginalLink(originalURL string) string {
 	return fmt.Sprintf("\n\n🔗 <a href=\"%s\">%s the original on %s</a>", cleanURL, linkVerb, platform)
 }
 
-// appendOriginalURL adds the original URL to caption
-// Note: Does NOT truncate - lets the caller (updates.go) handle long captions
-// This allows Twitter long text handling to work properly
+// appendOriginalURL adds the original URL to caption, keeping the HTML
+// <a> suffix intact within Telegram's 1024-byte caption limit. If the body
+// plus suffix would exceed the limit, the body is truncated at a rune
+// boundary before the suffix is appended, so the closing </a> never gets
+// chopped off (which would produce "Can't find end tag" from Telegram).
 func appendOriginalURL(mediaInfos []*MediaInfo, originalURL string) {
 	urlSuffix := FormatOriginalLink(originalURL)
 
@@ -592,13 +594,40 @@ func appendOriginalURL(mediaInfos []*MediaInfo, originalURL string) {
 		currentCaption := mediaInfo.Caption
 
 		if len(currentCaption) > 0 {
-			// Append URL to caption - don't truncate here
-			mediaInfo.Caption = currentCaption + urlSuffix
+			mediaInfo.Caption = truncateBodyForSuffix(currentCaption, urlSuffix) + urlSuffix
 		} else {
 			// No caption, just add URL (remove leading newlines)
 			mediaInfo.Caption = strings.TrimPrefix(urlSuffix, "\n\n")
 		}
 	}
+}
+
+// truncateBodyForSuffix returns `body` shortened (at a UTF-8 rune boundary)
+// so that len(body) + len(suffix) <= telegramCaptionLimit. An ellipsis is
+// added when truncation happens.
+func truncateBodyForSuffix(body, suffix string) string {
+	const telegramCaptionLimit = 1024
+	const ellipsis = "..."
+
+	if len(body)+len(suffix) <= telegramCaptionLimit {
+		return body
+	}
+
+	maxBody := telegramCaptionLimit - len(suffix) - len(ellipsis)
+	if maxBody <= 0 {
+		return ""
+	}
+
+	if maxBody >= len(body) {
+		return body
+	}
+
+	// Walk back to a rune boundary so we don't slice mid-codepoint.
+	for maxBody > 0 && (body[maxBody]&0xC0) == 0x80 {
+		maxBody--
+	}
+
+	return body[:maxBody] + ellipsis
 }
 
 // downloadVideoFromURL downloads a video file from a direct URL

@@ -923,13 +923,24 @@ func sendPhotosAsMediaGroup(photos []*services.MediaInfo, origChat *response.TgC
 		
 		// Only add caption to the first photo to avoid clutter
 		if i == 0 && photoInfo.Caption != "" {
-			// Decode HTML entities and limit caption length to Telegram's 1024 character limit
 			caption := html.UnescapeString(photoInfo.Caption)
-			if len(caption) > 1024 {
-				caption = caption[:1021] + "..."
-			}
 			mediaItem.Caption = caption
 			mediaItem.ParseMode = payload.ParseModeHTML
+
+			// Defensive fallback: upstream (appendOriginalURL) should already
+			// keep captions within the 1024-byte limit. If something slips
+			// through, blind-truncating would likely slice an HTML tag mid-way
+			// and cause "can't parse entities" — drop HTML parse mode instead.
+			if len(caption) > 1024 {
+				log.Printf("⚠️ Caption exceeds 1024 bytes (%d); truncating and disabling HTML parse mode", len(caption))
+				cut := 1021
+
+				for cut > 0 && (caption[cut]&0xC0) == 0x80 {
+					cut--
+				}
+				mediaItem.Caption = caption[:cut] + "..."
+				mediaItem.ParseMode = ""
+			}
 		}
 		
 		mediaArray = append(mediaArray, mediaItem)
@@ -946,13 +957,16 @@ func sendPhotosAsMediaGroup(photos []*services.MediaInfo, origChat *response.TgC
 	}
 	
 	// Send the media group
-	message.NewSendMediaGroup(mediaGroupPayload)
-	
+	result := message.NewSendMediaGroup(mediaGroupPayload)
+	if result.Err != nil {
+		return fmt.Errorf("sendMediaGroup failed: %w", result.Err)
+	}
+
 	// Track each photo send
 	for range photos {
 		trackMediaSent(int64(origMessage.From.Id), origMessage.From.Username, origChat.Id, origChat.Title, url, "photo")
 	}
-	
+
 	return nil
 }
 
