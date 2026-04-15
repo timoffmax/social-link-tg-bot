@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	"log"
 	"mime/multipart"
 	"net/http"
 	"os"
@@ -82,9 +83,11 @@ func (r *AuthorizedRequest) Send(respPayload interface{}) (ResponseInfo, error) 
 		defer response.Body.Close()
 
 		result = parseResponse(response, err, &respPayload)
-		
+
 		// Return error for non-200 status codes
 		if 200 != result.StatusCode {
+			log.Printf("❌ [TG-API] %s failed: status=%d description=%q", r.ApiMethod, result.StatusCode, result.Message)
+
 			return result, fmt.Errorf("API error: %d - %s", result.StatusCode, result.Message)
 		}
 	}
