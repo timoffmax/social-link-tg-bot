@@ -8,11 +8,7 @@ import (
 
 // getInstagramFixedDomain returns the configured Instagram service domain
 func getInstagramFixedDomain() string {
-	service := config.GetInstagramService()
-	if service == "kksave" {
-		return "kksave.com"
-	}
-	return "instagramez.com"
+	return config.GetInstagramService() + ".com"
 }
 
 // ExtractionMethod represents a method for extracting media
@@ -24,6 +20,8 @@ const (
 	MethodFixedLink
 	MethodStoriesAPI
 	MethodRedditAPI
+	MethodRapidAPILinks
+	MethodInstaFix
 	MethodNone
 )
 
@@ -37,9 +35,9 @@ type ExtractionStrategy struct {
 
 // GetExtractionStrategy returns the optimal extraction strategy for a given URL
 func GetExtractionStrategy(url string) *ExtractionStrategy {
-	// Instagram: optimized based on test results showing yt-dlp performance is excellent
-	// Also handle kksave.com URLs (already fixed links)
-	if strings.Contains(url, "instagram.com") || strings.Contains(url, "kksave.com") {
+	// Instagram: RapidAPI for videos, InstaFix for photos, fixed link fallback.
+	// Also accept InstaFix-service URLs so forwarded preview links are still processed.
+	if IsInstagramLikeURL(url) {
 		if !config.IsInstagramEnabled() {
 			return &ExtractionStrategy{
 				Platform: "instagram",
@@ -47,28 +45,27 @@ func GetExtractionStrategy(url string) *ExtractionStrategy {
 				HasFixedLink: false,
 			}
 		}
-		// Instagram videos (reels, IGTV): directly use fixed link for speed
+		// Instagram videos (reels, IGTV): RapidAPI for the actual MP4, fixed link as preview fallback
 		if strings.Contains(url, "/reel/") || strings.Contains(url, "/tv/") || strings.Contains(url, "/reels/") {
 			return &ExtractionStrategy{
 				Platform: "instagram",
 				Methods: []ExtractionMethod{
-					MethodFixedLink,  // Direct link replacement only
+					MethodRapidAPILinks,
+					MethodFixedLink,
 				},
 				HasFixedLink: true,
 				FixedLinkDomain: getInstagramFixedDomain(),
 			}
 		}
-		
-		// Instagram photos (/p/ URLs): attempt download for all photos
-		// This handles both single photos and carousels, with fallback to fixed link
+
+		// Instagram photos (/p/ URLs): InstaFix /images/ for actual files, fixed link fallback
 		if strings.Contains(url, "/p/") {
-			log.Printf("📸 Instagram photo - will attempt download with fallback to direct link")
+			log.Printf("📸 Instagram photo - InstaFix first, fixed link fallback")
 			return &ExtractionStrategy{
 				Platform: "instagram",
 				Methods: []ExtractionMethod{
-					MethodBrowser,    // Browser extraction for photos/albums
-					MethodYtDlp,      // Fallback to yt-dlp
-					MethodFixedLink,  // Fast fallback to fixed link
+					MethodInstaFix,
+					MethodFixedLink,
 				},
 				HasFixedLink: true,
 				FixedLinkDomain: getInstagramFixedDomain(),
@@ -80,27 +77,26 @@ func GetExtractionStrategy(url string) *ExtractionStrategy {
 			return &ExtractionStrategy{
 				Platform: "instagram",
 				Methods: []ExtractionMethod{
-					MethodStoriesAPI, // RapidAPI stories endpoint
-					MethodBrowser,    // Browser extraction fallback
-					MethodYtDlp,      // yt-dlp fallback
+					MethodStoriesAPI,
+					MethodBrowser,
+					MethodYtDlp,
 				},
 				HasFixedLink: false,
 			}
 		}
 
-		// Instagram other content: try downloading first
+		// Instagram other content: RapidAPI first, then fixed link
 		return &ExtractionStrategy{
 			Platform: "instagram",
 			Methods: []ExtractionMethod{
-				MethodBrowser,    // Browser extraction
-				MethodYtDlp,      // Fallback to yt-dlp
-				MethodFixedLink,  // Last resort
+				MethodRapidAPILinks,
+				MethodFixedLink,
 			},
 			HasFixedLink: true,
 			FixedLinkDomain: getInstagramFixedDomain(),
 		}
 	}
-	
+
 	// TikTok: different strategies for videos vs slideshows
 	if strings.Contains(url, "tiktok.com") || strings.Contains(url, "vm.tiktok.com") {
 		if !config.IsTikTokEnabled() {
@@ -134,7 +130,7 @@ func GetExtractionStrategy(url string) *ExtractionStrategy {
 			FixedLinkDomain: "tiktxk.com",
 		}
 	}
-	
+
 	// Twitter/X: yt-dlp with hybrid approach (FxTwitter text + yt-dlp media)
 	if strings.Contains(url, "twitter.com") || strings.Contains(url, "x.com") {
 		if !config.IsTwitterEnabled() {
@@ -147,15 +143,15 @@ func GetExtractionStrategy(url string) *ExtractionStrategy {
 		return &ExtractionStrategy{
 			Platform: "twitter",
 			Methods: []ExtractionMethod{
-				MethodYtDlp,    // Hybrid: gets full text from FxTwitter + media from yt-dlp
-				MethodBrowser,  // Fallback: custom Twitter extractor
+				MethodYtDlp,
+				MethodBrowser,
 				MethodFixedLink,
 			},
 			HasFixedLink: true,
 			FixedLinkDomain: "fixupx.com",
 		}
 	}
-	
+
 	// YouTube: different strategies for videos vs community posts
 	if strings.Contains(url, "youtube.com") || strings.Contains(url, "youtu.be") {
 		if !config.IsYouTubeEnabled() {
@@ -170,7 +166,7 @@ func GetExtractionStrategy(url string) *ExtractionStrategy {
 			return &ExtractionStrategy{
 				Platform: "youtube",
 				Methods: []ExtractionMethod{
-					MethodBrowser, // CLI browser with enhanced YouTube community post extraction
+					MethodBrowser,
 				},
 				HasFixedLink: false,
 			}
@@ -180,13 +176,13 @@ func GetExtractionStrategy(url string) *ExtractionStrategy {
 			Platform: "youtube",
 			Methods: []ExtractionMethod{
 				MethodYtDlp,
-				MethodBrowser, // Fallback for when yt-dlp fails
+				MethodBrowser,
 			},
 			HasFixedLink: false,
 		}
 	}
-	
-	
+
+
 	// Reddit: JSON API via proxy first, then yt-dlp and browser fallback
 	if strings.Contains(url, "reddit.com") {
 		if !config.IsRedditEnabled() {
@@ -206,7 +202,7 @@ func GetExtractionStrategy(url string) *ExtractionStrategy {
 			HasFixedLink: false,
 		}
 	}
-	
+
 	// Facebook: yt-dlp first (works for some video posts), then browser fallback
 	if strings.Contains(url, "facebook.com") {
 		if !config.IsFacebookEnabled() {
@@ -225,7 +221,7 @@ func GetExtractionStrategy(url string) *ExtractionStrategy {
 			HasFixedLink: false,
 		}
 	}
-	
+
 	// 9GAG: yt-dlp routes to CLI browser extraction, then universal browser fallback
 	if strings.Contains(url, "9gag.com") {
 		if !config.Is9GAGEnabled() {
@@ -256,23 +252,30 @@ func GetExtractionStrategy(url string) *ExtractionStrategy {
 	}
 }
 
+// IsInstagramLikeURL returns true if the URL points to Instagram or one of the
+// proxy services we recognize (live or deprecated, so forwarded links still work).
+func IsInstagramLikeURL(url string) bool {
+	for _, host := range []string{"instagram.com", "toinstagram.com", "onebigram.com", "kksave.com", "instagramez.com"} {
+		if strings.Contains(url, host) {
+			return true
+		}
+	}
+
+	return false
+}
+
 // GetFixedURL returns the fixed URL for platforms that support it
-// This is the user-facing URL (e.g., instagramez for Instagram)
+// This is the user-facing URL (e.g., toinstagram for Instagram)
 func (es *ExtractionStrategy) GetFixedURL(originalURL string) string {
 	if !es.HasFixedLink {
 		return ""
 	}
-	
+
 	switch es.Platform {
 	case "instagram":
-		// Replace instagram.com with the configured service domain
-		service := config.GetInstagramService()
-		if service == "kksave" {
-			result := strings.Replace(originalURL, "https://www.instagram.com", "https://www.kksave.com", 1)
-			return strings.Replace(result, "https://instagram.com", "https://www.kksave.com", 1)
-		}
-		// Default to instagramez
-		return strings.Replace(strings.Replace(originalURL, "https://www.instagram.com", "https://www.instagramez.com", 1), "https://instagram.com", "https://instagramez.com", 1)
+		domain := getInstagramFixedDomain()
+		result := strings.Replace(originalURL, "https://www.instagram.com", "https://"+domain, 1)
+		return strings.Replace(result, "https://instagram.com", "https://"+domain, 1)
 	case "tiktok":
 		return strings.Replace(originalURL, "tiktok.com", es.FixedLinkDomain, 1)
 	case "twitter":
@@ -281,31 +284,18 @@ func (es *ExtractionStrategy) GetFixedURL(originalURL string) string {
 		}
 		return strings.Replace(originalURL, "x.com", es.FixedLinkDomain, 1)
 	}
-	
+
 	return ""
 }
 
 // GetInternalFixedURL returns the internal fixed URL for downloading
-// This may differ from the user-facing URL (e.g., ddinstagram for internal downloading)
+// Uses the same domain as the user-facing URL; the legacy ddinstagram.com is dead.
 func (es *ExtractionStrategy) GetInternalFixedURL(originalURL string) string {
 	if !es.HasFixedLink {
 		return ""
 	}
-	
-	switch es.Platform {
-	case "instagram":
-		// Use ddinstagram for internal downloading (it works better)
-		return strings.Replace(originalURL, "https://www.instagram.com", "https://d.ddinstagram.com", 1)
-	case "tiktok":
-		return strings.Replace(originalURL, "tiktok.com", es.FixedLinkDomain, 1)
-	case "twitter":
-		if strings.Contains(originalURL, "twitter.com") {
-			return strings.Replace(originalURL, "twitter.com", es.FixedLinkDomain, 1)
-		}
-		return strings.Replace(originalURL, "x.com", es.FixedLinkDomain, 1)
-	}
-	
-	return ""
+
+	return es.GetFixedURL(originalURL)
 }
 
 // ShouldUseBrowser returns true if browser extraction should be tried for this strategy
@@ -333,20 +323,19 @@ func (es *ExtractionStrategy) LogStrategy() {
 			methodNames[i] = "stories-api"
 		case MethodRedditAPI:
 			methodNames[i] = "reddit-api"
+		case MethodRapidAPILinks:
+			methodNames[i] = "rapidapi-links"
+		case MethodInstaFix:
+			methodNames[i] = "instafix"
 		default:
 			methodNames[i] = "unknown"
 		}
 	}
-	
+
 	log.Printf("📋 Extraction strategy for %s: %s", es.Platform, strings.Join(methodNames, " → "))
 	if es.HasFixedLink {
 		if es.Platform == "instagram" {
-			service := config.GetInstagramService()
-			if service == "kksave" {
-				log.Printf("   Fixed link: ddinstagram (internal), kksave (user-facing)")
-			} else {
-				log.Printf("   Fixed link: ddinstagram (internal), instagramez (user-facing)")
-			}
+			log.Printf("   Fixed link: %s", getInstagramFixedDomain())
 		} else {
 			log.Printf("   Fixed link domain: %s", es.FixedLinkDomain)
 		}

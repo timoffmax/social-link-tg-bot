@@ -3,25 +3,22 @@ package services
 import (
 	"context"
 	"fmt"
-	"io"
 	"log"
-	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/timoffmax/social-link-bot/config"
 )
 
 // SmartDownloader handles media downloads with platform-specific strategies
 type SmartDownloader struct {
 	ytdlp    *YtDlpDownloader
 	browser  *UniversalBrowserExtractor
-	embedez  *EmbedezExtractor
 	stories  *InstagramStoriesExtractor
+	rapidAPI *InstagramRapidAPIExtractor
+	instafix *InstagramInstafixExtractor
 	reddit   *RedditExtractor
 	tempDir  string
 	workingDir string
@@ -34,15 +31,16 @@ func NewSmartDownloader() *SmartDownloader {
 		log.Printf("Failed to get working directory: %v", err)
 		workingDir = "."
 	}
-	
+
 	tempDir := filepath.Join(workingDir, "temp")
 	os.MkdirAll(tempDir, 0755)
-	
+
 	return &SmartDownloader{
 		ytdlp:      NewYtDlpDownloader(),
 		browser:    NewUniversalBrowserExtractor(workingDir, tempDir),
-		embedez:    NewEmbedezExtractor(),
 		stories:    NewInstagramStoriesExtractor(tempDir),
+		rapidAPI:   NewInstagramRapidAPIExtractor(tempDir),
+		instafix:   NewInstagramInstafixExtractor(tempDir),
 		reddit:     NewRedditExtractor(tempDir),
 		tempDir:    tempDir,
 		workingDir: workingDir,
@@ -64,15 +62,6 @@ func (sd *SmartDownloader) downloadMediaWithContext(ctx context.Context, mediaUR
 
 	// Get the extraction strategy for this URL
 	strategy := GetExtractionStrategy(mediaURL)
-
-	// Instagram video optimization: use embedez extractor when cookies are not available
-	// BUT skip this if we're in direct link mode (only MethodFixedLink)
-	if strategy.Platform == "instagram" && strategy.HasFixedLink {
-		result, err := sd.tryInstagramVideoShortcut(ctx, mediaURL, strategy, startTime)
-		if result != nil || err != nil {
-			return result, err
-		}
-	}
 
 	strategy.LogStrategy()
 
@@ -287,6 +276,46 @@ func (sd *SmartDownloader) executeStrategy(
 		LogExtraction(strategy.Platform, mediaURL, "reddit-api", false, 0, methodDuration)
 		return nil, err
 
+	case MethodRapidAPILinks:
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+
+		log.Printf("🎞️ Trying RapidAPI /links extraction for %s", strategy.Platform)
+		mediaInfos, err := sd.rapidAPI.ExtractMedia(mediaURL)
+		methodDuration := time.Since(methodStartTime)
+
+		if err == nil && len(mediaInfos) > 0 {
+			log.Printf("✅ RapidAPI extraction succeeded with %d items", len(mediaInfos))
+			LogExtraction(strategy.Platform, mediaURL, "rapidapi-links", true, len(mediaInfos), time.Since(overallStart))
+			appendOriginalURL(mediaInfos, mediaURL)
+			return mediaInfos, nil
+		}
+
+		log.Printf("❌ RapidAPI extraction failed: %v", err)
+		LogExtraction(strategy.Platform, mediaURL, "rapidapi-links", false, 0, methodDuration)
+		return nil, err
+
+	case MethodInstaFix:
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+
+		log.Printf("📷 Trying InstaFix /images/ extraction")
+		mediaInfos, err := sd.instafix.ExtractPhotos(mediaURL)
+		methodDuration := time.Since(methodStartTime)
+
+		if err == nil && len(mediaInfos) > 0 {
+			log.Printf("✅ InstaFix extraction succeeded with %d items", len(mediaInfos))
+			LogExtraction(strategy.Platform, mediaURL, "instafix", true, len(mediaInfos), time.Since(overallStart))
+			appendOriginalURL(mediaInfos, mediaURL)
+			return mediaInfos, nil
+		}
+
+		log.Printf("❌ InstaFix extraction failed: %v", err)
+		LogExtraction(strategy.Platform, mediaURL, "instafix", false, 0, methodDuration)
+		return nil, err
+
 	case MethodFixedLink:
 		return sd.executeFixedLinkStrategy(ctx, mediaURL, strategy, overallStart, methodStartTime)
 	}
@@ -331,7 +360,9 @@ func (sd *SmartDownloader) executeFixedLinkStrategy(
 	}}, nil
 }
 
-// executeInstagramFixedLink handles Instagram-specific fixed link logic.
+// executeInstagramFixedLink returns the Instagram preview link as a text message.
+// Primary extractors (RapidAPI, InstaFix) run before this method, so by the time
+// we reach here the goal is simply to give the user a Telegram-previewable link.
 func (sd *SmartDownloader) executeInstagramFixedLink(
 	ctx context.Context,
 	mediaURL string,
@@ -340,72 +371,10 @@ func (sd *SmartDownloader) executeInstagramFixedLink(
 	userFixedURL string,
 	methodDuration time.Duration,
 ) ([]*MediaInfo, error) {
-	// If the ONLY method is FixedLink, skip download attempts and return link immediately
-	if len(strategy.Methods) == 1 && strategy.Methods[0] == MethodFixedLink {
-		log.Printf("📎 Direct link mode - returning %s link immediately: %s", config.GetInstagramService(), userFixedURL)
-		LogExtraction(strategy.Platform, mediaURL, "fixed-link-direct", true, 1, methodDuration)
+	_ = ctx
+	_ = internalFixedURL
 
-		return []*MediaInfo{{
-			Type:     "text",
-			URL:      mediaURL,
-			Caption:  userFixedURL,
-			Filename: "",
-		}}, nil
-	}
-
-	log.Printf("🎯 Attempting to download media from Instagram fixed link: %s", internalFixedURL)
-
-	// Try yt-dlp on the internal fixed link (ddinstagram)
-	fixedMediaInfos, fixedErr := sd.ytdlp.DownloadMedia(internalFixedURL)
-	if fixedErr == nil && len(fixedMediaInfos) > 0 {
-		if hasActualMediaFiles(fixedMediaInfos) {
-			log.Printf("✅ Fixed link extraction succeeded with %d media items", len(fixedMediaInfos))
-			LogExtraction(strategy.Platform, mediaURL, "fixed-link-media", true, len(fixedMediaInfos), methodDuration)
-			appendOriginalURL(fixedMediaInfos, mediaURL)
-			return fixedMediaInfos, nil
-		}
-	}
-
-	var lastErr error
-
-	if fixedErr != nil {
-		if strings.Contains(fixedErr.Error(), "login required") ||
-			strings.Contains(fixedErr.Error(), "rate-limit") ||
-			strings.Contains(fixedErr.Error(), "authentication") {
-			log.Printf("⚠️ Instagram requires authentication - cookies needed")
-			lastErr = fmt.Errorf("Instagram requires authentication. Please enable Instagram cookies in .env (ENABLE_INSTAGRAM_COOKIES=true) and ensure valid cookies are available")
-		}
-	}
-
-	// If yt-dlp failed, try browser extraction on the internal fixed link
-	if ctx.Err() == nil {
-		log.Printf("🌐 Trying browser extraction on fixed link")
-		browserMediaInfos, browserErr := sd.browser.ExtractMediaWithContext(ctx, internalFixedURL)
-
-		if browserErr == nil && len(browserMediaInfos) > 0 {
-			if hasActualMediaFiles(browserMediaInfos) {
-				log.Printf("✅ Fixed link browser extraction succeeded with %d media items", len(browserMediaInfos))
-				LogExtraction(strategy.Platform, mediaURL, "fixed-link-browser", true, len(browserMediaInfos), methodDuration)
-				appendOriginalURL(browserMediaInfos, mediaURL)
-				return browserMediaInfos, nil
-			}
-		}
-	}
-
-	// For Instagram videos, only return fixed link if we know it can resolve
-	isVideo := strings.Contains(mediaURL, "/reel/") || strings.Contains(mediaURL, "/tv/") || strings.Contains(mediaURL, "/reels/")
-
-	if isVideo {
-		if lastErr == nil || !strings.Contains(lastErr.Error(), "authentication") {
-			log.Printf("❌ Instagram video extraction failed - authentication required")
-			lastErr = fmt.Errorf("Instagram video requires authentication. Enable cookies: ENABLE_INSTAGRAM_COOKIES=true")
-		}
-
-		return nil, lastErr
-	}
-
-	// For photos/carousels, return the user-facing fixed link
-	log.Printf("📎 Returning fixed link for Instagram photo/carousel: %s", userFixedURL)
+	log.Printf("📎 Returning Instagram preview link: %s", userFixedURL)
 	LogExtraction(strategy.Platform, mediaURL, "fixed-link-text", true, 1, methodDuration)
 
 	return []*MediaInfo{{
@@ -414,86 +383,6 @@ func (sd *SmartDownloader) executeInstagramFixedLink(
 		Caption:  userFixedURL,
 		Filename: "",
 	}}, nil
-}
-
-// tryInstagramVideoShortcut handles the Instagram video embedez shortcut.
-// Returns (nil, nil) if the shortcut does not apply.
-func (sd *SmartDownloader) tryInstagramVideoShortcut(
-	ctx context.Context,
-	mediaURL string,
-	strategy *ExtractionStrategy,
-	startTime time.Time,
-) ([]*MediaInfo, error) {
-	isDirectLinkMode := len(strategy.Methods) == 1 && strategy.Methods[0] == MethodFixedLink
-	isVideo := strings.Contains(mediaURL, "/reel/") || strings.Contains(mediaURL, "/tv/") || strings.Contains(mediaURL, "/reels/")
-
-	if !isVideo || sd.ytdlp.HasInstagramCookies() || isDirectLinkMode {
-		return nil, nil
-	}
-
-	log.Printf("🚀 Instagram video without cookies - using embedez extractor")
-
-	// Try embedez extractor first
-	videoURL, err := sd.embedez.ExtractInstagramVideo(mediaURL)
-	if err == nil && videoURL != "" {
-		log.Printf("✅ Embedez extracted video URL: %s", videoURL)
-
-		filename := fmt.Sprintf("instagram_video_%d.mp4", time.Now().Unix())
-		videoFilePath := filepath.Join(sd.tempDir, filename)
-
-		err = sd.downloadVideoFromURL(videoURL, videoFilePath)
-		if err == nil {
-			log.Printf("✅ Successfully downloaded Instagram video via embedez")
-			LogExtraction(strategy.Platform, mediaURL, "embedez-direct", true, 1, time.Since(startTime))
-
-			return []*MediaInfo{{
-				Type:     "video",
-				URL:      mediaURL,
-				Caption:  "Downloaded from Instagram",
-				Filename: videoFilePath,
-			}}, nil
-		}
-
-		log.Printf("⚠️ Failed to download video from embedez URL: %v", err)
-	}
-
-	// Fallback: Try yt-dlp with fixed service URL
-	service := config.GetInstagramService()
-	log.Printf("🔄 Falling back to yt-dlp with %s URL", service)
-	fixedServiceURL := strategy.GetFixedURL(mediaURL)
-	ezMediaInfos, ezErr := sd.ytdlp.DownloadMedia(fixedServiceURL)
-
-	if ezErr == nil && len(ezMediaInfos) > 0 {
-		if hasActualMediaFiles(ezMediaInfos) {
-			log.Printf("✅ %s extraction via yt-dlp succeeded with %d media items", service, len(ezMediaInfos))
-			LogExtraction(strategy.Platform, mediaURL, service+"-ytdlp", true, len(ezMediaInfos), time.Since(startTime))
-			appendOriginalURL(ezMediaInfos, mediaURL)
-			return ezMediaInfos, nil
-		}
-	}
-
-	// Last resort: just send the fixed service link
-	serviceName := config.GetInstagramService()
-	log.Printf("📎 Sending %s link as fallback: %s", serviceName, fixedServiceURL)
-	LogExtraction(strategy.Platform, mediaURL, serviceName+"-link", true, 1, time.Since(startTime))
-
-	return []*MediaInfo{{
-		Type:     "text",
-		URL:      mediaURL,
-		Caption:  fixedServiceURL,
-		Filename: "",
-	}}, nil
-}
-
-// hasActualMediaFiles checks if any media items contain actual files (not text-only).
-func hasActualMediaFiles(mediaInfos []*MediaInfo) bool {
-	for _, media := range mediaInfos {
-		if media.Type != "text" && media.Filename != "" {
-			return true
-		}
-	}
-
-	return false
 }
 
 // tryYtDlpExtraction attempts to extract media using yt-dlp with platform-specific logic
@@ -628,32 +517,6 @@ func truncateBodyForSuffix(body, suffix string) string {
 	}
 
 	return body[:maxBody] + ellipsis
-}
-
-// downloadVideoFromURL downloads a video file from a direct URL
-func (sd *SmartDownloader) downloadVideoFromURL(videoURL, filepath string) error {
-	resp, err := SharedDownloadClient.Get(videoURL)
-	if err != nil {
-		return fmt.Errorf("failed to fetch video: %v", err)
-	}
-	defer resp.Body.Close()
-	
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("bad status code: %d", resp.StatusCode)
-	}
-	
-	out, err := os.Create(filepath)
-	if err != nil {
-		return fmt.Errorf("failed to create file: %v", err)
-	}
-	defer out.Close()
-	
-	_, err = io.Copy(out, resp.Body)
-	if err != nil {
-		return fmt.Errorf("failed to write file: %v", err)
-	}
-	
-	return nil
 }
 
 // cleanURLParams removes tracking parameters and UTM tags from URLs

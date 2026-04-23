@@ -219,13 +219,18 @@ func GetDefaultDailyMediaLimit() int {
 }
 
 // Instagram service configuration
-// Returns the service to use for Instagram links (instagramez or kksave)
+// Returns the service name (without .com) to use for Instagram preview links.
+// Recognizes: toinstagram, onebigram. Dead aliases (kksave, kkinstagram,
+// instagramez, ddinstagram) are migrated to toinstagram.
 func GetInstagramService() string {
 	service := strings.ToLower(strings.TrimSpace(os.Getenv("INSTAGRAM_SERVICE")))
-	if service == "" || service == "kkinstagram" {
-		return "kksave" // Default to kksave (kkinstagram is deprecated and aliased to kksave)
+
+	switch service {
+	case "toinstagram", "onebigram":
+		return service
 	}
-	return service
+
+	return "toinstagram"
 }
 
 // GetAdminUserID returns the Telegram user ID of the bot admin
