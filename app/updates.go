@@ -405,18 +405,6 @@ func processMediaDownload(url string, origChat *response.TgChat, origMessage *re
 
 	defer close(stopAction)
 
-	// Send status message for Instagram photos/carousels (which may take time to download)
-	if services.IsInstagramLikeURL(url) && strings.Contains(url, "/p/") {
-		statusMsg := payload.TgPlSendMessage{
-			ChatId:              origChat.Id,
-			Text:                "📸 Processing Instagram photos... This isn't quick, unfortunately, may take a couple of minutes ⏳",
-			ReplyToMessageId:    origMessage.MessageId,
-			DisableNotification: true,
-		}
-		message.NewSendMessage(statusMsg)
-		log.Printf("📤 Sent status message for Instagram photo/carousel processing")
-	}
-
 	// Try to download media using smart downloader
 	mediaInfos, err := downloader.DownloadMedia(url)
 	if err != nil {
