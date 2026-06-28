@@ -14,14 +14,18 @@ import (
 
 // SmartDownloader handles media downloads with platform-specific strategies
 type SmartDownloader struct {
-	ytdlp    *YtDlpDownloader
-	browser  *UniversalBrowserExtractor
-	stories  *InstagramStoriesExtractor
-	rapidAPI *InstagramRapidAPIExtractor
-	instafix *InstagramInstafixExtractor
-	reddit   *RedditExtractor
-	tempDir  string
-	workingDir string
+	ytdlp       *YtDlpDownloader
+	browser     *UniversalBrowserExtractor
+	stories     *InstagramStoriesExtractor
+	rapidAPI    *InstagramRapidAPIExtractor
+	instafix    *InstagramInstafixExtractor
+	kk          *InstagramKKInstagramExtractor
+	cobalt      *InstagramCobaltExtractor
+	fastsaver   *InstagramFastSaverExtractor
+	instagramOG *InstagramOGExtractor
+	reddit      *RedditExtractor
+	tempDir     string
+	workingDir  string
 }
 
 // NewSmartDownloader creates a new smart downloader instance
@@ -36,14 +40,18 @@ func NewSmartDownloader() *SmartDownloader {
 	os.MkdirAll(tempDir, 0755)
 
 	return &SmartDownloader{
-		ytdlp:      NewYtDlpDownloader(),
-		browser:    NewUniversalBrowserExtractor(workingDir, tempDir),
-		stories:    NewInstagramStoriesExtractor(tempDir),
-		rapidAPI:   NewInstagramRapidAPIExtractor(tempDir),
-		instafix:   NewInstagramInstafixExtractor(tempDir),
-		reddit:     NewRedditExtractor(tempDir),
-		tempDir:    tempDir,
-		workingDir: workingDir,
+		ytdlp:       NewYtDlpDownloader(),
+		browser:     NewUniversalBrowserExtractor(workingDir, tempDir),
+		stories:     NewInstagramStoriesExtractor(tempDir),
+		rapidAPI:    NewInstagramRapidAPIExtractor(tempDir),
+		instafix:    NewInstagramInstafixExtractor(tempDir),
+		kk:          NewInstagramKKInstagramExtractor(tempDir),
+		cobalt:      NewInstagramCobaltExtractor(tempDir),
+		fastsaver:   NewInstagramFastSaverExtractor(tempDir),
+		instagramOG: NewInstagramOGExtractor(tempDir),
+		reddit:      NewRedditExtractor(tempDir),
+		tempDir:     tempDir,
+		workingDir:  workingDir,
 	}
 }
 
@@ -67,8 +75,13 @@ func (sd *SmartDownloader) downloadMediaWithContext(ctx context.Context, mediaUR
 
 	var lastErr error
 
-	// Run the first 2 strategies concurrently if there are at least 2 non-FixedLink methods
-	concurrentCount := sd.getConcurrentCount(strategy.Methods)
+	// Run the first 2 strategies concurrently if there are at least 2 non-FixedLink
+	// methods, unless the strategy demands strict priority ordering.
+	concurrentCount := 0
+
+	if strategy.Sequential == false {
+		concurrentCount = sd.getConcurrentCount(strategy.Methods)
+	}
 
 	if concurrentCount >= 2 {
 		result, err := sd.tryConcurrentStrategies(ctx, mediaURL, strategy, startTime)
@@ -316,6 +329,86 @@ func (sd *SmartDownloader) executeStrategy(
 		LogExtraction(strategy.Platform, mediaURL, "instafix", false, 0, methodDuration)
 		return nil, err
 
+	case MethodFastSaver:
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+
+		log.Printf("⚡ Trying FastSaverAPI extraction for %s", strategy.Platform)
+		mediaInfos, err := sd.fastsaver.ExtractMedia(mediaURL)
+		methodDuration := time.Since(methodStartTime)
+
+		if (err == nil) && (len(mediaInfos) > 0) {
+			log.Printf("✅ FastSaverAPI extraction succeeded with %d items", len(mediaInfos))
+			LogExtraction(strategy.Platform, mediaURL, "fastsaver", true, len(mediaInfos), time.Since(overallStart))
+			appendOriginalURL(mediaInfos, mediaURL)
+			return mediaInfos, nil
+		}
+
+		log.Printf("❌ FastSaverAPI extraction failed: %v", err)
+		LogExtraction(strategy.Platform, mediaURL, "fastsaver", false, 0, methodDuration)
+		return nil, err
+
+	case MethodKKInstagram:
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+
+		log.Printf("📥 Trying kkinstagram redirect extraction")
+		mediaInfos, err := sd.kk.ExtractMedia(mediaURL)
+		methodDuration := time.Since(methodStartTime)
+
+		if (err == nil) && (len(mediaInfos) > 0) {
+			log.Printf("✅ kkinstagram extraction succeeded with %d items", len(mediaInfos))
+			LogExtraction(strategy.Platform, mediaURL, "kkinstagram", true, len(mediaInfos), time.Since(overallStart))
+			appendOriginalURL(mediaInfos, mediaURL)
+			return mediaInfos, nil
+		}
+
+		log.Printf("❌ kkinstagram extraction failed: %v", err)
+		LogExtraction(strategy.Platform, mediaURL, "kkinstagram", false, 0, methodDuration)
+		return nil, err
+
+	case MethodCobalt:
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+
+		log.Printf("🐦 Trying cobalt.tools extraction")
+		mediaInfos, err := sd.cobalt.ExtractMedia(mediaURL)
+		methodDuration := time.Since(methodStartTime)
+
+		if (err == nil) && (len(mediaInfos) > 0) {
+			log.Printf("✅ cobalt extraction succeeded with %d items", len(mediaInfos))
+			LogExtraction(strategy.Platform, mediaURL, "cobalt", true, len(mediaInfos), time.Since(overallStart))
+			appendOriginalURL(mediaInfos, mediaURL)
+			return mediaInfos, nil
+		}
+
+		log.Printf("❌ cobalt extraction failed: %v", err)
+		LogExtraction(strategy.Platform, mediaURL, "cobalt", false, 0, methodDuration)
+		return nil, err
+
+	case MethodInstagramOG:
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+
+		log.Printf("🖼️ Trying Instagram OG-thumbnail fallback")
+		mediaInfos, err := sd.instagramOG.ExtractMedia(mediaURL)
+		methodDuration := time.Since(methodStartTime)
+
+		if (err == nil) && (len(mediaInfos) > 0) {
+			log.Printf("✅ OG fallback succeeded with %d items", len(mediaInfos))
+			LogExtraction(strategy.Platform, mediaURL, "instagram-og", true, len(mediaInfos), time.Since(overallStart))
+			appendOriginalURL(mediaInfos, mediaURL)
+			return mediaInfos, nil
+		}
+
+		log.Printf("❌ OG fallback failed: %v", err)
+		LogExtraction(strategy.Platform, mediaURL, "instagram-og", false, 0, methodDuration)
+		return nil, err
+
 	case MethodFixedLink:
 		return sd.executeFixedLinkStrategy(ctx, mediaURL, strategy, overallStart, methodStartTime)
 	}
@@ -530,42 +623,42 @@ func cleanURLParams(originalURL string) string {
 	// List of common tracking parameters to remove
 	trackingParams := map[string]bool{
 		// UTM parameters
-		"utm_source":    true,
-		"utm_medium":    true,
-		"utm_campaign":  true,
-		"utm_term":      true,
-		"utm_content":   true,
-		"utm_id":        true,
-		
+		"utm_source":   true,
+		"utm_medium":   true,
+		"utm_campaign": true,
+		"utm_term":     true,
+		"utm_content":  true,
+		"utm_id":       true,
+
 		// Social media tracking
-		"t":             true, // Twitter sharing parameter
-		"s":             true, // Twitter sharing parameter
-		"fbclid":        true, // Facebook click ID
-		"gclid":         true, // Google click ID
-		"msclkid":       true, // Microsoft click ID
-		"igshid":        true, // Instagram share ID
-		
+		"t":       true, // Twitter sharing parameter
+		"s":       true, // Twitter sharing parameter
+		"fbclid":  true, // Facebook click ID
+		"gclid":   true, // Google click ID
+		"msclkid": true, // Microsoft click ID
+		"igshid":  true, // Instagram share ID
+
 		// General tracking
-		"ref":           true,
-		"ref_src":       true,
-		"source":        true,
-		"campaign":      true,
-		"_hsenc":        true, // HubSpot
-		"_hsmi":         true, // HubSpot
-		"mc_cid":        true, // MailChimp
-		"mc_eid":        true, // MailChimp
+		"ref":      true,
+		"ref_src":  true,
+		"source":   true,
+		"campaign": true,
+		"_hsenc":   true, // HubSpot
+		"_hsmi":    true, // HubSpot
+		"mc_cid":   true, // MailChimp
+		"mc_eid":   true, // MailChimp
 	}
 
 	// Get query parameters
 	values := parsedURL.Query()
-	
+
 	// Remove tracking parameters
 	for param := range trackingParams {
 		values.Del(param)
 	}
-	
+
 	// Set cleaned query parameters
 	parsedURL.RawQuery = values.Encode()
-	
+
 	return parsedURL.String()
 }

@@ -66,7 +66,7 @@ func IsProxyEnabledForPlatform(platform string) bool {
 	if !IsProxyEnabled() {
 		return false
 	}
-	
+
 	// Check platform-specific proxy settings
 	switch platform {
 	case "youtube":
@@ -93,7 +93,7 @@ func GetYtDlpProxies() []string {
 	if proxiesStr == "" {
 		return []string{}
 	}
-	
+
 	// Split by comma and trim spaces
 	var proxies []string
 	for _, proxy := range strings.Split(proxiesStr, ",") {
@@ -102,7 +102,7 @@ func GetYtDlpProxies() []string {
 			proxies = append(proxies, proxy)
 		}
 	}
-	
+
 	return proxies
 }
 
@@ -255,6 +255,53 @@ func GetRapidAPIInstagramHost() string {
 	host := os.Getenv("RAPIDAPI_INSTAGRAM_HOST")
 	if host == "" {
 		return "instagram120.p.rapidapi.com"
+	}
+
+	return host
+}
+
+// GetKKInstagramHost returns the kkinstagram-style redirector host used to
+// resolve Instagram media via a 302 to the Instagram CDN.
+func GetKKInstagramHost() string {
+	host := strings.TrimSpace(os.Getenv("KKINSTAGRAM_HOST"))
+	if host == "" {
+		return "kkinstagram.com"
+	}
+
+	return host
+}
+
+// GetCobaltInstances returns the ordered list of cobalt.tools instance base URLs.
+func GetCobaltInstances() []string {
+	raw := strings.TrimSpace(os.Getenv("COBALT_INSTANCES"))
+	if raw == "" {
+		raw = "https://co.eepy.today"
+	}
+
+	parts := strings.Split(raw, ",")
+	result := make([]string, 0, len(parts))
+
+	for _, part := range parts {
+		trimmed := strings.TrimSpace(part)
+
+		if trimmed != "" {
+			result = append(result, trimmed)
+		}
+	}
+
+	return result
+}
+
+// GetFastSaverAPIKey returns the FastSaverAPI key for the keyed Instagram method.
+func GetFastSaverAPIKey() string {
+	return strings.TrimSpace(os.Getenv("FASTSAVER_API_KEY"))
+}
+
+// GetFastSaverAPIHost returns the FastSaverAPI host.
+func GetFastSaverAPIHost() string {
+	host := strings.TrimSpace(os.Getenv("FASTSAVER_API_HOST"))
+	if host == "" {
+		return "api.fastsaver.io"
 	}
 
 	return host

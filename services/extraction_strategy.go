@@ -11,6 +11,28 @@ func getInstagramFixedDomain() string {
 	return config.GetInstagramService() + ".com"
 }
 
+// instagramExtractionMethods builds the ordered Instagram method chain: the
+// keyed FastSaver primary (only when a key is configured), the free IP-robust
+// redirectors (cobalt first when photoFirst, for full carousel coverage), and
+// the OG-thumbnail preview as a last resort. Methods run sequentially.
+func instagramExtractionMethods(photoFirst bool) []ExtractionMethod {
+	methods := make([]ExtractionMethod, 0, 4)
+
+	if config.GetFastSaverAPIKey() != "" {
+		methods = append(methods, MethodFastSaver)
+	}
+
+	if photoFirst == true {
+		methods = append(methods, MethodCobalt, MethodKKInstagram)
+	} else {
+		methods = append(methods, MethodKKInstagram, MethodCobalt)
+	}
+
+	methods = append(methods, MethodInstagramOG)
+
+	return methods
+}
+
 // ExtractionMethod represents a method for extracting media
 type ExtractionMethod int
 
@@ -22,15 +44,22 @@ const (
 	MethodRedditAPI
 	MethodRapidAPILinks
 	MethodInstaFix
+	MethodKKInstagram
+	MethodCobalt
+	MethodFastSaver
+	MethodInstagramOG
 	MethodNone
 )
 
 // ExtractionStrategy defines the order of methods to try for a platform
 type ExtractionStrategy struct {
-	Platform string
-	Methods  []ExtractionMethod
-	HasFixedLink bool
+	Platform        string
+	Methods         []ExtractionMethod
+	HasFixedLink    bool
 	FixedLinkDomain string
+	// Sequential forces methods to run strictly in order (no leading concurrency),
+	// so an explicitly preferred primary is fully tried before any fallback.
+	Sequential bool
 }
 
 // GetExtractionStrategy returns the optimal extraction strategy for a given URL
@@ -40,35 +69,27 @@ func GetExtractionStrategy(url string) *ExtractionStrategy {
 	if IsInstagramLikeURL(url) {
 		if !config.IsInstagramEnabled() {
 			return &ExtractionStrategy{
-				Platform: "instagram",
-				Methods: []ExtractionMethod{},
+				Platform:     "instagram",
+				Methods:      []ExtractionMethod{},
 				HasFixedLink: false,
 			}
 		}
-		// Instagram videos (reels, IGTV): RapidAPI for the actual MP4, fixed link as preview fallback
+		// Instagram videos (reels, IGTV): FastSaver (keyed) first, then free redirectors.
 		if strings.Contains(url, "/reel/") || strings.Contains(url, "/tv/") || strings.Contains(url, "/reels/") {
 			return &ExtractionStrategy{
-				Platform: "instagram",
-				Methods: []ExtractionMethod{
-					MethodRapidAPILinks,
-					MethodFixedLink,
-				},
-				HasFixedLink: true,
-				FixedLinkDomain: getInstagramFixedDomain(),
+				Platform:   "instagram",
+				Methods:    instagramExtractionMethods(false),
+				Sequential: true,
 			}
 		}
 
-		// Instagram photos (/p/ URLs): InstaFix /images/ for actual files, fixed link fallback
+		// Instagram photos (/p/ URLs): may be carousels, so prefer cobalt (picker) among the free methods.
 		if strings.Contains(url, "/p/") {
-			log.Printf("📸 Instagram photo - InstaFix first, fixed link fallback")
+			log.Printf("📸 Instagram photo - FastSaver, then cobalt/kkinstagram")
 			return &ExtractionStrategy{
-				Platform: "instagram",
-				Methods: []ExtractionMethod{
-					MethodInstaFix,
-					MethodFixedLink,
-				},
-				HasFixedLink: true,
-				FixedLinkDomain: getInstagramFixedDomain(),
+				Platform:   "instagram",
+				Methods:    instagramExtractionMethods(true),
+				Sequential: true,
 			}
 		}
 		// Instagram stories: use RapidAPI stories endpoint first
@@ -85,15 +106,11 @@ func GetExtractionStrategy(url string) *ExtractionStrategy {
 			}
 		}
 
-		// Instagram other content: RapidAPI first, then fixed link
+		// Instagram other content: FastSaver first, then free redirectors.
 		return &ExtractionStrategy{
-			Platform: "instagram",
-			Methods: []ExtractionMethod{
-				MethodRapidAPILinks,
-				MethodFixedLink,
-			},
-			HasFixedLink: true,
-			FixedLinkDomain: getInstagramFixedDomain(),
+			Platform:   "instagram",
+			Methods:    instagramExtractionMethods(false),
+			Sequential: true,
 		}
 	}
 
@@ -101,8 +118,8 @@ func GetExtractionStrategy(url string) *ExtractionStrategy {
 	if strings.Contains(url, "tiktok.com") || strings.Contains(url, "vm.tiktok.com") {
 		if !config.IsTikTokEnabled() {
 			return &ExtractionStrategy{
-				Platform: "tiktok",
-				Methods: []ExtractionMethod{},
+				Platform:     "tiktok",
+				Methods:      []ExtractionMethod{},
 				HasFixedLink: false,
 			}
 		}
@@ -115,7 +132,7 @@ func GetExtractionStrategy(url string) *ExtractionStrategy {
 					MethodYtDlp,
 					MethodFixedLink,
 				},
-				HasFixedLink: true,
+				HasFixedLink:    true,
 				FixedLinkDomain: "tiktxk.com",
 			}
 		}
@@ -126,7 +143,7 @@ func GetExtractionStrategy(url string) *ExtractionStrategy {
 				MethodYtDlp,
 				MethodFixedLink,
 			},
-			HasFixedLink: true,
+			HasFixedLink:    true,
 			FixedLinkDomain: "tiktxk.com",
 		}
 	}
@@ -135,8 +152,8 @@ func GetExtractionStrategy(url string) *ExtractionStrategy {
 	if strings.Contains(url, "twitter.com") || strings.Contains(url, "x.com") {
 		if !config.IsTwitterEnabled() {
 			return &ExtractionStrategy{
-				Platform: "twitter",
-				Methods: []ExtractionMethod{},
+				Platform:     "twitter",
+				Methods:      []ExtractionMethod{},
 				HasFixedLink: false,
 			}
 		}
@@ -147,7 +164,7 @@ func GetExtractionStrategy(url string) *ExtractionStrategy {
 				MethodBrowser,
 				MethodFixedLink,
 			},
-			HasFixedLink: true,
+			HasFixedLink:    true,
 			FixedLinkDomain: "fixupx.com",
 		}
 	}
@@ -156,8 +173,8 @@ func GetExtractionStrategy(url string) *ExtractionStrategy {
 	if strings.Contains(url, "youtube.com") || strings.Contains(url, "youtu.be") {
 		if !config.IsYouTubeEnabled() {
 			return &ExtractionStrategy{
-				Platform: "youtube",
-				Methods: []ExtractionMethod{},
+				Platform:     "youtube",
+				Methods:      []ExtractionMethod{},
 				HasFixedLink: false,
 			}
 		}
@@ -182,13 +199,12 @@ func GetExtractionStrategy(url string) *ExtractionStrategy {
 		}
 	}
 
-
 	// Reddit: JSON API via proxy first, then yt-dlp and browser fallback
 	if strings.Contains(url, "reddit.com") {
 		if !config.IsRedditEnabled() {
 			return &ExtractionStrategy{
-				Platform: "reddit",
-				Methods: []ExtractionMethod{},
+				Platform:     "reddit",
+				Methods:      []ExtractionMethod{},
 				HasFixedLink: false,
 			}
 		}
@@ -207,8 +223,8 @@ func GetExtractionStrategy(url string) *ExtractionStrategy {
 	if strings.Contains(url, "facebook.com") {
 		if !config.IsFacebookEnabled() {
 			return &ExtractionStrategy{
-				Platform: "facebook",
-				Methods: []ExtractionMethod{},
+				Platform:     "facebook",
+				Methods:      []ExtractionMethod{},
 				HasFixedLink: false,
 			}
 		}
@@ -226,8 +242,8 @@ func GetExtractionStrategy(url string) *ExtractionStrategy {
 	if strings.Contains(url, "9gag.com") {
 		if !config.Is9GAGEnabled() {
 			return &ExtractionStrategy{
-				Platform: "9gag",
-				Methods:  []ExtractionMethod{},
+				Platform:     "9gag",
+				Methods:      []ExtractionMethod{},
 				HasFixedLink: false,
 			}
 		}
@@ -327,6 +343,14 @@ func (es *ExtractionStrategy) LogStrategy() {
 			methodNames[i] = "rapidapi-links"
 		case MethodInstaFix:
 			methodNames[i] = "instafix"
+		case MethodKKInstagram:
+			methodNames[i] = "kkinstagram"
+		case MethodCobalt:
+			methodNames[i] = "cobalt"
+		case MethodFastSaver:
+			methodNames[i] = "fastsaver"
+		case MethodInstagramOG:
+			methodNames[i] = "instagram-og"
 		default:
 			methodNames[i] = "unknown"
 		}
