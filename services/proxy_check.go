@@ -20,6 +20,12 @@ const proxyPoolServiceName = "proxy-pool"
 // CheckProxyHealth tests each configured proxy with a lightweight request and
 // alerts the admin when none of them work.
 func CheckProxyHealth() {
+	if config.IsProxyEnabled() == false {
+		log.Printf("🌐 Proxies disabled via ENABLE_PROXIES — skipping proxy health check")
+
+		return
+	}
+
 	proxies := config.GetYtDlpProxies()
 
 	if len(proxies) == 0 {

@@ -134,7 +134,6 @@ func NewRedditExtractor(tempDir string) *RedditExtractor {
 }
 
 // createProxyClient creates an HTTP client with the given proxy URL.
-// Bypasses global ENABLE_PROXIES flag — proxy is required for Reddit API access.
 func createProxyClient(proxyURLStr string) (*http.Client, error) {
 	proxyURL, err := url.Parse(proxyURLStr)
 	if err != nil {
@@ -164,6 +163,12 @@ func (re *RedditExtractor) ExtractRedditPost(redditURL string) ([]*MediaInfo, er
 
 	proxies := config.GetYtDlpProxies()
 
+	// The Reddit JSON API requires proxies, but honor the global kill-switch
+	// so a dead pool can be disabled entirely instead of burning requests.
+	if config.IsProxyEnabled() == false {
+		proxies = []string{}
+	}
+
 	// Resolve short URLs first — direct resolution works without proxies
 	if strings.Contains(redditURL, "/s/") {
 		resolvedURL, err := re.resolveShortURL(redditURL, proxies)
@@ -175,7 +180,7 @@ func (re *RedditExtractor) ExtractRedditPost(redditURL string) ([]*MediaInfo, er
 	}
 
 	if len(proxies) == 0 {
-		return nil, fmt.Errorf("no proxies configured — required for Reddit API access")
+		return nil, fmt.Errorf("no usable proxies — required for Reddit API access (check YTDLP_PROXIES / ENABLE_PROXIES)")
 	}
 
 	// Build the JSON API URL
