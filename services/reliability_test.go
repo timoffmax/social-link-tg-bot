@@ -168,6 +168,32 @@ func TestVerifyLiveKKExtraction(t *testing.T) {
 	t.Logf("kktiktok: %d item(s), type=%s file=%s caption=%q", len(items), items[0].Type, items[0].Filename, items[0].Caption)
 }
 
+func TestVerifyLiveRedditDirectExtraction(t *testing.T) {
+	if os.Getenv("VERIFY_LIVE") == "" {
+		t.Skip("set VERIFY_LIVE=1 for live network checks")
+	}
+
+	t.Setenv("ENABLE_PROXIES", "false")
+
+	re := NewRedditExtractor(t.TempDir())
+
+	items, err := re.ExtractRedditPost("https://www.reddit.com/r/ukraine_dev/s/YPgdlPVkgi")
+
+	if err != nil {
+		t.Fatalf("direct Reddit extraction failed: %v", err)
+	}
+
+	if (len(items) != 1) || (items[0].Type != "text") {
+		t.Fatalf("expected 1 text item, got %+v", items)
+	}
+
+	if strings.Contains(items[0].Caption, "r/ukraine_dev") == false {
+		t.Errorf("caption missing subreddit: %.120s", items[0].Caption)
+	}
+
+	t.Logf("extracted text post (%d chars): %.200s", len(items[0].Caption), items[0].Caption)
+}
+
 func TestVerifyLiveRedditShortURL(t *testing.T) {
 	if os.Getenv("VERIFY_LIVE") == "" {
 		t.Skip("set VERIFY_LIVE=1 for live network checks")

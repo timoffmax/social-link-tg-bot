@@ -1,6 +1,7 @@
 package services
 
 import (
+	"bytes"
 	"crypto/tls"
 	"encoding/json"
 	"errors"
@@ -157,14 +158,15 @@ func createProxyClient(proxyURLStr string) (*http.Client, error) {
 	return result, nil
 }
 
-// ExtractRedditPost extracts media from a Reddit post using the JSON API via proxy
+// ExtractRedditPost extracts media from a Reddit post using the JSON API,
+// trying a direct challenge-solving connection first and proxies as fallback.
 func (re *RedditExtractor) ExtractRedditPost(redditURL string) ([]*MediaInfo, error) {
 	log.Printf("🟠 Starting Reddit JSON API extraction for: %s", redditURL)
 
 	proxies := config.GetYtDlpProxies()
 
-	// The Reddit JSON API requires proxies, but honor the global kill-switch
-	// so a dead pool can be disabled entirely instead of burning requests.
+	// Honor the global kill-switch so a dead pool can be disabled entirely
+	// instead of burning requests.
 	if config.IsProxyEnabled() == false {
 		proxies = []string{}
 	}
@@ -179,38 +181,43 @@ func (re *RedditExtractor) ExtractRedditPost(redditURL string) ([]*MediaInfo, er
 		redditURL = resolvedURL
 	}
 
-	if len(proxies) == 0 {
-		return nil, fmt.Errorf("no usable proxies — required for Reddit API access (check YTDLP_PROXIES / ENABLE_PROXIES)")
+	// Direct (no-proxy) fetch first — solves Reddit's JS challenge inline and
+	// reuses the granted anonymous session (see reddit_challenge.go).
+	postData, directErr := re.fetchPostDataDirect(redditURL)
+
+	if directErr != nil {
+		log.Printf("⚠️ Direct Reddit fetch failed: %v", directErr)
 	}
 
-	// Build the JSON API URL
-	jsonURL := re.buildJSONURL(redditURL)
-	log.Printf("🟠 Reddit JSON URL: %s", jsonURL)
+	if (postData == nil) && (len(proxies) > 0) {
+		jsonURL := re.buildJSONURL(redditURL)
+		log.Printf("🟠 Reddit JSON URL (via proxy): %s", jsonURL)
 
-	// Fetch post data via proxy (try each proxy)
-	var postData *redditPostData
-	var lastErr error
+		var lastErr error
 
-	for _, proxy := range proxies {
-		postData, lastErr = re.fetchPostData(jsonURL, proxy)
-		if lastErr == nil {
-			break
+		for _, proxy := range proxies {
+			postData, lastErr = re.fetchPostData(jsonURL, proxy)
+			if lastErr == nil {
+				break
+			}
+
+			log.Printf("⚠️ Reddit proxy failed, trying next: %v", lastErr)
 		}
 
-		log.Printf("⚠️ Reddit proxy failed, trying next: %v", lastErr)
+		if postData == nil {
+			// A post-level 4xx (deleted/private post) fails identically
+			// through every proxy — that is not a proxy-pool outage.
+			if isRedditPostLevelError(lastErr) == false {
+				ReportServiceFailure(redditProxyServiceName, fmt.Sprintf("all %d proxies failed: %v", len(proxies), lastErr))
+			}
+		} else {
+			ReportServiceSuccess(redditProxyServiceName)
+		}
 	}
 
 	if postData == nil {
-		// A post-level 4xx (deleted/private post) fails identically through
-		// every proxy — that is not a proxy-pool outage.
-		if isRedditPostLevelError(lastErr) == false {
-			ReportServiceFailure(redditProxyServiceName, fmt.Sprintf("all %d proxies failed: %v", len(proxies), lastErr))
-		}
-
-		return nil, fmt.Errorf("all proxies failed for Reddit API: %v", lastErr)
+		return nil, fmt.Errorf("Reddit JSON fetch failed (direct: %v)", directErr)
 	}
-
-	ReportServiceSuccess(redditProxyServiceName)
 
 	// Extract media based on post type
 	result, err := re.extractMedia(postData, redditURL)
@@ -377,9 +384,27 @@ func (re *RedditExtractor) fetchPostData(jsonURL, proxy string) (*redditPostData
 		}
 	}
 
+	return decodeRedditListing(resp.Body)
+}
+
+// fetchPostDataDirect fetches post data without proxies via the JS-challenge
+// capable direct client.
+func (re *RedditExtractor) fetchPostDataDirect(redditURL string) (*redditPostData, error) {
+	body, err := fetchRedditJSONDirect(redditURL)
+
+	if err != nil {
+		return nil, err
+	}
+
+	return decodeRedditListing(bytes.NewReader(body))
+}
+
+// decodeRedditListing parses a Reddit .json listing response into the first
+// post's data.
+func decodeRedditListing(r io.Reader) (*redditPostData, error) {
 	var listings []redditListingResponse
 
-	err = json.NewDecoder(resp.Body).Decode(&listings)
+	err := json.NewDecoder(r).Decode(&listings)
 	if err != nil {
 		return nil, fmt.Errorf("failed to decode Reddit JSON: %v", err)
 	}
