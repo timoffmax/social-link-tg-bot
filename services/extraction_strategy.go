@@ -42,6 +42,7 @@ const (
 	MethodFixedLink
 	MethodStoriesAPI
 	MethodRedditAPI
+	MethodRedditVxreddit
 	MethodRapidAPILinks
 	MethodInstaFix
 	MethodKKInstagram
@@ -212,10 +213,14 @@ func GetExtractionStrategy(url string) *ExtractionStrategy {
 			Platform: "reddit",
 			Methods: []ExtractionMethod{
 				MethodRedditAPI,
+				MethodRedditVxreddit,
 				MethodYtDlp,
 				MethodBrowser,
 			},
 			HasFixedLink: false,
+			// Try the rich JSON API fully first (higher quality, galleries,
+			// text) before the datacenter-robust vxreddit fallback.
+			Sequential: true,
 		}
 	}
 
@@ -339,6 +344,8 @@ func (es *ExtractionStrategy) LogStrategy() {
 			methodNames[i] = "stories-api"
 		case MethodRedditAPI:
 			methodNames[i] = "reddit-api"
+		case MethodRedditVxreddit:
+			methodNames[i] = "vxreddit"
 		case MethodRapidAPILinks:
 			methodNames[i] = "rapidapi-links"
 		case MethodInstaFix:

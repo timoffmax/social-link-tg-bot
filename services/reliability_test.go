@@ -194,6 +194,33 @@ func TestVerifyLiveRedditDirectExtraction(t *testing.T) {
 	t.Logf("extracted text post (%d chars): %.200s", len(items[0].Caption), items[0].Caption)
 }
 
+func TestVerifyLiveVxreddit(t *testing.T) {
+	if os.Getenv("VERIFY_LIVE") == "" {
+		t.Skip("set VERIFY_LIVE=1 for live network checks")
+	}
+
+	vx := NewRedditVxredditExtractor(t.TempDir())
+
+	// Video post via /s/ share link — the user-reported failing case
+	items, err := vx.ExtractMedia("https://www.reddit.com/r/Damnthatsinteresting/s/2VMcG73Eo4")
+
+	if err != nil {
+		t.Fatalf("vxreddit video extraction failed: %v", err)
+	}
+
+	if (len(items) != 1) || (items[0].Type != "video") {
+		t.Fatalf("expected 1 video item, got %+v", items)
+	}
+
+	info, statErr := os.Stat(items[0].Filename)
+
+	if (statErr != nil) || (info.Size() < vxredditMinMediaSize) {
+		t.Fatalf("video file missing or too small: %v", statErr)
+	}
+
+	t.Logf("vxreddit video: %d bytes, caption=%.80s", info.Size(), items[0].Caption)
+}
+
 func TestVerifyLiveRedditShortURL(t *testing.T) {
 	if os.Getenv("VERIFY_LIVE") == "" {
 		t.Skip("set VERIFY_LIVE=1 for live network checks")

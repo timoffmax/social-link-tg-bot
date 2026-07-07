@@ -282,6 +282,17 @@ func GetKKTikTokHost() string {
 	return host
 }
 
+// GetVxredditHost returns the vxreddit-style frontend host used to resolve
+// Reddit media (video re-served from its own CDN) from datacenter IPs.
+func GetVxredditHost() string {
+	host := strings.TrimSpace(os.Getenv("VXREDDIT_HOST"))
+	if host == "" {
+		return "vxreddit.com"
+	}
+
+	return host
+}
+
 // GetCobaltInstances returns the ordered list of cobalt.tools instance base URLs.
 func GetCobaltInstances() []string {
 	raw := strings.TrimSpace(os.Getenv("COBALT_INSTANCES"))

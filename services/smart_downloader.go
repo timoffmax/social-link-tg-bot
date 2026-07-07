@@ -24,6 +24,7 @@ type SmartDownloader struct {
 	fastsaver   *InstagramFastSaverExtractor
 	instagramOG *InstagramOGExtractor
 	reddit      *RedditExtractor
+	redditVx    *RedditVxredditExtractor
 	tempDir     string
 	workingDir  string
 }
@@ -50,6 +51,7 @@ func NewSmartDownloader() *SmartDownloader {
 		fastsaver:   NewInstagramFastSaverExtractor(tempDir),
 		instagramOG: NewInstagramOGExtractor(tempDir),
 		reddit:      NewRedditExtractor(tempDir),
+		redditVx:    NewRedditVxredditExtractor(tempDir),
 		tempDir:     tempDir,
 		workingDir:  workingDir,
 	}
@@ -287,6 +289,26 @@ func (sd *SmartDownloader) executeStrategy(
 
 		log.Printf("❌ Reddit API extraction failed: %v", err)
 		LogExtraction(strategy.Platform, mediaURL, "reddit-api", false, 0, methodDuration)
+		return nil, err
+
+	case MethodRedditVxreddit:
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+
+		log.Printf("🟠 Trying vxreddit extraction (datacenter-robust)")
+		mediaInfos, err := sd.redditVx.ExtractMedia(mediaURL)
+		methodDuration := time.Since(methodStartTime)
+
+		if (err == nil) && (len(mediaInfos) > 0) {
+			log.Printf("✅ vxreddit extraction succeeded with %d items", len(mediaInfos))
+			LogExtraction(strategy.Platform, mediaURL, "vxreddit", true, len(mediaInfos), time.Since(overallStart))
+			appendOriginalURL(mediaInfos, mediaURL)
+			return mediaInfos, nil
+		}
+
+		log.Printf("❌ vxreddit extraction failed: %v", err)
+		LogExtraction(strategy.Platform, mediaURL, "vxreddit", false, 0, methodDuration)
 		return nil, err
 
 	case MethodRapidAPILinks:

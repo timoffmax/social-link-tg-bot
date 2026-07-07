@@ -14,6 +14,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strings"
 
 	"github.com/timoffmax/social-link-bot/config"
 )
@@ -43,6 +44,57 @@ func CheckRedirectorHealth() {
 		config.GetKKTikTokHost(),
 		"tiktok.com",
 	)
+
+	probeVxreddit()
+}
+
+// vxredditProbePath is a known-stable public video post used to verify that
+// vxreddit still resolves and re-serves Reddit video. Replace if it is deleted.
+const vxredditProbePath = "/r/Damnthatsinteresting/comments/1upqcgf/"
+
+// probeVxreddit checks that vxreddit still advertises a proxied video for a
+// known post, feeding the shared outage tracker under its own probe key.
+func probeVxreddit() {
+	service := redditVxredditServiceName + "-probe"
+	probeURL := "https://" + config.GetVxredditHost() + vxredditProbePath
+
+	req, err := http.NewRequest("GET", probeURL, nil)
+
+	if err != nil {
+		return
+	}
+
+	req.Header.Set("User-Agent", redirectorBotUserAgent)
+
+	resp, err := SharedHTTPClient.Do(req)
+
+	if err != nil {
+		log.Printf("🩺 [%s] probe request failed: %v", service, err)
+		ReportServiceFailure(service, fmt.Sprintf("probe request failed: %v", err))
+
+		return
+	}
+
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		log.Printf("🩺 [%s] probe failed: HTTP %d", service, resp.StatusCode)
+		ReportServiceFailure(service, fmt.Sprintf("probe HTTP %d", resp.StatusCode))
+
+		return
+	}
+
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024*1024))
+
+	if strings.Contains(string(body), `property="og:video"`) == false {
+		log.Printf("🩺 [%s] probe failed: no og:video in response", service)
+		ReportServiceFailure(service, "no og:video in probe response")
+
+		return
+	}
+
+	log.Printf("🩺 [%s] probe OK", service)
+	ReportServiceSuccess(service)
 }
 
 // probeRedirector fetches a known-good post with the bot UA exactly like the
