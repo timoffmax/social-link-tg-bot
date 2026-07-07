@@ -1,10 +1,9 @@
 package services
 
 import (
+	"errors"
 	"fmt"
-	"io"
 	"log"
-	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -23,9 +22,8 @@ type InstagramKKInstagramExtractor struct {
 	host    string
 }
 
-// kkInstagramBotUserAgent must be a bot UA — a normal browser UA gets a 301
-// app-deeplink instead of the media redirect.
-const kkInstagramBotUserAgent = "TelegramBot (like TwitterBot)"
+// kkInstagramServiceName is the outage-tracker key for the kkinstagram redirector.
+const kkInstagramServiceName = "kkinstagram"
 
 // instagramPostPathPattern captures the post type (p/reel/reels/tv) and shortcode
 // from any recognized Instagram or proxy URL.
@@ -40,7 +38,9 @@ func NewInstagramKKInstagramExtractor(tempDir string) *InstagramKKInstagramExtra
 }
 
 // ExtractMedia downloads a single Instagram media item by following the
-// kkinstagram 302 redirect to the Instagram CDN.
+// kkinstagram 302 redirect to the Instagram CDN. The response is validated as
+// real CDN media so a broken/blocked redirector (200 HTML on its own host, or
+// a bounce back to instagram.com) fails loudly instead of producing garbage.
 func (e *InstagramKKInstagramExtractor) ExtractMedia(instagramURL string) ([]*MediaInfo, error) {
 	postType, shortcode := instagramPostPath(instagramURL)
 
@@ -50,23 +50,29 @@ func (e *InstagramKKInstagramExtractor) ExtractMedia(instagramURL string) ([]*Me
 
 	redirectURL := fmt.Sprintf("https://%s/%s/%s/", e.host, postType, shortcode)
 
-	basePath := filepath.Join(e.tempDir, fmt.Sprintf("instagram_kk_%s_%d", shortcode, time.Now().Unix()))
+	basePath := filepath.Join(e.tempDir, fmt.Sprintf("instagram_kk_%s_%d", shortcode, time.Now().UnixNano()))
 
-	finalURL, size, err := downloadWithUA(redirectURL, kkInstagramBotUserAgent, basePath)
+	finalURL, contentType, size, err := downloadWithUA(redirectURL, redirectorBotUserAgent, basePath)
+
+	if err == nil {
+		err = validateRedirectorMedia(e.host, "instagram.com", finalURL, contentType, size)
+	}
 
 	if err != nil {
 		os.Remove(basePath)
 
+		// A bounce back to instagram.com usually means a deleted/private post,
+		// not a service outage — only real service failures feed the tracker.
+		if errors.Is(err, errRedirectorOriginBounce) == false {
+			ReportServiceFailure(kkInstagramServiceName, err.Error())
+		}
+
 		return nil, err
 	}
 
-	if size == 0 {
-		os.Remove(basePath)
+	ReportServiceSuccess(kkInstagramServiceName)
 
-		return nil, fmt.Errorf("kkinstagram returned empty body for %s", shortcode)
-	}
-
-	mediaType, ext := classifyMediaURL(finalURL)
+	mediaType, ext := classifyRedirectorMedia(contentType, finalURL)
 
 	filePath := basePath + ext
 
@@ -104,51 +110,4 @@ func instagramPostPath(rawURL string) (string, string) {
 	}
 
 	return postType, matches[2]
-}
-
-// downloadWithUA fetches a URL with a custom User-Agent, following redirects, and
-// writes the body to filePath. It returns the final (post-redirect) URL and the
-// number of bytes written.
-func downloadWithUA(rawURL, userAgent, filePath string) (string, int64, error) {
-	req, err := http.NewRequest("GET", rawURL, nil)
-
-	if err != nil {
-		return "", 0, fmt.Errorf("failed to create request: %v", err)
-	}
-
-	req.Header.Set("User-Agent", userAgent)
-
-	resp, err := SharedDownloadClient.Do(req)
-
-	if err != nil {
-		return "", 0, fmt.Errorf("request failed: %v", err)
-	}
-
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return "", 0, fmt.Errorf("bad status code: %d", resp.StatusCode)
-	}
-
-	finalURL := rawURL
-
-	if (resp.Request != nil) && (resp.Request.URL != nil) {
-		finalURL = resp.Request.URL.String()
-	}
-
-	out, err := os.Create(filePath)
-
-	if err != nil {
-		return "", 0, fmt.Errorf("failed to create file: %v", err)
-	}
-
-	defer out.Close()
-
-	size, err := io.Copy(out, resp.Body)
-
-	if err != nil {
-		return finalURL, size, fmt.Errorf("failed to write file: %v", err)
-	}
-
-	return finalURL, size, nil
 }

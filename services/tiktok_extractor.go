@@ -4,6 +4,7 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -16,7 +17,11 @@ import (
 	"time"
 
 	"github.com/chromedp/chromedp"
+	"github.com/timoffmax/social-link-bot/config"
 )
+
+// kkTikTokServiceName is the outage-tracker key for the kktiktok redirector.
+const kkTikTokServiceName = "kktiktok"
 
 // tikwmResponse represents the tikwm.com API response
 type tikwmResponse struct {
@@ -79,6 +84,7 @@ func (te *TikTokExtractor) ExtractTikTokPost(tiktokURL string) ([]*MediaInfo, er
 		te.extractViaDirectScraping,
 		te.extractViaSlideshowAPI,
 		te.extractViaTikWMAPI,
+		te.extractViaKKTikTok,
 		te.extractViaHeadlessBrowser,
 		te.extractViaSimpleTextFallback,
 	}
@@ -369,6 +375,67 @@ func (te *TikTokExtractor) extractViaTikWMAPI(tiktokURL string, postID string, u
 	log.Printf("✅ tikwm: Successfully extracted %d media items", len(mediaInfos))
 
 	return mediaInfos, nil
+}
+
+// extractViaKKTikTok resolves the video through the kktiktok.com redirector,
+// which 302-redirects bot user-agents to a signed TikTok CDN URL resolved on
+// its own infrastructure (same operator as kkinstagram.com). The username in
+// the canonical URL is ignored by the service, so a placeholder works. Videos
+// only — photo slideshows fall through to the next method. Note: the TikTok
+// CDN may still reject datacenter IPs on the download hop; validation turns
+// that into a loud failure so the chain continues.
+func (te *TikTokExtractor) extractViaKKTikTok(tiktokURL string, postID string, username string) ([]*MediaInfo, error) {
+	host := config.GetKKTikTokHost()
+
+	log.Printf("📥 Trying kktiktok redirect extraction for post %s", postID)
+
+	redirectURL := fmt.Sprintf("https://www.%s/@i/video/%s", host, postID)
+	basePath := filepath.Join(te.tempDir, fmt.Sprintf("tiktok_kk_%s_%d", postID, time.Now().UnixNano()))
+
+	finalURL, contentType, size, err := downloadWithUA(redirectURL, redirectorBotUserAgent, basePath)
+
+	if err == nil {
+		err = validateRedirectorMedia(host, "tiktok.com", finalURL, contentType, size)
+	}
+
+	isContentLevel := false
+
+	if (err == nil) && (strings.HasPrefix(extractMimeType(contentType), "video/") == false) {
+		err = fmt.Errorf("kktiktok returned non-video content-type %q (photo posts unsupported)", contentType)
+		isContentLevel = true
+	}
+
+	if err != nil {
+		os.Remove(basePath)
+
+		// Origin bounces (deleted/private posts) and photo slideshows are
+		// content-level failures on a healthy service — keep them out of the
+		// outage tracker.
+		if (errors.Is(err, errRedirectorOriginBounce) == false) && (isContentLevel == false) {
+			ReportServiceFailure(kkTikTokServiceName, err.Error())
+		}
+
+		return nil, err
+	}
+
+	ReportServiceSuccess(kkTikTokServiceName)
+
+	filePath := basePath + ".mp4"
+
+	if renameErr := os.Rename(basePath, filePath); renameErr != nil {
+		filePath = basePath
+	}
+
+	log.Printf("✅ [kktiktok] Downloaded video (%d bytes) for %s", size, postID)
+
+	result := []*MediaInfo{{
+		Type:     "video",
+		URL:      tiktokURL,
+		Caption:  FormatAuthorCaption("tiktok", "", username, ""),
+		Filename: filePath,
+	}}
+
+	return result, nil
 }
 
 func (te *TikTokExtractor) extractViaHeadlessBrowser(tiktokURL string, postID string, username string) ([]*MediaInfo, error) {

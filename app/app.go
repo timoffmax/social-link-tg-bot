@@ -19,6 +19,7 @@ func Run() {
 	initDatabase()
 	runStartupChecks()
 	startCleanupTask()
+	startHealthMonitor()
 
 	defer services.CloseLogger()
 	defer func() {
@@ -115,4 +116,27 @@ func startCleanupTask() {
 	}()
 
 	log.Println("Started cleanup task")
+}
+
+// startHealthMonitor periodically probes external dependencies (kk redirector
+// services, proxy pool) so silent degradation is surfaced in logs and via
+// admin alerts instead of going unnoticed until users complain.
+func startHealthMonitor() {
+	go func() {
+		services.CheckProxyHealth()
+		services.CheckRedirectorHealth()
+
+		ticker := time.NewTicker(1 * time.Hour)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ticker.C:
+				services.CheckProxyHealth()
+				services.CheckRedirectorHealth()
+			}
+		}
+	}()
+
+	log.Println("Started health monitor task")
 }

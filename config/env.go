@@ -271,6 +271,17 @@ func GetKKInstagramHost() string {
 	return host
 }
 
+// GetKKTikTokHost returns the kktiktok-style redirector host used to resolve
+// TikTok videos via a 302 to the TikTok CDN.
+func GetKKTikTokHost() string {
+	host := strings.TrimSpace(os.Getenv("KKTIKTOK_HOST"))
+	if host == "" {
+		return "kktiktok.com"
+	}
+
+	return host
+}
+
 // GetCobaltInstances returns the ordered list of cobalt.tools instance base URLs.
 func GetCobaltInstances() []string {
 	raw := strings.TrimSpace(os.Getenv("COBALT_INSTANCES"))

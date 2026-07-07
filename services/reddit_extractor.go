@@ -3,6 +3,7 @@ package services
 import (
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html"
 	"io"
@@ -24,6 +25,39 @@ import (
 type RedditExtractor struct {
 	directClient *http.Client
 	tempDir      string
+}
+
+// redditProxyServiceName is the outage-tracker key for the Reddit proxy pool.
+const redditProxyServiceName = "reddit-proxy"
+
+// redditHTTPError is a non-200 answer from the Reddit JSON API, carrying the
+// status code so post-level failures (404 for deleted posts) can be told apart
+// from proxy/blocking failures.
+type redditHTTPError struct {
+	StatusCode int
+	Excerpt    string
+}
+
+// Error returns the error description with a capped body excerpt.
+func (e *redditHTTPError) Error() string {
+	return fmt.Sprintf("Reddit API returned status %d: %s", e.StatusCode, e.Excerpt)
+}
+
+// isRedditPostLevelError reports whether the error is specific to the
+// requested post (deleted/private/nonexistent) rather than a proxy problem.
+func isRedditPostLevelError(err error) bool {
+	result := false
+
+	var httpErr *redditHTTPError
+
+	if errors.As(err, &httpErr) {
+		switch httpErr.StatusCode {
+		case http.StatusNotFound, http.StatusGone, http.StatusBadRequest:
+			result = true
+		}
+	}
+
+	return result
 }
 
 // redditListingResponse represents the top-level Reddit .json response
@@ -129,11 +163,8 @@ func (re *RedditExtractor) ExtractRedditPost(redditURL string) ([]*MediaInfo, er
 	log.Printf("🟠 Starting Reddit JSON API extraction for: %s", redditURL)
 
 	proxies := config.GetYtDlpProxies()
-	if len(proxies) == 0 {
-		return nil, fmt.Errorf("no proxies configured — required for Reddit API access")
-	}
 
-	// Resolve short URLs if needed
+	// Resolve short URLs first — direct resolution works without proxies
 	if strings.Contains(redditURL, "/s/") {
 		resolvedURL, err := re.resolveShortURL(redditURL, proxies)
 		if err != nil {
@@ -141,6 +172,10 @@ func (re *RedditExtractor) ExtractRedditPost(redditURL string) ([]*MediaInfo, er
 		}
 
 		redditURL = resolvedURL
+	}
+
+	if len(proxies) == 0 {
+		return nil, fmt.Errorf("no proxies configured — required for Reddit API access")
 	}
 
 	// Build the JSON API URL
@@ -161,8 +196,16 @@ func (re *RedditExtractor) ExtractRedditPost(redditURL string) ([]*MediaInfo, er
 	}
 
 	if postData == nil {
+		// A post-level 4xx (deleted/private post) fails identically through
+		// every proxy — that is not a proxy-pool outage.
+		if isRedditPostLevelError(lastErr) == false {
+			ReportServiceFailure(redditProxyServiceName, fmt.Sprintf("all %d proxies failed: %v", len(proxies), lastErr))
+		}
+
 		return nil, fmt.Errorf("all proxies failed for Reddit API: %v", lastErr)
 	}
+
+	ReportServiceSuccess(redditProxyServiceName)
 
 	// Extract media based on post type
 	result, err := re.extractMedia(postData, redditURL)
@@ -175,9 +218,23 @@ func (re *RedditExtractor) ExtractRedditPost(redditURL string) ([]*MediaInfo, er
 	return result, nil
 }
 
-// resolveShortURL resolves Reddit short URLs (/r/.../s/...) through proxy
+// resolveShortURL resolves Reddit short URLs (/r/.../s/...), trying a direct
+// connection first and falling back to the proxy pool.
 func (re *RedditExtractor) resolveShortURL(shortURL string, proxies []string) (string, error) {
 	log.Printf("🔗 Resolving Reddit short URL: %s", shortURL)
+
+	// Direct resolution first — the /s/ 301 redirect is served without auth
+	// and is not gated the way the JSON API is, so no proxy is needed for
+	// this hop in most cases.
+	location, directErr := re.resolveShortURLDirect(shortURL)
+
+	if directErr == nil {
+		log.Printf("🔗 Resolved Reddit short URL (direct) → %s", location)
+
+		return location, nil
+	}
+
+	log.Printf("⚠️ Direct short URL resolution failed (%v), retrying through %d proxies", directErr, len(proxies))
 
 	for _, proxy := range proxies {
 		proxyClient, err := createProxyClient(proxy)
@@ -230,6 +287,49 @@ func (re *RedditExtractor) resolveShortURL(shortURL string, proxies []string) (s
 	return "", fmt.Errorf("failed to resolve Reddit short URL through any proxy")
 }
 
+// resolveShortURLDirect resolves a Reddit short URL with a plain no-proxy
+// request, capturing the redirect Location without following it.
+func (re *RedditExtractor) resolveShortURLDirect(shortURL string) (string, error) {
+	client := &http.Client{
+		Timeout: 15 * time.Second,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+
+	req, err := http.NewRequest("GET", shortURL, nil)
+
+	if err != nil {
+		return "", err
+	}
+
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+
+	resp, err := client.Do(req)
+
+	if err != nil {
+		return "", err
+	}
+
+	defer resp.Body.Close()
+
+	if (resp.StatusCode < 300) || (resp.StatusCode >= 400) {
+		return "", fmt.Errorf("expected redirect for short URL, got HTTP %d", resp.StatusCode)
+	}
+
+	location := resp.Header.Get("Location")
+
+	if location == "" {
+		return "", fmt.Errorf("redirect without Location header")
+	}
+
+	if strings.HasPrefix(location, "/") {
+		location = "https://www.reddit.com" + location
+	}
+
+	return location, nil
+}
+
 // buildJSONURL converts a Reddit URL to its old.reddit.com/.json equivalent
 func (re *RedditExtractor) buildJSONURL(redditURL string) string {
 	parsed, err := url.Parse(redditURL)
@@ -264,8 +364,12 @@ func (re *RedditExtractor) fetchPostData(jsonURL, proxy string) (*redditPostData
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("Reddit API returned status %d: %s", resp.StatusCode, string(body))
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 300))
+
+		return nil, &redditHTTPError{
+			StatusCode: resp.StatusCode,
+			Excerpt:    string(body),
+		}
 	}
 
 	var listings []redditListingResponse
@@ -284,7 +388,9 @@ func (re *RedditExtractor) fetchPostData(jsonURL, proxy string) (*redditPostData
 
 // extractMedia dispatches media extraction based on post type
 func (re *RedditExtractor) extractMedia(post *redditPostData, originalURL string) ([]*MediaInfo, error) {
-	caption := FormatAuthorCaption("reddit", post.Subreddit, post.Author, post.Title)
+	// Captions are sent with Telegram HTML parse mode, and Reddit returns the
+	// title with HTML entities — normalize instead of double-escaping.
+	caption := FormatAuthorCaption("reddit", post.Subreddit, post.Author, EscapeForTelegramHTML(post.Title))
 
 	// Gallery posts
 	if post.IsGallery {
@@ -437,9 +543,15 @@ func (re *RedditExtractor) extractTextPost(post *redditPostData, caption, origin
 		text = post.Title
 	}
 
+	textIsTitle := text == post.Title
+
+	// The message is sent with Telegram HTML parse mode — unescaped '<' or '&'
+	// in the selftext would make Telegram reject the whole message with a 400.
+	text = EscapeForTelegramHTML(text)
+
 	// Build full message: author caption + selftext
 	fullText := caption
-	if (fullText != "") && (text != "") && (text != post.Title) {
+	if (fullText != "") && (text != "") && (textIsTitle == false) {
 		fullText = fullText + "\n\n" + text
 	} else if (fullText == "") && (text != "") {
 		fullText = text

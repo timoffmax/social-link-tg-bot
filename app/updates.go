@@ -420,6 +420,28 @@ func processMediaDownload(url string, origChat *response.TgChat, origMessage *re
 			} else if strings.Contains(url, "9gag.com") {
 				platformName = "9GAG"
 			}
+
+			// Reddit: fall back to a vxreddit fixed link instead of full
+			// silence, so the chat still gets a working preview when the
+			// extraction infrastructure (proxies) is down.
+			if strings.Contains(url, "reddit.com") {
+				fixedUrl := getFixedUrl(url)
+
+				if fixedUrl != "" {
+					log.Printf("📎 Falling back to fixed link for %s", url)
+					fixedLinkMsg := payload.TgPlSendMessage{
+						ChatId:              origChat.Id,
+						ParseMode:           payload.ParseModeHTML,
+						Text:                fixedUrl,
+						ReplyToMessageId:    origMessage.MessageId,
+						DisableNotification: true,
+					}
+					response := message.NewSendMessage(fixedLinkMsg)
+					services.LogTelegramMessage(origChat.Id, "fixed-link-fallback", response != nil, "")
+					return
+				}
+			}
+
 			log.Printf("🤐 Skipping error notification for %s link", platformName)
 			services.LogTelegramMessage(origChat.Id, "error-skipped", false, "")
 			return
@@ -694,9 +716,11 @@ func extractAuthorInfo(fullCaption, platform string) string {
 
 func sendMediaFile(mediaInfo *services.MediaInfo, origChat *response.TgChat, origMessage *response.TgMessage, url string) error {
 	log.Printf("Sending media to chat ID: %d", origChat.Id)
-	
-	// Decode HTML entities
-	caption := html.UnescapeString(mediaInfo.Caption)
+
+	// Captions are sent with ParseModeHTML: entities (&amp;/&lt;) render
+	// correctly as-is, while unescaping them here would produce raw '<'/'&'
+	// that Telegram rejects with a 400.
+	caption := mediaInfo.Caption
 	
 	// Check description settings and filter caption if needed
 	platform := detectPlatformFromUrl(url)
@@ -911,7 +935,8 @@ func sendPhotosAsMediaGroup(photos []*services.MediaInfo, origChat *response.TgC
 		
 		// Only add caption to the first photo to avoid clutter
 		if i == 0 && photoInfo.Caption != "" {
-			caption := html.UnescapeString(photoInfo.Caption)
+			// Sent with ParseModeHTML — entities must stay escaped (see sendMediaFile)
+			caption := photoInfo.Caption
 			mediaItem.Caption = caption
 			mediaItem.ParseMode = payload.ParseModeHTML
 
@@ -993,7 +1018,12 @@ func getFixedUrl(url string) string {
 	if strings.Contains(url, "tiktok.com") {
 		return strings.Replace(url, "tiktok.com", "tiktxk.com", 1)
 	}
-	
+
+	// Reddit
+	if strings.Contains(url, "reddit.com") {
+		return buildVxRedditURL(url)
+	}
+
 	// Twitter/X
 	if strings.Contains(url, "twitter.com") {
 		return strings.Replace(url, "twitter.com", "fixupx.com", 1)
@@ -1004,8 +1034,26 @@ func getFixedUrl(url string) string {
 	
 	// YouTube doesn't have fixed link services
 	// Return empty string to trigger fallback message
-	
+
 	return ""
+}
+
+// buildVxRedditURL rewrites any reddit.com URL (www/old/m/np subdomains and /s/
+// share links included) to its vxreddit.com equivalent, whose Telegram preview
+// renders the post content.
+func buildVxRedditURL(originalURL string) string {
+	result := ""
+
+	parsed, err := url.Parse(originalURL)
+
+	if err != nil {
+		return result
+	}
+
+	parsed.Host = "www.vxreddit.com"
+	result = parsed.String()
+
+	return result
 }
 
 func getErrorMessage(url string) string {
