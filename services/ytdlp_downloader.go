@@ -112,7 +112,7 @@ func extractRedditUsernameFromURL(url string) string {
 
 // extractRedditSubredditFromURL extracts subreddit from Reddit URL
 func extractRedditSubredditFromURL(url string) string {
-	// Reddit URL patterns: https://www.reddit.com/r/subreddit/... 
+	// Reddit URL patterns: https://www.reddit.com/r/subreddit/...
 	re := regexp.MustCompile(`reddit\.com/r/([^/]+)`)
 	matches := re.FindStringSubmatch(url)
 	if len(matches) > 1 {
@@ -136,23 +136,23 @@ func NewYtDlpDownloader() *YtDlpDownloader {
 		log.Printf("Failed to get working directory: %v", err)
 		workingDir = "."
 	}
-	
+
 	// Use persistent temp directory instead of system temp
 	tempDir := filepath.Join(workingDir, "temp")
 	os.MkdirAll(tempDir, 0755)
-	
+
 	// Try to find yt-dlp binary - test in order of preference
 	candidatePaths := []string{
-		filepath.Join(workingDir, "bin", "yt-dlp"),        // Local development
-		"/var/www/social-link-tg-bot/bin/yt-dlp",          // Production bin
-		"yt-dlp",                                          // System PATH
-		filepath.Join(workingDir, "yt-dlp"),               // Current dir (often broken)
-		"/var/www/social-link-tg-bot/yt-dlp",              // Production root
-		"youtube-dl",                                      // Fallback
+		filepath.Join(workingDir, "bin", "yt-dlp"), // Local development
+		"/var/www/social-link-tg-bot/bin/yt-dlp",   // Production bin
+		"yt-dlp",                                   // System PATH
+		filepath.Join(workingDir, "yt-dlp"),        // Current dir (often broken)
+		"/var/www/social-link-tg-bot/yt-dlp",       // Production root
+		"youtube-dl",                               // Fallback
 	}
-	
+
 	binaryPath := "yt-dlp" // Default fallback
-	
+
 	for _, candidate := range candidatePaths {
 		log.Printf("Testing yt-dlp candidate: %s", candidate)
 		if testYtDlpBinary(candidate) {
@@ -163,10 +163,10 @@ func NewYtDlpDownloader() *YtDlpDownloader {
 			log.Printf("❌ Failed: %s", candidate)
 		}
 	}
-	
+
 	log.Printf("YtDlpDownloader initialized with binary path: %s", binaryPath)
 	log.Printf("Working directory: %s", workingDir)
-	
+
 	return &YtDlpDownloader{
 		TempDir:    tempDir,
 		BinaryPath: binaryPath,
@@ -177,18 +177,18 @@ func NewYtDlpDownloader() *YtDlpDownloader {
 func (yd *YtDlpDownloader) GetMediaInfo(url string) (*YtDlpInfo, error) {
 	// Use yt-dlp to extract information without downloading
 	cmd := exec.Command(yd.BinaryPath, "--dump-json", "--no-playlist", url)
-	
+
 	output, err := cmd.Output()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get media info: %v", err)
 	}
-	
+
 	var info YtDlpInfo
 	err = json.Unmarshal(output, &info)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse media info: %v", err)
 	}
-	
+
 	return &info, nil
 }
 
@@ -198,44 +198,44 @@ func (yd *YtDlpDownloader) HasInstagramCookies() bool {
 	if !config.IsCookiesEnabledForPlatform("instagram") {
 		return false
 	}
-	
+
 	// Check if cookie file exists
 	instagramCookiesPath := yd.getFilePath("cookies/instagram_cookies.txt")
 	if _, err := os.Stat(instagramCookiesPath); err != nil {
 		return false
 	}
-	
+
 	return true
 }
 
 func (yd *YtDlpDownloader) DownloadMedia(url string) ([]*MediaInfo, error) {
 	log.Printf("Starting media download from: %s", url)
-	
+
 	// Skip YouTube community posts for yt-dlp (they need browser extraction)
 	if strings.Contains(url, "youtube.com/post/") || strings.Contains(url, "youtu.be/post/") {
 		log.Printf("📺 Skipping yt-dlp for YouTube community post - requires browser extraction")
 		return nil, fmt.Errorf("yt-dlp cannot handle YouTube community posts, browser extraction required")
 	}
-	
+
 	// Ensure temp directory exists
 	if err := os.MkdirAll(yd.TempDir, 0755); err != nil {
 		return nil, fmt.Errorf("failed to create temp directory: %v", err)
 	}
-	
+
 	// Create unique filename with timestamp + URL hash to prevent collisions between concurrent downloads
 	timestamp := time.Now().Unix()
 	urlHash := strings.ToUpper(fmt.Sprintf("%x", md5.Sum([]byte(url))))[:8]
 	outputTemplate := filepath.Join(yd.TempDir, fmt.Sprintf("%d_%s_%%(title)s.%%(ext)s", timestamp, urlHash))
-	
+
 	log.Printf("Using output template: %s", outputTemplate)
-	
+
 	// Get list of proxies to try based on platform
 	var proxies []string
-	
+
 	// Determine platform
 	platform := ""
 	hasAuthCookies := false
-	
+
 	if strings.Contains(url, "twitter.com") || strings.Contains(url, "x.com") {
 		platform = "twitter"
 		twitterCookiesPath := yd.getFilePath("cookies/twitter_cookies.txt")
@@ -281,10 +281,10 @@ func (yd *YtDlpDownloader) DownloadMedia(url string) ([]*MediaInfo, error) {
 			hasAuthCookies = true
 		}
 	}
-	
+
 	// Check if proxies are enabled for this platform
 	useProxies := platform != "" && config.IsProxyEnabledForPlatform(platform)
-	
+
 	if useProxies {
 		proxies = config.GetYtDlpProxies()
 		log.Printf("🔄 Proxies enabled for %s", platform)
@@ -294,7 +294,7 @@ func (yd *YtDlpDownloader) DownloadMedia(url string) ([]*MediaInfo, error) {
 			log.Printf("🚫 Proxies disabled for %s", platform)
 		}
 	}
-	
+
 	// Add direct connection strategy based on platform and cookies
 	if platform == "youtube" {
 		// YouTube always uses direct connection
@@ -310,10 +310,10 @@ func (yd *YtDlpDownloader) DownloadMedia(url string) ([]*MediaInfo, error) {
 		// Add direct connection as fallback
 		proxies = append(proxies, "")
 	}
-	
+
 	var lastErr error
 	isYouTube := strings.Contains(url, "youtube.com") || strings.Contains(url, "youtu.be")
-	
+
 	for i, proxy := range proxies {
 		if proxy == "" {
 			if isYouTube {
@@ -324,7 +324,7 @@ func (yd *YtDlpDownloader) DownloadMedia(url string) ([]*MediaInfo, error) {
 		} else {
 			log.Printf("Attempt %d/%d: Trying with proxy %s", i+1, len(proxies), proxy)
 		}
-		
+
 		// Try download with current proxy
 		result, err := yd.attemptDownload(url, outputTemplate, proxy)
 		if err == nil {
@@ -335,7 +335,7 @@ func (yd *YtDlpDownloader) DownloadMedia(url string) ([]*MediaInfo, error) {
 			}
 			return result, nil
 		}
-		
+
 		lastErr = err
 		if isYouTube {
 			log.Printf("YouTube download failed: %v", err)
@@ -343,7 +343,7 @@ func (yd *YtDlpDownloader) DownloadMedia(url string) ([]*MediaInfo, error) {
 			log.Printf("Download failed with proxy '%s': %v", proxy, err)
 		}
 	}
-	
+
 	// Return the last error from yt-dlp attempts
 	return nil, fmt.Errorf("all yt-dlp download attempts failed: %v", lastErr)
 }
@@ -362,7 +362,7 @@ func (yd *YtDlpDownloader) attemptDownload(url string, outputTemplate string, pr
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, yd.BinaryPath, args...)
-	
+
 	// Create safe command string for logging (hide passwords)
 	safeArgs := make([]string, len(args))
 	copy(safeArgs, args)
@@ -377,11 +377,11 @@ func (yd *YtDlpDownloader) attemptDownload(url string, outputTemplate string, pr
 		}
 	}
 	log.Printf("Executing command: %s %v", yd.BinaryPath, safeArgs)
-	
+
 	// Execute download
 	output, err := cmd.CombinedOutput()
 	outputStr := string(output)
-	
+
 	// Check if download was actually successful despite error code
 	// yt-dlp can return error codes for non-critical failures like missing ffmpeg
 	downloadSuccess := false
@@ -391,29 +391,29 @@ func (yd *YtDlpDownloader) attemptDownload(url string, outputTemplate string, pr
 		if isYouTube {
 			// Bot detection errors
 			if strings.Contains(outputStr, "Sign in to confirm your age") ||
-			   strings.Contains(outputStr, "bot detection") ||
-			   strings.Contains(outputStr, "CAPTCHA") ||
-			   strings.Contains(outputStr, "429") || // Too Many Requests
-			   strings.Contains(outputStr, "403") { // Forbidden
+				strings.Contains(outputStr, "bot detection") ||
+				strings.Contains(outputStr, "CAPTCHA") ||
+				strings.Contains(outputStr, "429") || // Too Many Requests
+				strings.Contains(outputStr, "403") { // Forbidden
 				log.Printf("🤖 YouTube bot detection or rate limit with proxy: %s", proxy)
 				return nil, fmt.Errorf("YouTube bot detection or rate limit")
 			}
-			
+
 			// Connection errors that might be proxy-related
 			if strings.Contains(outputStr, "Connection reset") ||
-			   strings.Contains(outputStr, "Connection refused") ||
-			   strings.Contains(outputStr, "timed out") ||
-			   strings.Contains(outputStr, "ProxyError") {
+				strings.Contains(outputStr, "Connection refused") ||
+				strings.Contains(outputStr, "timed out") ||
+				strings.Contains(outputStr, "ProxyError") {
 				log.Printf("🔌 Connection error with proxy: %s", proxy)
 				return nil, fmt.Errorf("proxy connection error")
 			}
 		}
-		
+
 		// Check if the error is only due to missing ffmpeg (post-processing failure)
-		if (strings.Contains(outputStr, "ffmpeg not found") || 
-		    strings.Contains(outputStr, "Postprocessing: ffmpeg not found")) && 
-		   (strings.Contains(outputStr, "[download] 100%") || 
-		    strings.Contains(outputStr, "Destination:")) {
+		if (strings.Contains(outputStr, "ffmpeg not found") ||
+			strings.Contains(outputStr, "Postprocessing: ffmpeg not found")) &&
+			(strings.Contains(outputStr, "[download] 100%") ||
+				strings.Contains(outputStr, "Destination:")) {
 			log.Printf("Download succeeded but ffmpeg post-processing failed (non-critical)")
 			downloadSuccess = true
 		} else {
@@ -429,12 +429,12 @@ func (yd *YtDlpDownloader) attemptDownload(url string, outputTemplate string, pr
 	} else {
 		downloadSuccess = true
 	}
-	
+
 	if downloadSuccess {
 		log.Printf("Download completed successfully")
 		log.Printf("Output: %s", outputStr)
 	}
-	
+
 	// List all files in temp directory for debugging
 	if files, err := os.ReadDir(yd.TempDir); err == nil {
 		log.Printf("Files in temp directory after download:")
@@ -442,20 +442,20 @@ func (yd *YtDlpDownloader) attemptDownload(url string, outputTemplate string, pr
 			log.Printf("  - %s", file.Name())
 		}
 	}
-	
+
 	// Find downloaded files
 	downloadedFiles, err := yd.findDownloadedFiles(timestamp)
 	if err != nil {
 		return nil, fmt.Errorf("failed to find downloaded files: %v", err)
 	}
-	
+
 	log.Printf("Found %d downloaded files: %v", len(downloadedFiles), downloadedFiles)
-	
+
 	// Convert to MediaInfo with enhanced handling for all platforms
 	var mediaInfos []*MediaInfo
 	var tweetDescription string
 	var metadataInfo map[string]interface{}
-	
+
 	// Look for description file for Twitter posts
 	if strings.Contains(url, "twitter.com") || strings.Contains(url, "x.com") {
 		for _, filePath := range downloadedFiles {
@@ -467,7 +467,7 @@ func (yd *YtDlpDownloader) attemptDownload(url string, outputTemplate string, pr
 			}
 		}
 	}
-	
+
 	// Look for metadata info file for all platforms
 	for _, filePath := range downloadedFiles {
 		if strings.HasSuffix(filePath, ".info.json") {
@@ -478,7 +478,7 @@ func (yd *YtDlpDownloader) attemptDownload(url string, outputTemplate string, pr
 			}
 		}
 	}
-	
+
 	// Check if we have any actual video files
 	hasVideo := false
 	for _, filePath := range downloadedFiles {
@@ -491,26 +491,26 @@ func (yd *YtDlpDownloader) attemptDownload(url string, outputTemplate string, pr
 			break
 		}
 	}
-	
+
 	for _, filePath := range downloadedFiles {
 		// Skip metadata files from being sent as media
 		if strings.HasSuffix(filePath, ".info.json") || strings.HasSuffix(filePath, ".description") {
 			continue
 		}
-		
+
 		mediaType := yd.detectMediaType(filePath)
-		
+
 		// If we have a video file, skip all thumbnails and standalone audio files
 		if hasVideo {
 			if mediaType == "photo" {
 				filename := filepath.Base(filePath)
 				// Check if this is a thumbnail file (contains .orig, .large, .medium, .small, .thumb)
-				isThumbnail := strings.Contains(filename, ".orig.jpg") || 
-							   strings.Contains(filename, ".large.jpg") || 
-							   strings.Contains(filename, ".medium.jpg") || 
-							   strings.Contains(filename, ".small.jpg") || 
-							   strings.Contains(filename, ".thumb.jpg")
-				
+				isThumbnail := strings.Contains(filename, ".orig.jpg") ||
+					strings.Contains(filename, ".large.jpg") ||
+					strings.Contains(filename, ".medium.jpg") ||
+					strings.Contains(filename, ".small.jpg") ||
+					strings.Contains(filename, ".thumb.jpg")
+
 				if isThumbnail {
 					log.Printf("Skipping thumbnail %s because video is present", filePath)
 					continue
@@ -521,14 +521,14 @@ func (yd *YtDlpDownloader) attemptDownload(url string, outputTemplate string, pr
 				continue
 			}
 		}
-		
+
 		// Extract author info and format caption based on platform
 		caption := ""
 		if strings.Contains(url, "twitter.com") || strings.Contains(url, "x.com") {
 			// Twitter/X platform
 			username := extractTwitterUsernameFromURL(url)
 			displayName := ""
-			
+
 			// Try to get display name from metadata
 			if metadataInfo != nil {
 				if uploader, ok := metadataInfo["uploader"].(string); ok {
@@ -537,7 +537,7 @@ func (yd *YtDlpDownloader) attemptDownload(url string, outputTemplate string, pr
 					displayName = creator
 				}
 			}
-			
+
 			if tweetDescription != "" {
 				caption = FormatAuthorCaption("twitter", displayName, username, tweetDescription)
 			} else {
@@ -547,13 +547,13 @@ func (yd *YtDlpDownloader) attemptDownload(url string, outputTemplate string, pr
 			// TikTok platform
 			username := extractTikTokUsernameFromURL(url)
 			displayName := ""
-			
+
 			log.Printf("🎵 [TIKTOK] URL-extracted username: '%s'", username)
-			
+
 			// Try to get username and display name from metadata
 			if metadataInfo != nil {
 				log.Printf("🎵 [TIKTOK] Metadata available, checking fields...")
-				
+
 				// Check various metadata fields for username/display name
 				if uploader, ok := metadataInfo["uploader"].(string); ok && uploader != "" {
 					log.Printf("🎵 [TIKTOK] Found uploader: '%s'", uploader)
@@ -585,9 +585,9 @@ func (yd *YtDlpDownloader) attemptDownload(url string, outputTemplate string, pr
 			} else {
 				log.Printf("🎵 [TIKTOK] No metadata available")
 			}
-			
+
 			log.Printf("🎵 [TIKTOK] Final: username='%s', displayName='%s'", username, displayName)
-			
+
 			// Try to get description from metadata
 			description := ""
 			if metadataInfo != nil {
@@ -602,7 +602,7 @@ func (yd *YtDlpDownloader) attemptDownload(url string, outputTemplate string, pr
 			// YouTube platform
 			username := extractYouTubeUsernameFromURL(url)
 			displayName := ""
-			
+
 			// Try to get channel name and display name from metadata
 			if metadataInfo != nil {
 				if channel, ok := metadataInfo["channel"].(string); ok {
@@ -620,7 +620,7 @@ func (yd *YtDlpDownloader) attemptDownload(url string, outputTemplate string, pr
 					}
 				}
 			}
-			
+
 			// Try to get description from metadata
 			description := ""
 			if metadataInfo != nil {
@@ -635,7 +635,7 @@ func (yd *YtDlpDownloader) attemptDownload(url string, outputTemplate string, pr
 			// Instagram platform
 			username := extractInstagramUsernameFromURL(url)
 			displayName := ""
-			
+
 			// Try to get username and display name from metadata
 			if metadataInfo != nil {
 				if uploader, ok := metadataInfo["uploader"].(string); ok {
@@ -649,7 +649,7 @@ func (yd *YtDlpDownloader) attemptDownload(url string, outputTemplate string, pr
 					displayName = creator
 				}
 			}
-			
+
 			// Try to get description from metadata
 			description := ""
 			if metadataInfo != nil {
@@ -663,7 +663,7 @@ func (yd *YtDlpDownloader) attemptDownload(url string, outputTemplate string, pr
 		} else if strings.Contains(url, "facebook.com") {
 			// Facebook platform - usually only has display names, not usernames
 			displayName := ""
-			
+
 			// Try to get display name from metadata (Facebook rarely has usernames)
 			if metadataInfo != nil {
 				// Check various metadata fields for display name
@@ -677,7 +677,7 @@ func (yd *YtDlpDownloader) attemptDownload(url string, outputTemplate string, pr
 					displayName = channel
 				}
 			}
-			
+
 			// Try to get description from metadata
 			description := ""
 			if metadataInfo != nil {
@@ -692,7 +692,7 @@ func (yd *YtDlpDownloader) attemptDownload(url string, outputTemplate string, pr
 			// Reddit platform - extract subreddit, username (if available), and post title
 			subreddit := extractRedditSubredditFromURL(url)
 			username := extractRedditUsernameFromURL(url) // Often empty for most Reddit post URLs
-			
+
 			// Try to get post title/description from metadata
 			postTitle := ""
 			if metadataInfo != nil {
@@ -704,7 +704,7 @@ func (yd *YtDlpDownloader) attemptDownload(url string, outputTemplate string, pr
 				} else if fulltitle, ok := metadataInfo["fulltitle"].(string); ok && fulltitle != "" {
 					postTitle = fulltitle
 				}
-				
+
 				// Also try to get the author from metadata if not found in URL
 				if username == "" {
 					if uploader, ok := metadataInfo["uploader"].(string); ok && uploader != "" {
@@ -714,20 +714,20 @@ func (yd *YtDlpDownloader) attemptDownload(url string, outputTemplate string, pr
 					}
 				}
 			}
-			
+
 			caption = FormatAuthorCaption("reddit", subreddit, username, postTitle)
 		}
-		
+
 		mediaInfo := &MediaInfo{
 			Type:     mediaType,
 			URL:      url,
 			Caption:  caption,
 			Filename: filePath,
 		}
-		
+
 		mediaInfos = append(mediaInfos, mediaInfo)
 	}
-	
+
 	return mediaInfos, nil
 }
 
@@ -814,7 +814,7 @@ func (yd *YtDlpDownloader) DownloadInstagramMedia(url string) ([]*MediaInfo, err
 			log.Printf("Browser extraction only returned text content, continuing to other strategies")
 		}
 	}
-	
+
 	// Strategy 3: Try Instagram GraphQL API (sometimes works without authentication)
 	log.Printf("Browser extraction failed, trying Instagram GraphQL API")
 	graphqlExtractor := NewInstagramGraphQLExtractor(yd.TempDir)
@@ -823,7 +823,7 @@ func (yd *YtDlpDownloader) DownloadInstagramMedia(url string) ([]*MediaInfo, err
 		return graphqlMediaInfos, nil
 	}
 	log.Printf("GraphQL extraction failed: %v", err)
-	
+
 	// Strategy 4: Try Instagram oEmbed API (often blocked now)
 	log.Printf("GraphQL failed, trying Instagram oEmbed API")
 	embedExtractor := NewInstagramEmbedExtractor(yd.TempDir)
@@ -832,14 +832,14 @@ func (yd *YtDlpDownloader) DownloadInstagramMedia(url string) ([]*MediaInfo, err
 		return embedMediaInfos, nil
 	}
 	log.Printf("oEmbed extraction failed: %v", err)
-	
+
 	// Strategy 5: Try thumbnails-only approach for metadata/description
 	log.Printf("oEmbed failed, trying thumbnails-only approach for Instagram")
 	mediaInfos, err = yd.downloadThumbnailsOnly(url, "Instagram")
 	if err == nil && len(mediaInfos) > 0 {
 		return mediaInfos, nil
 	}
-	
+
 	// Strategy 6: Try direct HTTP Instagram extraction only for non-video content
 	// Skip for reels/videos as they can't be extracted via HTML scraping
 	if !strings.Contains(url, "/reel/") && !strings.Contains(url, "/tv/") {
@@ -851,19 +851,19 @@ func (yd *YtDlpDownloader) DownloadInstagramMedia(url string) ([]*MediaInfo, err
 	} else {
 		log.Printf("Skipping direct extraction for Instagram reel/video - not supported")
 	}
-	
+
 	return nil, fmt.Errorf("all Instagram extraction strategies failed")
 }
 
 func (yd *YtDlpDownloader) DownloadTikTokMedia(url string) ([]*MediaInfo, error) {
 	// For TikTok, try multiple strategies for different content types
-	
-	// Strategy 1: Try normal download first 
+
+	// Strategy 1: Try normal download first
 	mediaInfos, err := yd.DownloadMedia(url)
 	if err == nil && len(mediaInfos) > 0 {
 		return mediaInfos, nil
 	}
-	
+
 	// Strategy 2: Try thumbnails-only approach for image slideshows
 	log.Printf("Normal download failed, trying thumbnails-only approach for TikTok")
 	mediaInfos, err = yd.downloadThumbnailsOnly(url, "TikTok")
@@ -891,7 +891,7 @@ func (yd *YtDlpDownloader) DownloadTikTokMedia(url string) ([]*MediaInfo, error)
 			log.Printf("⚠️ Failed to pre-resolve URL, using original: %v", err)
 		}
 	}
-	
+
 	return tiktokExtractor.ExtractTikTokPost(resolvedURL)
 }
 
@@ -982,15 +982,15 @@ func (yd *YtDlpDownloader) DownloadYouTubeMedia(url string) ([]*MediaInfo, error
 		cliBrowser := NewCliBrowserExtractor(yd.WorkingDir, yd.TempDir)
 		return cliBrowser.ExtractYouTubeCommunityPost(url)
 	}
-	
+
 	// For regular YouTube videos, try yt-dlp first then fallback to headless browser for thumbnails
-	
-	// Strategy 1: Try normal yt-dlp download first 
+
+	// Strategy 1: Try normal yt-dlp download first
 	mediaInfos, err := yd.DownloadMedia(url)
 	if err == nil && len(mediaInfos) > 0 {
 		return mediaInfos, nil
 	}
-	
+
 	// Strategy 2: Universal headless browser fallback (mainly for thumbnails and metadata)
 	log.Printf("yt-dlp failed, trying universal headless browser for YouTube")
 	browserExtractor := NewUniversalBrowserExtractor(yd.WorkingDir, yd.TempDir)
@@ -999,20 +999,20 @@ func (yd *YtDlpDownloader) DownloadYouTubeMedia(url string) ([]*MediaInfo, error
 
 func (yd *YtDlpDownloader) DownloadRedditMedia(url string) ([]*MediaInfo, error) {
 	// For Reddit, try yt-dlp first (works well for video posts) then browser fallback
-	
-	// Strategy 1: Try normal yt-dlp download first 
+
+	// Strategy 1: Try normal yt-dlp download first
 	mediaInfos, err := yd.DownloadMedia(url)
 	if err == nil && len(mediaInfos) > 0 {
 		return mediaInfos, nil
 	}
-	
+
 	// Strategy 2: Try thumbnails-only approach for image posts
 	log.Printf("Normal download failed, trying thumbnails-only approach for Reddit")
 	mediaInfos, err = yd.downloadThumbnailsOnly(url, "Reddit")
 	if err == nil && len(mediaInfos) > 0 {
 		return mediaInfos, nil
 	}
-	
+
 	// Strategy 3: Universal headless browser fallback for images and galleries
 	log.Printf("yt-dlp failed completely, trying universal headless browser for Reddit")
 	browserExtractor := NewUniversalBrowserExtractor(yd.WorkingDir, yd.TempDir)
@@ -1021,13 +1021,13 @@ func (yd *YtDlpDownloader) DownloadRedditMedia(url string) ([]*MediaInfo, error)
 
 func (yd *YtDlpDownloader) DownloadFacebookMedia(url string) ([]*MediaInfo, error) {
 	// For Facebook, try yt-dlp first (works for some video posts) then browser fallback
-	
-	// Strategy 1: Try normal yt-dlp download first 
+
+	// Strategy 1: Try normal yt-dlp download first
 	mediaInfos, err := yd.DownloadMedia(url)
 	if err == nil && len(mediaInfos) > 0 {
 		return mediaInfos, nil
 	}
-	
+
 	// Strategy 2: Universal headless browser fallback for photos and other content
 	log.Printf("yt-dlp failed, trying universal headless browser for Facebook")
 	browserExtractor := NewUniversalBrowserExtractor(yd.WorkingDir, yd.TempDir)
@@ -1271,27 +1271,27 @@ func (yd *YtDlpDownloader) downloadThumbnailsOnly(url string, platform string) (
 	if err := os.MkdirAll(yd.TempDir, 0755); err != nil {
 		return nil, fmt.Errorf("failed to create temp directory: %v", err)
 	}
-	
+
 	// Create unique filename with timestamp + URL hash to prevent collisions between concurrent downloads
 	timestamp := time.Now().Unix()
 	urlHash := strings.ToUpper(fmt.Sprintf("%x", md5.Sum([]byte(url))))[:8]
 	outputTemplate := filepath.Join(yd.TempDir, fmt.Sprintf("%d_%s_%%(title)s.%%(ext)s", timestamp, urlHash))
-	
+
 	log.Printf("Trying thumbnails-only download for %s with template: %s", platform, outputTemplate)
-	
+
 	// Build special args for thumbnails and metadata only
 	args := []string{
 		"--no-playlist",
 		"--output", outputTemplate,
-		"--skip-download",               // Skip video/audio download
-		"--write-all-thumbnails",        // Download all thumbnails
-		"--write-info-json",             // Write metadata
-		"--write-description",           // Write tweet text
-		"--ignore-errors",               // Continue on errors
+		"--skip-download",        // Skip video/audio download
+		"--write-all-thumbnails", // Download all thumbnails
+		"--write-info-json",      // Write metadata
+		"--write-description",    // Write tweet text
+		"--ignore-errors",        // Continue on errors
 		"--no-check-certificate",
 		"--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
 	}
-	
+
 	// Add platform-specific authentication for thumbnails download
 	if strings.Contains(url, "twitter.com") || strings.Contains(url, "x.com") {
 		// Check for Twitter-specific cookies file
@@ -1324,34 +1324,34 @@ func (yd *YtDlpDownloader) downloadThumbnailsOnly(url string, platform string) (
 			log.Printf("Using Reddit cookies for thumbnails download: %s", redditCookiesPath)
 		}
 	}
-	
+
 	args = append(args, url)
-	
+
 	cmd := exec.Command(yd.BinaryPath, args...)
-	
+
 	log.Printf("Executing thumbnails-only command: %s %v", yd.BinaryPath, args)
-	
+
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		log.Printf("Thumbnails-only download failed: %v\nOutput: %s", err, string(output))
 		return nil, fmt.Errorf("thumbnails download failed: %v", err)
 	}
-	
+
 	log.Printf("Thumbnails-only download completed")
 	log.Printf("Output: %s", string(output))
-	
+
 	// Find downloaded files
 	downloadedFiles, err := yd.findDownloadedFiles(timestamp)
 	if err != nil {
 		return nil, fmt.Errorf("failed to find downloaded files: %v", err)
 	}
-	
+
 	log.Printf("Found %d files from thumbnails-only download: %v", len(downloadedFiles), downloadedFiles)
-	
+
 	// Convert to MediaInfo with Twitter-specific handling
 	var mediaInfos []*MediaInfo
 	var tweetDescription string
-	
+
 	// Look for description file
 	for _, filePath := range downloadedFiles {
 		if strings.HasSuffix(filePath, ".description") {
@@ -1361,23 +1361,23 @@ func (yd *YtDlpDownloader) downloadThumbnailsOnly(url string, platform string) (
 			break
 		}
 	}
-	
+
 	// Process files (skip metadata files and select best thumbnail for videos)
 	bestThumbnail := ""
 	thumbnailPriority := map[string]int{
-		"orig": 5,    // Highest priority
-		"large": 4,
+		"orig":   5, // Highest priority
+		"large":  4,
 		"medium": 3,
-		"small": 2,
-		"thumb": 1,   // Lowest priority
+		"small":  2,
+		"thumb":  1, // Lowest priority
 	}
-	
+
 	// First pass: find best thumbnail if multiple exist
 	for _, filePath := range downloadedFiles {
 		if strings.HasSuffix(filePath, ".info.json") || strings.HasSuffix(filePath, ".description") {
 			continue
 		}
-		
+
 		// Check if this is a thumbnail file
 		filename := filepath.Base(filePath)
 		for size, priority := range thumbnailPriority {
@@ -1400,13 +1400,13 @@ func (yd *YtDlpDownloader) downloadThumbnailsOnly(url string, platform string) (
 			}
 		}
 	}
-	
+
 	// Second pass: process files, using only the best thumbnail
 	for _, filePath := range downloadedFiles {
 		if strings.HasSuffix(filePath, ".info.json") || strings.HasSuffix(filePath, ".description") {
 			continue
 		}
-		
+
 		// Skip other thumbnails if we have a best one
 		filename := filepath.Base(filePath)
 		isThumbnail := false
@@ -1416,30 +1416,30 @@ func (yd *YtDlpDownloader) downloadThumbnailsOnly(url string, platform string) (
 				break
 			}
 		}
-		
+
 		if isThumbnail && filePath != bestThumbnail {
 			log.Printf("Skipping thumbnail %s (keeping best: %s)", filePath, bestThumbnail)
 			continue
 		}
-		
+
 		mediaType := yd.detectMediaType(filePath)
-		
+
 		// Use description text as caption if available, otherwise empty
 		caption := ""
 		if tweetDescription != "" {
 			caption = tweetDescription
 		}
-		
+
 		mediaInfo := &MediaInfo{
 			Type:     mediaType,
 			URL:      url,
 			Caption:  caption,
 			Filename: filePath,
 		}
-		
+
 		mediaInfos = append(mediaInfos, mediaInfo)
 	}
-	
+
 	// If no images found but we have text content, return it as a text media item
 	// EXCEPT for Instagram posts - let them fall through to direct HTML extraction
 	if len(mediaInfos) == 0 && tweetDescription != "" {
@@ -1448,9 +1448,9 @@ func (yd *YtDlpDownloader) downloadThumbnailsOnly(url string, platform string) (
 			log.Printf("No media found for Instagram, skipping text-only to allow direct extraction")
 			return nil, fmt.Errorf("no media found, letting direct extraction handle it")
 		}
-		
+
 		log.Printf("No media found, returning %s text content: %s", platform, tweetDescription)
-		
+
 		// Create a text-only media item for non-Instagram platforms
 		textMediaInfo := &MediaInfo{
 			Type:     "text",
@@ -1458,38 +1458,38 @@ func (yd *YtDlpDownloader) downloadThumbnailsOnly(url string, platform string) (
 			Caption:  tweetDescription,
 			Filename: "", // No file for text-only content
 		}
-		
+
 		mediaInfos = append(mediaInfos, textMediaInfo)
 	}
-	
+
 	return mediaInfos, nil
 }
 
 func (yd *YtDlpDownloader) findDownloadedFiles(timestamp int64) ([]string, error) {
 	var files []string
-	
+
 	err := filepath.Walk(yd.TempDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return nil
 		}
-		
+
 		if !info.IsDir() {
 			filename := info.Name()
 			if strings.HasPrefix(filename, fmt.Sprintf("%d_", timestamp)) {
 				files = append(files, path)
 			}
 		}
-		
+
 		return nil
 	})
-	
+
 	return files, err
 }
 
 // buildDownloadArgsWithProxy builds download args with a specific proxy
 func (yd *YtDlpDownloader) buildDownloadArgsWithProxy(url string, outputTemplate string, proxy string) []string {
 	args := yd.buildDownloadArgs(url, outputTemplate)
-	
+
 	// Remove any existing proxy from args (it's added at the end by buildDownloadArgs)
 	var cleanArgs []string
 	for i := 0; i < len(args); i++ {
@@ -1499,12 +1499,12 @@ func (yd *YtDlpDownloader) buildDownloadArgsWithProxy(url string, outputTemplate
 		}
 		cleanArgs = append(cleanArgs, args[i])
 	}
-	
+
 	// Add specific proxy if provided
 	if proxy != "" {
 		cleanArgs = append(cleanArgs, "--proxy", proxy)
 	}
-	
+
 	return cleanArgs
 }
 
@@ -1513,7 +1513,7 @@ func (yd *YtDlpDownloader) buildDownloadArgs(url string, outputTemplate string) 
 	// Create cache directory in working directory to avoid permission issues
 	cacheDir := yd.getFilePath("cache")
 	os.MkdirAll(cacheDir, 0755)
-	
+
 	baseArgs := []string{
 		"--no-playlist",
 		"--output", outputTemplate,
@@ -1534,7 +1534,7 @@ func (yd *YtDlpDownloader) buildDownloadArgs(url string, outputTemplate string) 
 	}
 
 	// Note: Platform-specific cookies are added in the platform-specific sections below
-	
+
 	// Platform-specific optimizations
 	if strings.Contains(url, "instagram.com") {
 		// Instagram-specific args with enhanced anti-blocking
@@ -1544,11 +1544,11 @@ func (yd *YtDlpDownloader) buildDownloadArgs(url string, outputTemplate string) 
 			"--referer", "https://www.instagram.com/",
 			"--no-check-certificate",
 			// Try different API approaches
-			"--extractor-args", "instagram:api=graphql",  // Try GraphQL API
+			"--extractor-args", "instagram:api=graphql", // Try GraphQL API
 			// Add more realistic headers
 			"--add-header", "Accept-Language:en-US,en;q=0.9",
 			"--add-header", "Accept:text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-			"--add-header", "X-IG-App-ID:936619743392459",  // Instagram web app ID
+			"--add-header", "X-IG-App-ID:936619743392459", // Instagram web app ID
 			"--add-header", "X-ASBD-ID:129477",
 			"--add-header", "X-IG-WWW-Claim:0",
 			"--add-header", "X-Requested-With:XMLHttpRequest",
@@ -1556,7 +1556,7 @@ func (yd *YtDlpDownloader) buildDownloadArgs(url string, outputTemplate string) 
 			"--sleep-requests", "2",
 			"--sleep-interval", "3",
 		}
-		
+
 		// Check for Instagram cookies if enabled
 		if config.IsCookiesEnabledForPlatform("instagram") {
 			instagramCookiesPath := yd.getFilePath("cookies/instagram_cookies.txt")
@@ -1583,7 +1583,7 @@ func (yd *YtDlpDownloader) buildDownloadArgs(url string, outputTemplate string) 
 				}
 			}
 		}
-		
+
 		baseArgs = append(baseArgs, instagramArgs...)
 	} else if strings.Contains(url, "tiktok.com") {
 		// TikTok-specific args with enhanced anti-blocking and no proxy for better compatibility
@@ -1592,12 +1592,12 @@ func (yd *YtDlpDownloader) buildDownloadArgs(url string, outputTemplate string) 
 			"--referer", "https://www.tiktok.com/",
 			"--add-header", "Accept-Language:en-US,en;q=0.9",
 			"--add-header", "Accept:text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-			"--add-header", "sec-fetch-dest:document", 
+			"--add-header", "sec-fetch-dest:document",
 			"--add-header", "sec-fetch-mode:navigate",
 			"--add-header", "sec-fetch-site:none",
 			"--add-header", "sec-fetch-user:?1",
 		}
-		
+
 		// Check for TikTok-specific cookies file first
 		tiktokCookiesPath := yd.getFilePath("cookies/tiktok_cookies.txt")
 		if _, err := os.Stat(tiktokCookiesPath); err == nil {
@@ -1613,19 +1613,19 @@ func (yd *YtDlpDownloader) buildDownloadArgs(url string, outputTemplate string) 
 				}
 			}
 		}
-		
+
 		baseArgs = append(baseArgs, tiktokArgs...)
 	} else if strings.Contains(url, "twitter.com") || strings.Contains(url, "x.com") {
 		// Twitter/X-specific args with support for images and mixed content
 		twitterArgs := []string{
 			"--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
-			"--write-all-thumbnails",          // Download all available images
-			"--write-thumbnail",               // Also try regular thumbnail extraction
-			"--write-description",             // Save tweet text
-			"--add-metadata",                  // Add metadata to files
-			"--no-abort-on-error",             // Don't stop on errors
+			"--write-all-thumbnails", // Download all available images
+			"--write-thumbnail",      // Also try regular thumbnail extraction
+			"--write-description",    // Save tweet text
+			"--add-metadata",         // Add metadata to files
+			"--no-abort-on-error",    // Don't stop on errors
 		}
-		
+
 		// For Twitter, we need to remove the --format entirely and let yt-dlp handle it naturally
 		// Remove the default format from baseArgs since Twitter images don't work with standard format selectors
 		var newBaseArgs []string
@@ -1640,7 +1640,7 @@ func (yd *YtDlpDownloader) buildDownloadArgs(url string, outputTemplate string) 
 			}
 		}
 		baseArgs = newBaseArgs
-		
+
 		// Check for Twitter-specific cookies file first
 		twitterCookiesPath := yd.getFilePath("cookies/twitter_cookies.txt")
 		if _, err := os.Stat(twitterCookiesPath); err == nil {
@@ -1656,7 +1656,7 @@ func (yd *YtDlpDownloader) buildDownloadArgs(url string, outputTemplate string) 
 				}
 			}
 		}
-		
+
 		baseArgs = append(baseArgs, twitterArgs...)
 	} else if strings.Contains(url, "youtube.com") || strings.Contains(url, "youtu.be") {
 		// YouTube now often only provides separate audio/video HLS streams.
@@ -1700,7 +1700,7 @@ func (yd *YtDlpDownloader) buildDownloadArgs(url string, outputTemplate string) 
 		} else {
 			log.Printf("⚠️ No YouTube cookies found. Extract from Firefox: ./bin/extract-firefox-cookies")
 		}
-		
+
 		// Strategy 2: Try Firefox browser cookie extraction as fallback
 		if !cookieSuccess {
 			log.Printf("🦊 Trying Firefox cookie extraction for YouTube...")
@@ -1711,7 +1711,7 @@ func (yd *YtDlpDownloader) buildDownloadArgs(url string, outputTemplate string) 
 				cookieSuccess = true
 			}
 		}
-		
+
 		// Strategy 3: Enhanced User-Agent matching
 		if cookieSuccess {
 			// Use Firefox User-Agent to match cookie source
@@ -1725,13 +1725,13 @@ func (yd *YtDlpDownloader) buildDownloadArgs(url string, outputTemplate string) 
 			// Use basic User-Agent without cookies
 			youtubeArgs = append(youtubeArgs, "--user-agent", "Mozilla/5.0 (X11; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/109.0")
 		}
-		
+
 		// Strategy 4: Rate limiting (essential for YouTube)
 		if delay := config.GetYouTubeDelay(); delay != "" {
 			youtubeArgs = append(youtubeArgs, "--sleep-interval", delay)
 			log.Printf("⏱️ Using %s second delay for YouTube rate limiting", delay)
 		}
-		
+
 		baseArgs = append(baseArgs, youtubeArgs...)
 	} else if strings.Contains(url, "reddit.com") {
 		// Reddit-specific args with enhanced cookie support and DASH format handling
@@ -1741,7 +1741,7 @@ func (yd *YtDlpDownloader) buildDownloadArgs(url string, outputTemplate string) 
 			"--add-header", "Accept-Language:en-US,en;q=0.9",
 			"--add-header", "Accept:text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
 		}
-		
+
 		// Reddit needs special format handling for DASH videos
 		// Remove the default format from baseArgs since Reddit videos need special format selectors
 		var newBaseArgs []string
@@ -1756,11 +1756,11 @@ func (yd *YtDlpDownloader) buildDownloadArgs(url string, outputTemplate string) 
 			}
 		}
 		baseArgs = newBaseArgs
-		
+
 		// Add Reddit-specific format selector that avoids problematic HLS fragments
 		// Priority: fallback (single file) > DASH combinations > avoid HLS+DASH that gets 403 errors
 		redditArgs = append(redditArgs, "--format", "fallback/dash-4+dash-7/dash-3+dash-7/dash-2+dash-7/best[filesize<50M]/best")
-		
+
 		// Check for Reddit-specific cookies file
 		redditCookiesPath := yd.getFilePath("cookies/reddit_cookies.txt")
 		if _, err := os.Stat(redditCookiesPath); err == nil {
@@ -1769,7 +1769,7 @@ func (yd *YtDlpDownloader) buildDownloadArgs(url string, outputTemplate string) 
 		} else {
 			log.Printf("⚠️ Reddit cookies not found at %s. Reddit downloads may be limited.", redditCookiesPath)
 		}
-		
+
 		baseArgs = append(baseArgs, redditArgs...)
 	} else if strings.Contains(url, "facebook.com") {
 		// Facebook-specific args with enhanced anti-blocking
@@ -1778,9 +1778,9 @@ func (yd *YtDlpDownloader) buildDownloadArgs(url string, outputTemplate string) 
 			"--referer", "https://www.facebook.com/",
 			"--add-header", "Accept-Language:en-US,en;q=0.9",
 			"--add-header", "Accept:text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-			"--extractor-retries", "3",        // Extra retries for Facebook's blocking
+			"--extractor-retries", "3", // Extra retries for Facebook's blocking
 		}
-		
+
 		// Check for Facebook-specific cookies file
 		facebookCookiesPath := yd.getFilePath("cookies/facebook_cookies.txt")
 		if _, err := os.Stat(facebookCookiesPath); err == nil {
@@ -1789,12 +1789,12 @@ func (yd *YtDlpDownloader) buildDownloadArgs(url string, outputTemplate string) 
 		} else {
 			log.Printf("⚠️ Facebook cookies not found at %s. Facebook downloads may be limited.", facebookCookiesPath)
 		}
-		
+
 		baseArgs = append(baseArgs, facebookArgs...)
 	}
-	
+
 	// Don't add proxy here, it's handled by buildDownloadArgsWithProxy
-	
+
 	baseArgs = append(baseArgs, url)
 	return baseArgs
 }
@@ -1808,7 +1808,7 @@ func (yd *YtDlpDownloader) cookiesExist() bool {
 
 func (yd *YtDlpDownloader) detectMediaType(filePath string) string {
 	ext := strings.ToLower(filepath.Ext(filePath))
-	
+
 	switch ext {
 	case ".jpg", ".jpeg", ".png", ".gif", ".webp", ".image":
 		return "photo"
@@ -1849,16 +1849,16 @@ func (yd *YtDlpDownloader) CleanupFile(filepath string) error {
 func (yd *YtDlpDownloader) CleanupTempFiles() error {
 	// Clean up files older than 1 hour
 	cutoff := time.Now().Add(-1 * time.Hour)
-	
+
 	return filepath.Walk(yd.TempDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return nil
 		}
-		
+
 		if !info.IsDir() && info.ModTime().Before(cutoff) {
 			os.Remove(path)
 		}
-		
+
 		return nil
 	})
 }
@@ -1960,33 +1960,33 @@ func (yd *YtDlpDownloader) resolveRedirectURL(shortURL string) (string, error) {
 		},
 		Timeout: 10 * time.Second,
 	}
-	
+
 	req, err := http.NewRequest("GET", shortURL, nil)
 	if err != nil {
 		return "", err
 	}
-	
+
 	req.Header.Set("User-Agent", "Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X) AppleWebKit/605.1.15")
-	
+
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", err
 	}
 	defer resp.Body.Close()
-	
+
 	// Get the redirect location
 	if location := resp.Header.Get("Location"); location != "" {
 		log.Printf("🔗 Resolved %s to %s", shortURL, location)
 		return location, nil
 	}
-	
+
 	return "", fmt.Errorf("no redirect found for %s", shortURL)
 }
 
 // extractRedditImageURLsFromOutput parses yt-dlp output to extract direct Reddit image URLs
 func (yd *YtDlpDownloader) extractRedditImageURLsFromOutput(output string) []string {
 	var imageURLs []string
-	
+
 	// Look for lines that contain Reddit image URLs
 	// Pattern: [generic] Extracting URL: https://i.redd.it/...
 	lines := strings.Split(output, "\n")
@@ -2005,18 +2005,18 @@ func (yd *YtDlpDownloader) extractRedditImageURLsFromOutput(output string) []str
 			}
 		}
 	}
-	
+
 	return imageURLs
 }
 
 // downloadRedditImagesDirectly downloads Reddit images directly using HTTP
 func (yd *YtDlpDownloader) downloadRedditImagesDirectly(imageURLs []string, originalURL string, timestamp int64) ([]*MediaInfo, error) {
 	var mediaInfos []*MediaInfo
-	
+
 	// Extract subreddit and post info for captions
 	subreddit := extractRedditSubredditFromURL(originalURL)
 	username := extractRedditUsernameFromURL(originalURL)
-	
+
 	for i, imageURL := range imageURLs {
 		// Download the image
 		resp, err := http.Get(imageURL)
@@ -2024,13 +2024,13 @@ func (yd *YtDlpDownloader) downloadRedditImagesDirectly(imageURLs []string, orig
 			log.Printf("❌ Failed to download image %s: %v", imageURL, err)
 			continue
 		}
-		
+
 		if resp.StatusCode != 200 {
 			log.Printf("❌ HTTP error downloading image %s: %d", imageURL, resp.StatusCode)
 			resp.Body.Close()
 			continue
 		}
-		
+
 		// Determine file extension from URL
 		ext := "jpg" // default
 		if strings.Contains(imageURL, ".png") {
@@ -2040,10 +2040,10 @@ func (yd *YtDlpDownloader) downloadRedditImagesDirectly(imageURLs []string, orig
 		} else if strings.Contains(imageURL, ".webp") {
 			ext = "webp"
 		}
-		
+
 		// Create filename
 		filename := filepath.Join(yd.TempDir, fmt.Sprintf("%d_reddit_image_%d.%s", timestamp, i+1, ext))
-		
+
 		// Create file
 		file, err := os.Create(filename)
 		if err != nil {
@@ -2051,51 +2051,51 @@ func (yd *YtDlpDownloader) downloadRedditImagesDirectly(imageURLs []string, orig
 			resp.Body.Close()
 			continue
 		}
-		
+
 		// Copy image data directly from response to file
 		_, err = file.ReadFrom(resp.Body)
 		resp.Body.Close()
 		file.Close()
-		
+
 		if err != nil {
 			log.Printf("❌ Failed to write image data to %s: %v", filename, err)
 			continue
 		}
-		
+
 		log.Printf("✅ Downloaded Reddit image: %s", filename)
-		
+
 		// Create caption with Reddit info
 		caption := FormatAuthorCaption("reddit", subreddit, username, "")
-		
+
 		mediaInfo := &MediaInfo{
 			Type:     "photo",
 			URL:      originalURL,
 			Caption:  caption,
 			Filename: filename,
 		}
-		
+
 		mediaInfos = append(mediaInfos, mediaInfo)
 	}
-	
+
 	if len(mediaInfos) == 0 {
 		return nil, fmt.Errorf("failed to download any Reddit images")
 	}
-	
+
 	return mediaInfos, nil
 }
 
 // downloadInstagramDirect extracts Instagram content using direct HTTP requests to mobile Instagram
 func (yd *YtDlpDownloader) downloadInstagramDirect(url string) ([]*MediaInfo, error) {
 	log.Printf("🔍 Attempting direct Instagram extraction for: %s", url)
-	
+
 	// Try regular Instagram URL first (simpler approach)
 	log.Printf("📱 Trying direct Instagram URL: %s", url)
-	
+
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %v", err)
 	}
-	
+
 	// Add Instagram mobile headers
 	req.Header.Set("User-Agent", "Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.0 Mobile/15E148 Safari/604.1")
 	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
@@ -2104,7 +2104,7 @@ func (yd *YtDlpDownloader) downloadInstagramDirect(url string) ([]*MediaInfo, er
 	req.Header.Set("Sec-Fetch-Dest", "document")
 	req.Header.Set("Sec-Fetch-Mode", "navigate")
 	req.Header.Set("Sec-Fetch-Site", "same-origin")
-	
+
 	// Add cookies if enabled and available
 	if config.IsCookiesEnabledForPlatform("instagram") {
 		if cookieData, err := os.ReadFile(yd.getFilePath("cookies/instagram_cookies.txt")); err == nil {
@@ -2134,7 +2134,7 @@ func (yd *YtDlpDownloader) downloadInstagramDirect(url string) ([]*MediaInfo, er
 	} else {
 		log.Printf("🚫 Instagram cookies disabled for direct extraction")
 	}
-	
+
 	resp, err := SharedHTTPClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch Instagram page: %v", err)
@@ -2145,12 +2145,12 @@ func (yd *YtDlpDownloader) downloadInstagramDirect(url string) ([]*MediaInfo, er
 		log.Printf("❌ Instagram HTTP error: %d %s", resp.StatusCode, resp.Status)
 		return nil, fmt.Errorf("Instagram returned HTTP %d", resp.StatusCode)
 	}
-	
+
 	log.Printf("✅ Successfully fetched Instagram page, Content-Length: %s", resp.Header.Get("Content-Length"))
-	
+
 	// Read response body - handle gzip compression
 	var body []byte
-	
+
 	if resp.Header.Get("Content-Encoding") == "gzip" {
 		gzipReader, err := gzip.NewReader(resp.Body)
 		if err != nil {
@@ -2168,16 +2168,16 @@ func (yd *YtDlpDownloader) downloadInstagramDirect(url string) ([]*MediaInfo, er
 			return nil, fmt.Errorf("failed to read response body: %v", err)
 		}
 	}
-	
+
 	html := string(body)
 	log.Printf("📄 Retrieved HTML content: %d bytes", len(html))
-	
+
 	// DEBUG: Save HTML to file for inspection
 	htmlFile := filepath.Join(yd.TempDir, fmt.Sprintf("instagram_debug_%d.html", time.Now().Unix()))
 	if err := os.WriteFile(htmlFile, []byte(html), 0644); err == nil {
 		log.Printf("🔍 DEBUG: Saved HTML to %s for inspection", htmlFile)
 	}
-	
+
 	// Extract Instagram images using regex patterns
 	return yd.extractInstagramImagesFromHTML(html, url)
 }
@@ -2219,35 +2219,35 @@ func (yd *YtDlpDownloader) extractInstagramImagesFromHTML(html, originalURL stri
 				candidatesRe := regexp.MustCompile(`"candidates":\[[^\]]*?"url":"(https:[^"]+\.cdninstagram\.com[^"]+stp=dst-jpg_e35_tt6[^"]*)"`)
 				candidateURIs := candidatesRe.FindAllStringSubmatch(carouselJSON, -1)
 
-		// Combine both sources, preferring candidates (higher quality)
-		var carouselURLs []string
-		seenCarouselURLs := make(map[string]bool)
+				// Combine both sources, preferring candidates (higher quality)
+				var carouselURLs []string
+				seenCarouselURLs := make(map[string]bool)
 
-		// Add candidate URLs first (higher quality, full-size)
-		for _, match := range candidateURIs {
-			if len(match) > 1 {
-				url := strings.ReplaceAll(match[1], `\/`, "/")
-				url = strings.ReplaceAll(url, `\u0026`, "&")
-				if !seenCarouselURLs[url] {
-					seenCarouselURLs[url] = true
-					carouselURLs = append(carouselURLs, url)
-				}
-			}
-		}
-
-		// Add display_uri if no candidates found
-		if len(carouselURLs) == 0 {
-			for _, match := range displayURIs {
-				if len(match) > 1 {
-					url := strings.ReplaceAll(match[1], `\/`, "/")
-					url = strings.ReplaceAll(url, `\u0026`, "&")
-					if !seenCarouselURLs[url] {
-						seenCarouselURLs[url] = true
-						carouselURLs = append(carouselURLs, url)
+				// Add candidate URLs first (higher quality, full-size)
+				for _, match := range candidateURIs {
+					if len(match) > 1 {
+						url := strings.ReplaceAll(match[1], `\/`, "/")
+						url = strings.ReplaceAll(url, `\u0026`, "&")
+						if !seenCarouselURLs[url] {
+							seenCarouselURLs[url] = true
+							carouselURLs = append(carouselURLs, url)
+						}
 					}
 				}
-			}
-		}
+
+				// Add display_uri if no candidates found
+				if len(carouselURLs) == 0 {
+					for _, match := range displayURIs {
+						if len(match) > 1 {
+							url := strings.ReplaceAll(match[1], `\/`, "/")
+							url = strings.ReplaceAll(url, `\u0026`, "&")
+							if !seenCarouselURLs[url] {
+								seenCarouselURLs[url] = true
+								carouselURLs = append(carouselURLs, url)
+							}
+						}
+					}
+				}
 
 				if len(carouselURLs) > 0 {
 					log.Printf("✅ Found %d carousel items", len(carouselURLs))
@@ -2312,15 +2312,15 @@ func (yd *YtDlpDownloader) extractInstagramImagesFromHTML(html, originalURL stri
 		`<meta property="og:image" content="(https://[^"]*\.cdninstagram\.com/[^"]*)"`,
 		`"thumbnail_src":"(https://scontent[^"]*\.cdninstagram\.com/[^"]*)"`,
 	}
-	
+
 	// Use slice to preserve order while avoiding duplicates
 	var imageURLs []string
 	seenURLs := make(map[string]bool)
 	foundHighQuality := false
-	
+
 	// Track unique media IDs to detect carousels vs single photos
 	uniqueMediaIDs := make(map[string]bool)
-	
+
 	for patternIndex, pattern := range imagePatterns {
 		re := regexp.MustCompile(pattern)
 		matches := re.FindAllStringSubmatch(html, -1)
@@ -2334,7 +2334,7 @@ func (yd *YtDlpDownloader) extractInstagramImagesFromHTML(html, originalURL stri
 				imageURL = strings.ReplaceAll(imageURL, `\u002F`, "/")
 				imageURL = strings.ReplaceAll(imageURL, `\u003D`, "=")
 				imageURL = strings.ReplaceAll(imageURL, `\u003F`, "?")
-				
+
 				// Extract media ID from cache key to detect unique images
 				mediaIDRe := regexp.MustCompile(`ig_cache_key=([^\\&]+)`)
 				if mediaIDMatch := mediaIDRe.FindStringSubmatch(imageURL); len(mediaIDMatch) > 1 {
@@ -2342,12 +2342,12 @@ func (yd *YtDlpDownloader) extractInstagramImagesFromHTML(html, originalURL stri
 					mediaID = strings.TrimSuffix(mediaID, `%3D%3D`)
 					uniqueMediaIDs[mediaID] = true
 				}
-				
+
 				// Add to slice if not seen before (preserves order)
 				if !seenURLs[imageURL] {
 					seenURLs[imageURL] = true
 					imageURLs = append(imageURLs, imageURL)
-					
+
 					// Log which pattern found this URL and analyze quality
 					qualityType := "unknown"
 					if patternIndex < 2 {
@@ -2364,9 +2364,9 @@ func (yd *YtDlpDownloader) extractInstagramImagesFromHTML(html, originalURL stri
 					} else if strings.Contains(imageURL, "display_url") || patternIndex < 7 {
 						qualityType = "MEDIUM (JSON)"
 					}
-					
+
 					log.Printf("🔍 Pattern %d found: %s | Quality: %s | URL: %s", patternIndex, imagePatterns[patternIndex][:50], qualityType, imageURL)
-					
+
 					// Mark if we found high quality URLs (first 8 patterns)
 					if patternIndex < 8 {
 						foundHighQuality = true
@@ -2374,15 +2374,15 @@ func (yd *YtDlpDownloader) extractInstagramImagesFromHTML(html, originalURL stri
 				}
 			}
 		}
-		
-		// For Instagram carousels, we need to search through all high-priority patterns (0-4) 
+
+		// For Instagram carousels, we need to search through all high-priority patterns (0-4)
 		// to find all images before stopping early
 		if foundHighQuality && len(imageURLs) > 0 && patternIndex >= 4 {
 			log.Printf("✅ Found %d high-quality image(s), stopping search at pattern %d", len(imageURLs), patternIndex)
 			break
 		}
 	}
-	
+
 	if len(imageURLs) == 0 {
 		// Show a snippet of HTML for debugging
 		htmlSnippet := html
@@ -2392,14 +2392,14 @@ func (yd *YtDlpDownloader) extractInstagramImagesFromHTML(html, originalURL stri
 		log.Printf("❌ No Instagram images found with patterns. HTML snippet: %s", htmlSnippet)
 		return nil, fmt.Errorf("no Instagram images found in HTML")
 	}
-	
+
 	// Detect if this is a single photo or carousel based on unique media IDs
 	log.Printf("🔍 Found %d unique media IDs from %d total URLs", len(uniqueMediaIDs), len(imageURLs))
-	
+
 	// If we have multiple URLs but only 1-2 unique media IDs, it's likely a single photo with different sizes
 	if len(uniqueMediaIDs) <= 2 && len(imageURLs) > 5 {
 		log.Printf("📷 Detected single photo post with %d size variants, selecting best quality image", len(imageURLs))
-		
+
 		// Keep only the highest quality version
 		var bestImage string
 		for _, url := range imageURLs {
@@ -2409,7 +2409,7 @@ func (yd *YtDlpDownloader) extractInstagramImagesFromHTML(html, originalURL stri
 				break
 			}
 		}
-		
+
 		// Fallback to first high-quality image if no jpegr found
 		if bestImage == "" {
 			for _, url := range imageURLs {
@@ -2419,23 +2419,23 @@ func (yd *YtDlpDownloader) extractInstagramImagesFromHTML(html, originalURL stri
 				}
 			}
 		}
-		
+
 		// Use first image as last resort
 		if bestImage == "" && len(imageURLs) > 0 {
 			bestImage = imageURLs[0]
 		}
-		
+
 		// Replace the array with just the best image
 		if bestImage != "" {
 			imageURLs = []string{bestImage}
 			log.Printf("✅ Selected best quality image from %d variants", len(seenURLs))
 		}
 	}
-	
+
 	// Extract username and caption
 	username := yd.extractInstagramUsernameFromHTML(html)
 	caption := yd.extractInstagramCaptionFromHTML(html)
-	
+
 	// Try to get caption from yt-dlp description file (now with unique filenames to prevent collisions)
 	urlHash := strings.ToUpper(fmt.Sprintf("%x", md5.Sum([]byte(originalURL))))[:8]
 	descriptionPattern := filepath.Join(yd.TempDir, fmt.Sprintf("*_%s_*.description", urlHash))
@@ -2452,12 +2452,12 @@ func (yd *YtDlpDownloader) extractInstagramImagesFromHTML(html, originalURL stri
 	} else {
 		log.Printf("📝 No yt-dlp description file found for URL hash %s, using HTML caption", urlHash)
 	}
-	
+
 	log.Printf("📝 Using final caption: %.100s...", caption)
-	
+
 	log.Printf("🎯 Found %d Instagram images, attempting to download", len(imageURLs))
 	log.Printf("📝 Final caption length: %d chars", len(caption))
-	
+
 	// Debug: show all found URLs with quality assessment (now in correct order)
 	for idx, url := range imageURLs {
 		qualityType := "unknown"
@@ -2470,37 +2470,37 @@ func (yd *YtDlpDownloader) extractInstagramImagesFromHTML(html, originalURL stri
 		}
 		log.Printf("🔍 Image %d: %s | Quality: %s", idx+1, url, qualityType)
 	}
-	
+
 	// Use the ordered slice directly (already in correct sequence)
 	imageURLSlice := imageURLs
-	
+
 	// Telegram has a limit of 10 images per media group
 	const telegramMediaGroupLimit = 10
 	if len(imageURLSlice) > telegramMediaGroupLimit {
-		log.Printf("⚠️ Instagram post has %d images, but Telegram only supports %d per message. Truncating.", 
+		log.Printf("⚠️ Instagram post has %d images, but Telegram only supports %d per message. Truncating.",
 			len(imageURLSlice), telegramMediaGroupLimit)
 		imageURLSlice = imageURLSlice[:telegramMediaGroupLimit]
 	}
-	
+
 	log.Printf("📊 Found %d Instagram images in correct order", len(imageURLSlice))
-	
+
 	// Download each image directly from CDN
 	// Create unique timestamp + URL hash to prevent filename collisions between concurrent posts
 	timestamp := time.Now().Unix()
 	uniquePrefix := fmt.Sprintf("%d_%s", timestamp, urlHash)
-	
+
 	for i, imageURL := range imageURLSlice {
 		log.Printf("📥 Downloading Instagram image %d/%d: %s", i+1, len(imageURLSlice), imageURL)
-		
+
 		filename, err := yd.downloadImageFromURL(imageURL, uniquePrefix, i)
 		if err != nil {
 			log.Printf("❌ Failed to download Instagram image %d: %v", i+1, err)
 			// Continue with other images instead of failing completely
 			continue
 		}
-		
+
 		log.Printf("✅ Successfully downloaded Instagram image %d: %s", i+1, filename)
-		
+
 		// Create MediaInfo for downloaded image
 		mediaType := "photo"
 		mediaCaption := ""
@@ -2508,7 +2508,7 @@ func (yd *YtDlpDownloader) extractInstagramImagesFromHTML(html, originalURL stri
 			// Add caption only to the first image to avoid repetition
 			mediaCaption = FormatAuthorCaption("instagram", username, username, caption)
 		}
-		
+
 		mediaInfo := &MediaInfo{
 			Type:     mediaType,
 			URL:      originalURL,
@@ -2517,7 +2517,7 @@ func (yd *YtDlpDownloader) extractInstagramImagesFromHTML(html, originalURL stri
 		}
 		mediaInfos = append(mediaInfos, mediaInfo)
 	}
-	
+
 	// If all downloads failed but we have caption or image URLs, return as fallback
 	if len(mediaInfos) == 0 {
 		if len(imageURLSlice) > 0 {
@@ -2534,7 +2534,7 @@ func (yd *YtDlpDownloader) extractInstagramImagesFromHTML(html, originalURL stri
 			for i, imageURL := range imageURLSlice {
 				fallbackText += fmt.Sprintf("%d. %s\n", i+1, imageURL)
 			}
-			
+
 			textMediaInfo := &MediaInfo{
 				Type:     "text",
 				URL:      originalURL,
@@ -2553,11 +2553,11 @@ func (yd *YtDlpDownloader) extractInstagramImagesFromHTML(html, originalURL stri
 			mediaInfos = append(mediaInfos, textMediaInfo)
 		}
 	}
-	
+
 	if len(mediaInfos) == 0 {
 		return nil, fmt.Errorf("no Instagram content found and no images could be downloaded")
 	}
-	
+
 	log.Printf("🎉 Successfully processed %d Instagram media items", len(mediaInfos))
 	return mediaInfos, nil
 }
@@ -2568,14 +2568,14 @@ func (yd *YtDlpDownloader) extractInstagramUsernameFromHTML(html string) string 
 		`"username":"([^"]+)"`,
 		`@([a-zA-Z0-9._]+)`,
 	}
-	
+
 	for _, pattern := range patterns {
 		re := regexp.MustCompile(pattern)
 		if match := re.FindStringSubmatch(html); len(match) > 1 {
 			return match[1]
 		}
 	}
-	
+
 	return "unknown"
 }
 
@@ -2598,26 +2598,26 @@ func (yd *YtDlpDownloader) extractInstagramCaptionFromHTML(html string) string {
 		// LOWEST PRIORITY: Accessibility caption (usually generic)
 		`"accessibility_caption":"([^"]*)"`,
 	}
-	
+
 	for _, pattern := range patterns {
 		re := regexp.MustCompile(pattern)
 		if match := re.FindStringSubmatch(html); len(match) > 1 {
 			caption := match[1]
-			
+
 			// Clean up HTML tags and convert to readable text
 			caption = strings.ReplaceAll(caption, `<br>`, "\n")
 			caption = strings.ReplaceAll(caption, `<br/>`, "\n")
 			caption = strings.ReplaceAll(caption, `<br />`, "\n")
-			
+
 			// Remove remaining HTML tags but preserve content
 			linkRe := regexp.MustCompile(`<a[^>]*href="/([^/]+)/"[^>]*>@[^<]+</a>`)
 			caption = linkRe.ReplaceAllString(caption, "@$1")
 			tagRe := regexp.MustCompile(`<[^>]*>`)
 			caption = tagRe.ReplaceAllString(caption, "")
-			
+
 			// Decode Unicode escape sequences first (e.g., \u26f5 -> ⛵)
 			caption = yd.decodeUnicodeEscapes(caption)
-			
+
 			// Unescape HTML entities and escape sequences
 			caption = strings.ReplaceAll(caption, `&quot;`, `"`)
 			caption = strings.ReplaceAll(caption, `&#x26f5;`, `⛵`)
@@ -2630,7 +2630,7 @@ func (yd *YtDlpDownloader) extractInstagramCaptionFromHTML(html string) string {
 			caption = strings.ReplaceAll(caption, `\"`, `"`)
 			caption = strings.ReplaceAll(caption, `\\`, `\`)
 			caption = strings.ReplaceAll(caption, `\n`, "\n")
-			
+
 			// Clean up and return if we have substantial content
 			caption = strings.TrimSpace(caption)
 			if len(caption) > 5 { // Lower threshold for author comments
@@ -2638,7 +2638,7 @@ func (yd *YtDlpDownloader) extractInstagramCaptionFromHTML(html string) string {
 			}
 		}
 	}
-	
+
 	return ""
 }
 
@@ -2646,49 +2646,49 @@ func (yd *YtDlpDownloader) extractInstagramCaptionFromHTML(html string) string {
 func (yd *YtDlpDownloader) decodeUnicodeEscapes(text string) string {
 	// First handle surrogate pairs (\ud83d\udcb0 -> 💰)
 	surrogatePairRe := regexp.MustCompile(`\\u([dD][8-9a-bA-B][0-9a-fA-F]{2})\\u([dD][c-fC-F][0-9a-fA-F]{2})`)
-	
+
 	result := surrogatePairRe.ReplaceAllStringFunc(text, func(match string) string {
 		// Extract high and low surrogate hex codes
 		parts := strings.Split(match, `\u`)
 		if len(parts) != 3 {
 			return match
 		}
-		
+
 		highHex := parts[1]
 		lowHex := parts[2]
-		
+
 		// Convert to integers
 		high, err1 := strconv.ParseInt(highHex, 16, 32)
 		low, err2 := strconv.ParseInt(lowHex, 16, 32)
-		
+
 		if err1 != nil || err2 != nil {
 			return match
 		}
-		
+
 		// Convert surrogate pair to Unicode code point
 		// Formula: 0x10000 + ((high & 0x3FF) << 10) + (low & 0x3FF)
-		codePoint := 0x10000 + ((high&0x3FF)<<10) + (low&0x3FF)
-		
+		codePoint := 0x10000 + ((high & 0x3FF) << 10) + (low & 0x3FF)
+
 		return string(rune(codePoint))
 	})
-	
+
 	// Then handle regular 4-digit Unicode escapes
 	re := regexp.MustCompile(`\\u([0-9a-fA-F]{4})`)
-	
+
 	result = re.ReplaceAllStringFunc(result, func(match string) string {
 		// Extract the hex code (skip the \u prefix)
 		hexCode := match[2:]
-		
+
 		// Convert hex string to integer
 		if codePoint, err := strconv.ParseInt(hexCode, 16, 32); err == nil {
 			// Convert to rune and then to string
 			return string(rune(codePoint))
 		}
-		
+
 		// If conversion fails, return the original match
 		return match
 	})
-	
+
 	return result
 }
 
@@ -2696,22 +2696,22 @@ func (yd *YtDlpDownloader) decodeUnicodeEscapes(text string) string {
 func (yd *YtDlpDownloader) downloadImageFromURL(imageURL string, uniquePrefix string, index int) (string, error) {
 	const maxRetries = 3
 	var lastErr error
-	
+
 	for attempt := 1; attempt <= maxRetries; attempt++ {
 		if attempt > 1 {
 			log.Printf("🔄 Retry %d/%d for Instagram image download", attempt, maxRetries)
 			time.Sleep(time.Duration(attempt) * time.Second) // Progressive delay
 		}
-		
+
 		filename, err := yd.attemptImageDownload(imageURL, uniquePrefix, index)
 		if err == nil {
 			return filename, nil
 		}
-		
+
 		lastErr = err
 		log.Printf("❌ Download attempt %d failed: %v", attempt, err)
 	}
-	
+
 	return "", fmt.Errorf("failed after %d attempts: %v", maxRetries, lastErr)
 }
 
@@ -2721,7 +2721,7 @@ func (yd *YtDlpDownloader) attemptImageDownload(imageURL string, uniquePrefix st
 	if err != nil {
 		return "", err
 	}
-	
+
 	// Use minimal headers that browsers actually send for direct image requests
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
 	req.Header.Set("Accept", "image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8")
@@ -2730,7 +2730,7 @@ func (yd *YtDlpDownloader) attemptImageDownload(imageURL string, uniquePrefix st
 	req.Header.Set("Accept-Encoding", "gzip, deflate, br")
 	req.Header.Set("Cache-Control", "no-cache")
 	req.Header.Set("Pragma", "no-cache")
-	
+
 	// Add Instagram cookies for authentication
 	if cookieData, err := os.ReadFile(yd.getFilePath("cookies/instagram_cookies.txt")); err == nil {
 		// Parse cookies and add them to request
@@ -2755,7 +2755,7 @@ func (yd *YtDlpDownloader) attemptImageDownload(imageURL string, uniquePrefix st
 			}
 		}
 	}
-	
+
 	resp, err := SharedHTTPClient.Do(req)
 	if err != nil {
 		return "", err
@@ -2769,25 +2769,25 @@ func (yd *YtDlpDownloader) attemptImageDownload(imageURL string, uniquePrefix st
 		if len(bodyPreview) > 200 {
 			bodyPreview = bodyPreview[:200]
 		}
-		log.Printf("🔍 Instagram image download failed - Status: %d, Headers: %v, Body preview: %s", 
+		log.Printf("🔍 Instagram image download failed - Status: %d, Headers: %v, Body preview: %s",
 			resp.StatusCode, resp.Header, bodyPreview)
 		return "", fmt.Errorf("HTTP %d: %s", resp.StatusCode, resp.Status)
 	}
-	
+
 	// Generate filename
 	filename := filepath.Join(yd.TempDir, fmt.Sprintf("%s_instagram_carousel_%d.jpg", uniquePrefix, index))
-	
+
 	// Create and write file
 	file, err := os.Create(filename)
 	if err != nil {
 		return "", err
 	}
 	defer file.Close()
-	
+
 	_, err = io.Copy(file, resp.Body)
 	if err != nil {
 		return "", err
 	}
-	
+
 	return filename, nil
 }

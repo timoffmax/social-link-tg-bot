@@ -40,21 +40,21 @@ func (e *EmbedezExtractor) ExtractInstagramVideo(instagramURL string) (string, e
 	serviceURL := e.convertToServiceURL(instagramURL)
 	service := config.GetInstagramService()
 	log.Printf("🔍 [Embedez] Converting to %s URL: %s", service, serviceURL)
-	
+
 	// Follow service redirect to embedez (or equivalent for kksave)
 	embedezURL, err := e.followToEmbedez(serviceURL)
 	if err != nil {
 		return "", fmt.Errorf("failed to get embedez URL: %v", err)
 	}
 	log.Printf("🔍 [Embedez] Got embedez URL: %s", embedezURL)
-	
+
 	// Extract video URL from embedez page
 	videoURL, err := e.extractVideoFromEmbedez(embedezURL)
 	if err != nil {
 		return "", fmt.Errorf("failed to extract video URL: %v", err)
 	}
 	log.Printf("✅ [Embedez] Extracted video URL: %s", videoURL)
-	
+
 	// Decode the proxied URL to get the actual Instagram CDN URL
 	actualURL, err := e.decodeProxiedURL(videoURL)
 	if err != nil {
@@ -62,7 +62,7 @@ func (e *EmbedezExtractor) ExtractInstagramVideo(instagramURL string) (string, e
 		log.Printf("⚠️ [Embedez] Could not decode proxied URL, using as-is: %v", err)
 		return videoURL, nil
 	}
-	
+
 	log.Printf("✅ [Embedez] Decoded actual URL: %s", actualURL)
 	return actualURL, nil
 }
@@ -93,10 +93,10 @@ func (e *EmbedezExtractor) followToEmbedez(instagramezURL string) (string, error
 		return "", err
 	}
 	defer resp.Body.Close()
-	
+
 	// The final URL after redirects should be the embedez URL
 	finalURL := resp.Request.URL.String()
-	
+
 	// Verify it's an embedez URL
 	if !strings.Contains(finalURL, "embedez.com") {
 		// If not redirected to embedez, try to extract from the page
@@ -104,17 +104,17 @@ func (e *EmbedezExtractor) followToEmbedez(instagramezURL string) (string, error
 		if err != nil {
 			return "", fmt.Errorf("failed to read response body: %v", err)
 		}
-		
+
 		// Look for embedez URL in the page
 		embedezPattern := regexp.MustCompile(`https://embedez\.com/embed/[^"'\s]+`)
 		matches := embedezPattern.FindString(string(body))
 		if matches != "" {
 			return matches, nil
 		}
-		
+
 		return "", fmt.Errorf("no embedez URL found in response")
 	}
-	
+
 	return finalURL, nil
 }
 
@@ -125,14 +125,14 @@ func (e *EmbedezExtractor) extractVideoFromEmbedez(embedezURL string) (string, e
 		return "", err
 	}
 	defer resp.Body.Close()
-	
+
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return "", err
 	}
-	
+
 	bodyStr := string(body)
-	
+
 	// Try multiple patterns to extract video URL
 	patterns := []string{
 		// Pattern 1: Direct proxy.embedez.com URL
@@ -146,7 +146,7 @@ func (e *EmbedezExtractor) extractVideoFromEmbedez(embedezURL string) (string, e
 		// Pattern 5: data-src attribute
 		`data-src=["']([^"']+\.mp4[^"']*?)["']`,
 	}
-	
+
 	for _, pattern := range patterns {
 		re := regexp.MustCompile(pattern)
 		matches := re.FindStringSubmatch(bodyStr)
@@ -161,14 +161,14 @@ func (e *EmbedezExtractor) extractVideoFromEmbedez(embedezURL string) (string, e
 			return videoURL, nil
 		}
 	}
-	
+
 	// Try to find any MP4 URL in the page
 	mp4Pattern := regexp.MustCompile(`https://[^"'\s]+\.mp4[^"'\s]*`)
 	mp4Matches := mp4Pattern.FindString(bodyStr)
 	if mp4Matches != "" {
 		return mp4Matches, nil
 	}
-	
+
 	return "", fmt.Errorf("no video URL found in embedez page")
 }
 
@@ -179,13 +179,13 @@ func (e *EmbedezExtractor) decodeProxiedURL(proxiedURL string) (string, error) {
 		// Not a proxied URL, return as-is
 		return proxiedURL, nil
 	}
-	
+
 	// Parse the URL
 	parsedURL, err := url.Parse(proxiedURL)
 	if err != nil {
 		return "", fmt.Errorf("failed to parse URL: %v", err)
 	}
-	
+
 	// Get the 'url' parameter which contains the actual video URL
 	urlParam := parsedURL.Query().Get("url")
 	if urlParam == "" {
@@ -196,17 +196,17 @@ func (e *EmbedezExtractor) decodeProxiedURL(proxiedURL string) (string, error) {
 			urlParam = matches[1]
 		}
 	}
-	
+
 	if urlParam == "" {
 		return "", fmt.Errorf("no URL parameter found in proxied URL")
 	}
-	
+
 	// URL decode the parameter
 	decodedURL, err := url.QueryUnescape(urlParam)
 	if err != nil {
 		return "", fmt.Errorf("failed to decode URL parameter: %v", err)
 	}
-	
+
 	return decodedURL, nil
 }
 
@@ -216,18 +216,18 @@ func (e *EmbedezExtractor) ExtractInstagramVideoWithFallback(instagramURL string
 	videoURL, err := e.ExtractInstagramVideo(instagramURL)
 	if err == nil && videoURL != "" {
 		log.Printf("✅ [Embedez] Successfully extracted video URL via embedez")
-		
+
 		// Download the video file
 		tempDir := os.TempDir()
 		filename := fmt.Sprintf("instagram_video_%d.mp4", time.Now().Unix())
 		filepath := fmt.Sprintf("%s/%s", tempDir, filename)
-		
+
 		// Download the video
 		err = e.downloadFile(videoURL, filepath)
 		if err != nil {
 			return nil, fmt.Errorf("failed to download video: %v", err)
 		}
-		
+
 		return &MediaInfo{
 			Type:     "video",
 			URL:      instagramURL,
@@ -235,9 +235,9 @@ func (e *EmbedezExtractor) ExtractInstagramVideoWithFallback(instagramURL string
 			Filename: filepath,
 		}, nil
 	}
-	
+
 	log.Printf("⚠️ [Embedez] Embedez extraction failed (%v), trying yt-dlp fallback", err)
-	
+
 	// Fallback to yt-dlp
 	if ytdlp != nil && ytdlp.IsAvailable() {
 		mediaInfos, err := ytdlp.DownloadMedia(instagramURL)
@@ -252,7 +252,7 @@ func (e *EmbedezExtractor) ExtractInstagramVideoWithFallback(instagramURL string
 			return mediaInfos[0], nil
 		}
 	}
-	
+
 	return nil, fmt.Errorf("failed to extract Instagram video via embedez and yt-dlp")
 }
 
@@ -263,17 +263,17 @@ func (e *EmbedezExtractor) downloadFile(url, filepath string) error {
 		return err
 	}
 	defer resp.Body.Close()
-	
+
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("bad status: %s", resp.Status)
 	}
-	
+
 	out, err := os.Create(filepath)
 	if err != nil {
 		return err
 	}
 	defer out.Close()
-	
+
 	_, err = io.Copy(out, resp.Body)
 	return err
 }
@@ -281,17 +281,17 @@ func (e *EmbedezExtractor) downloadFile(url, filepath string) error {
 // Additional helper for testing
 func (e *EmbedezExtractor) TestExtraction(instagramURL string) {
 	log.Printf("🧪 [Embedez] Testing extraction for: %s", instagramURL)
-	
+
 	videoURL, err := e.ExtractInstagramVideo(instagramURL)
 	if err != nil {
 		log.Printf("❌ [Embedez] Test failed: %v", err)
 		return
 	}
-	
+
 	log.Printf("✅ [Embedez] Test successful!")
 	log.Printf("   Original URL: %s", instagramURL)
 	log.Printf("   Extracted video URL: %s", videoURL)
-	
+
 	// Test if the video URL is accessible
 	resp, err := http.Head(videoURL)
 	if err != nil {

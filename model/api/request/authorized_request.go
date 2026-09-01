@@ -102,11 +102,11 @@ func prepareRequest(r *AuthorizedRequest) (*http.Request, error) {
 	authorizeRequest(r)
 
 	requestURL := prepareRequestURL(r)
-	
+
 	if r.RequestContentType == ContentTypeFormData {
 		return prepareMultipartRequest(r, requestURL)
 	}
-	
+
 	jsonPayload, _ := json.Marshal(r.Payload)
 	request, err := http.NewRequest(r.RequestMethod, requestURL, bytes.NewBuffer(jsonPayload))
 	request.Header.Set(HeaderContentType, r.RequestContentType)
@@ -124,11 +124,11 @@ func prepareMultipartRequest(r *AuthorizedRequest, requestURL string) (*http.Req
 	var mediaPayload MediaPayload
 	var isMediaPayload bool
 	var isMediaGroupPayload bool
-	
+
 	// Use reflection to check for required methods since interface assertion fails across package boundaries
 	payloadValue := reflect.ValueOf(r.Payload)
 	payloadType := payloadValue.Type()
-	
+
 	// For struct values with pointer receiver methods, we need to create a pointer
 	if payloadValue.Kind() == reflect.Struct {
 		// Create a new pointer to the struct value
@@ -137,25 +137,25 @@ func prepareMultipartRequest(r *AuthorizedRequest, requestURL string) (*http.Req
 		payloadValue = newPtr
 		payloadType = payloadValue.Type()
 	}
-	
+
 	// Check for media group payload first (multiple files)
 	getFilePathsMethod := payloadValue.MethodByName("GetFilePaths")
 	getFileFieldMethod := payloadValue.MethodByName("GetFileField")
-	
+
 	if getFilePathsMethod.IsValid() && getFileFieldMethod.IsValid() {
 		// This is a media group payload
 		filePathsResult := getFilePathsMethod.Call(nil)
 		fileFieldResult := getFileFieldMethod.Call(nil)
-		
+
 		if len(filePathsResult) > 0 && len(fileFieldResult) > 0 {
 			filePaths := filePathsResult[0]
-			
+
 			isMediaGroupPayload = true
-			
+
 			// Add multiple files to form with attach:// naming
 			for i := 0; i < filePaths.Len(); i++ {
 				filePath := filePaths.Index(i).String()
-				
+
 				file, err := os.Open(filePath)
 				if err != nil {
 					return nil, err
@@ -178,37 +178,37 @@ func prepareMultipartRequest(r *AuthorizedRequest, requestURL string) (*http.Req
 	} else {
 		// Check for single file payload
 		getFilePathMethod := payloadValue.MethodByName("GetFilePath")
-		
+
 		if getFilePathMethod.IsValid() && getFileFieldMethod.IsValid() {
 			// Call the methods using reflection
 			filePathResult := getFilePathMethod.Call(nil)
 			fileFieldResult := getFileFieldMethod.Call(nil)
-			
+
 			if len(filePathResult) > 0 && len(fileFieldResult) > 0 {
 				filePath := filePathResult[0].String()
 				fieldName := fileFieldResult[0].String()
-				
+
 				isMediaPayload = true
-				
+
 				// Create an adapter to implement MediaPayload interface
 				mediaPayload = &mediaAdapter{filePath: filePath, fileField: fieldName}
-			
-			// Add file to form
-			file, err := os.Open(filePath)
-			if err != nil {
-				return nil, err
-			}
-			defer file.Close()
 
-			fileWriter, err := writer.CreateFormFile(fieldName, filepath.Base(filePath))
-			if err != nil {
-				return nil, err
-			}
+				// Add file to form
+				file, err := os.Open(filePath)
+				if err != nil {
+					return nil, err
+				}
+				defer file.Close()
 
-			_, err = io.Copy(fileWriter, file)
-			if err != nil {
-				return nil, err
-			}
+				fileWriter, err := writer.CreateFormFile(fieldName, filepath.Base(filePath))
+				if err != nil {
+					return nil, err
+				}
+
+				_, err = io.Copy(fileWriter, file)
+				if err != nil {
+					return nil, err
+				}
 			}
 		}
 	}
@@ -226,10 +226,10 @@ func prepareMultipartRequest(r *AuthorizedRequest, requestURL string) (*http.Req
 		if isMediaGroupPayload && (key == "FilePaths" || key == "file_paths") {
 			skipField = true
 		}
-		
+
 		if !skipField && value != nil && fmt.Sprintf("%v", value) != "" {
 			var fieldValue string
-			
+
 			// Special handling for chat_id to avoid scientific notation
 			if key == "chat_id" {
 				if floatVal, ok := value.(float64); ok {
@@ -244,7 +244,7 @@ func prepareMultipartRequest(r *AuthorizedRequest, requestURL string) (*http.Req
 			} else {
 				fieldValue = fmt.Sprintf("%v", value)
 			}
-			
+
 			writer.WriteField(key, fieldValue)
 		}
 	}

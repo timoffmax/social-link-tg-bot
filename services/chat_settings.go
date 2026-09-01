@@ -9,7 +9,7 @@ import (
 
 // ChatSettings represents all settings for a chat
 type ChatSettings struct {
-	ChatID   int64                            `db:"chat_id"`
+	ChatID   int64                             `db:"chat_id"`
 	Settings map[string]map[string]interface{} // settingType -> (settingKey -> value)
 }
 
@@ -29,24 +29,24 @@ func GetChatSettings(chatID int64) (*ChatSettings, error) {
 	if db == nil {
 		return nil, fmt.Errorf("database not available")
 	}
-	
+
 	settings := &ChatSettings{
 		ChatID:   chatID,
 		Settings: make(map[string]map[string]interface{}),
 	}
-	
+
 	// Get all settings for this chat
 	rows, err := db.Query(`
 		SELECT setting_type, setting_key, setting_value, enabled 
 		FROM chat_settings 
 		WHERE chat_id = $1
 	`, chatID)
-	
+
 	if err != nil {
 		return nil, fmt.Errorf("failed to query chat settings: %v", err)
 	}
 	defer rows.Close()
-	
+
 	// Initialize platform settings with defaults if no settings exist
 	if _, exists := settings.Settings["platform"]; !exists {
 		settings.Settings["platform"] = make(map[string]interface{})
@@ -55,7 +55,7 @@ func GetChatSettings(chatID int64) (*ChatSettings, error) {
 			settings.Settings["platform"][platform] = true // Default to enabled
 		}
 	}
-	
+
 	// Override with database settings
 	for rows.Next() {
 		var settingType, settingKey, settingValue string
@@ -64,12 +64,12 @@ func GetChatSettings(chatID int64) (*ChatSettings, error) {
 			log.Printf("Error scanning chat settings: %v", err)
 			continue
 		}
-		
+
 		// Initialize setting type map if not exists
 		if _, exists := settings.Settings[settingType]; !exists {
 			settings.Settings[settingType] = make(map[string]interface{})
 		}
-		
+
 		// Parse value based on enabled flag (for platform settings, use enabled flag)
 		if settingType == "platform" {
 			settings.Settings[settingType][settingKey] = enabled
@@ -93,7 +93,7 @@ func GetChatSettings(chatID int64) (*ChatSettings, error) {
 			}
 		}
 	}
-	
+
 	return settings, nil
 }
 
@@ -103,10 +103,10 @@ func SetChatSetting(chatID int64, settingType, settingKey string, value interfac
 	if db == nil {
 		return fmt.Errorf("database not available")
 	}
-	
+
 	var settingValue string
 	var enabled bool = true
-	
+
 	// Handle platform settings specially
 	if settingType == "platform" {
 		if boolVal, ok := value.(bool); ok {
@@ -135,7 +135,7 @@ func SetChatSetting(chatID int64, settingType, settingKey string, value interfac
 			settingValue = string(jsonBytes)
 		}
 	}
-	
+
 	// Upsert setting
 	_, err := db.Exec(`
 		INSERT INTO chat_settings (chat_id, setting_type, setting_key, setting_value, enabled) 
@@ -143,11 +143,11 @@ func SetChatSetting(chatID int64, settingType, settingKey string, value interfac
 		ON CONFLICT (chat_id, setting_type, setting_key) 
 		DO UPDATE SET setting_value = $4, enabled = $5, updated_at = CURRENT_TIMESTAMP
 	`, chatID, settingType, settingKey, settingValue, enabled)
-	
+
 	if err != nil {
 		return fmt.Errorf("failed to update setting: %v", err)
 	}
-	
+
 	log.Printf("⚙️ Setting %s.%s = %v for chat %d", settingType, settingKey, value, chatID)
 	return nil
 }
@@ -164,13 +164,13 @@ func GetChatSetting(chatID int64, settingType, settingKey string) (interface{}, 
 		log.Printf("Error getting chat settings: %v", err)
 		return nil, false
 	}
-	
+
 	if typeSettings, exists := settings.Settings[settingType]; exists {
 		if value, exists := typeSettings[settingKey]; exists {
 			return value, true
 		}
 	}
-	
+
 	return nil, false
 }
 
@@ -180,16 +180,16 @@ func IsPlatformEnabledForChat(chatID int64, platform string) bool {
 	if chatID > 0 {
 		return true
 	}
-	
+
 	value, exists := GetChatSetting(chatID, "platform", platform)
 	if !exists {
 		return true // Default to enabled if not set
 	}
-	
+
 	if enabled, ok := value.(bool); ok {
 		return enabled
 	}
-	
+
 	return true // Default to enabled on parse error
 }
 
@@ -199,7 +199,7 @@ func GetChatPlatformSettings(chatID int64) (map[string]bool, error) {
 	if err != nil {
 		return nil, err
 	}
-	
+
 	platformSettings := make(map[string]bool)
 	if platforms, exists := settings.Settings["platform"]; exists {
 		for key, value := range platforms {
@@ -208,7 +208,7 @@ func GetChatPlatformSettings(chatID int64) (map[string]bool, error) {
 			}
 		}
 	}
-	
+
 	return platformSettings, nil
 }
 
@@ -218,9 +218,9 @@ func GetAllChatPlatformStats() (map[string]int, error) {
 	if db == nil {
 		return nil, fmt.Errorf("database not available")
 	}
-	
+
 	stats := make(map[string]int)
-	
+
 	rows, err := db.Query(`
 		SELECT setting_key, COUNT(*) as chat_count
 		FROM chat_settings 
@@ -228,12 +228,12 @@ func GetAllChatPlatformStats() (map[string]int, error) {
 		GROUP BY setting_key
 		ORDER BY setting_key
 	`)
-	
+
 	if err != nil {
 		return nil, fmt.Errorf("failed to query platform stats: %v", err)
 	}
 	defer rows.Close()
-	
+
 	for rows.Next() {
 		var platform string
 		var count int
@@ -243,7 +243,7 @@ func GetAllChatPlatformStats() (map[string]int, error) {
 		}
 		stats[platform] = count
 	}
-	
+
 	return stats, nil
 }
 
@@ -253,16 +253,16 @@ func InitializeChatSettings(chatID int64) error {
 	if db == nil {
 		return fmt.Errorf("database not available")
 	}
-	
+
 	defaultPlatforms := []string{"instagram", "tiktok", "twitter", "youtube", "reddit", "facebook"}
-	
+
 	// Start transaction
 	tx, err := db.Begin()
 	if err != nil {
 		return fmt.Errorf("failed to start transaction: %v", err)
 	}
 	defer tx.Rollback()
-	
+
 	// Insert default enabled platforms
 	for _, platform := range defaultPlatforms {
 		_, err = tx.Exec(`
@@ -270,16 +270,16 @@ func InitializeChatSettings(chatID int64) error {
 			VALUES ($1, 'platform', $2, 'true', true)
 			ON CONFLICT (chat_id, setting_type, setting_key) DO NOTHING
 		`, chatID, platform)
-		
+
 		if err != nil {
 			return fmt.Errorf("failed to initialize platform %s: %v", platform, err)
 		}
 	}
-	
+
 	if err = tx.Commit(); err != nil {
 		return fmt.Errorf("failed to commit transaction: %v", err)
 	}
-	
+
 	log.Printf("🔧 Initialized settings for chat %d", chatID)
 	return nil
 }
@@ -297,16 +297,16 @@ func IsDescriptionEnabledForChat(chatID int64, platform string) bool {
 	if chatID > 0 {
 		return true
 	}
-	
+
 	value, exists := GetChatSetting(chatID, "description", platform)
 	if !exists {
 		return true // Default to enabled if not set
 	}
-	
+
 	if enabled, ok := value.(bool); ok {
 		return enabled
 	}
-	
+
 	return true // Default to enabled on parse error
 }
 
@@ -316,7 +316,7 @@ func GetChatDescriptionSettings(chatID int64) (map[string]bool, error) {
 	if err != nil {
 		return nil, err
 	}
-	
+
 	descriptionSettings := make(map[string]bool)
 	if descriptions, exists := settings.Settings["description"]; exists {
 		for key, value := range descriptions {
@@ -325,6 +325,6 @@ func GetChatDescriptionSettings(chatID int64) (map[string]bool, error) {
 			}
 		}
 	}
-	
+
 	return descriptionSettings, nil
 }

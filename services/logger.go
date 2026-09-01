@@ -24,32 +24,32 @@ func InitLogger(logDir string) error {
 	if err != nil {
 		return fmt.Errorf("failed to create log directory: %v", err)
 	}
-	
+
 	// Create log file with timestamp
 	logFileName := fmt.Sprintf("bot_%s.log", time.Now().Format("2006-01-02"))
 	logFilePath := filepath.Join(logDir, logFileName)
-	
+
 	// Open log file (create or append)
 	logFile, err := os.OpenFile(logFilePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
 	if err != nil {
 		return fmt.Errorf("failed to open log file: %v", err)
 	}
-	
+
 	// Create multi-writer for both console and file
 	multiWriter := io.MultiWriter(os.Stdout, logFile)
-	
+
 	// Set up global logger
 	globalLogger = &Logger{
 		file:      logFile,
 		logWriter: multiWriter,
 	}
-	
+
 	// Configure Go's standard log package to use our multi-writer
 	log.SetOutput(multiWriter)
 	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
-	
+
 	log.Printf("📝 Logging initialized - writing to: %s", logFilePath)
-	
+
 	return nil
 }
 
@@ -72,8 +72,8 @@ func LogExtraction(platform, url, method string, success bool, mediaCount int, d
 	if !success {
 		status = "❌ FAILED"
 	}
-	
-	log.Printf("🔍 [%s] %s | %s | %s | %d media | %v", 
+
+	log.Printf("🔍 [%s] %s | %s | %s | %d media | %v",
 		platform, method, status, url, mediaCount, duration)
 }
 
@@ -83,8 +83,8 @@ func LogDownload(platform, filename, mediaType string, success bool, fileSize in
 	if !success {
 		status = "❌ FAILED"
 	}
-	
-	log.Printf("⬇️ [%s] %s | %s | %s | %d bytes", 
+
+	log.Printf("⬇️ [%s] %s | %s | %s | %d bytes",
 		platform, status, mediaType, filename, fileSize)
 }
 
@@ -94,12 +94,12 @@ func LogTelegramMessage(chatID int64, messageType string, success bool, error st
 	if !success {
 		status = "❌ FAILED"
 	}
-	
+
 	if error != "" {
-		log.Printf("📤 [TELEGRAM] %s | Chat %d | %s | Error: %s", 
+		log.Printf("📤 [TELEGRAM] %s | Chat %d | %s | Error: %s",
 			status, chatID, messageType, error)
 	} else {
-		log.Printf("📤 [TELEGRAM] %s | Chat %d | %s", 
+		log.Printf("📤 [TELEGRAM] %s | Chat %d | %s",
 			status, chatID, messageType)
 	}
 }

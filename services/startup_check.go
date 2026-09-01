@@ -26,28 +26,28 @@ func NewStartupChecker() *StartupChecker {
 func (sc *StartupChecker) RunStartupChecks() {
 	log.Printf("🚀 Running startup checks...")
 	log.Printf("📂 Working directory: %s", sc.workingDir)
-	
+
 	// Check core dependencies
 	sc.checkYtDlp()
 	sc.checkFfmpeg()
 	sc.checkChrome()
-	
+
 	// Check authentication files
 	sc.checkAuthFiles()
-	
+
 	// Check directories
 	sc.checkDirectories()
-	
+
 	// Print platform support summary
 	sc.printPlatformSupport()
-	
+
 	log.Printf("✅ Startup checks completed")
 }
 
 // checkYtDlp checks if yt-dlp is available and working
 func (sc *StartupChecker) checkYtDlp() {
 	log.Printf("\n🎬 Checking yt-dlp...")
-	
+
 	// Check various possible locations
 	candidates := []string{
 		filepath.Join(sc.workingDir, "bin", "yt-dlp"),
@@ -55,7 +55,7 @@ func (sc *StartupChecker) checkYtDlp() {
 		"yt-dlp",
 		"youtube-dl",
 	}
-	
+
 	found := false
 	for _, path := range candidates {
 		cmd := exec.Command(path, "--version")
@@ -67,7 +67,7 @@ func (sc *StartupChecker) checkYtDlp() {
 			break
 		}
 	}
-	
+
 	if !found {
 		log.Printf("  ❌ yt-dlp not found! Media downloads will not work.")
 		log.Printf("  💡 Install with: pip install yt-dlp")
@@ -77,7 +77,7 @@ func (sc *StartupChecker) checkYtDlp() {
 // checkFfmpeg checks if ffmpeg is available for video conversion
 func (sc *StartupChecker) checkFfmpeg() {
 	log.Printf("\n🎥 Checking ffmpeg...")
-	
+
 	candidates := []string{
 		"ffmpeg",
 		"/usr/bin/ffmpeg",
@@ -85,7 +85,7 @@ func (sc *StartupChecker) checkFfmpeg() {
 		"/home/botuser/bin/ffmpeg",
 		filepath.Join(sc.workingDir, "bin/ffmpeg"),
 	}
-	
+
 	found := false
 	for _, path := range candidates {
 		cmd := exec.Command(path, "-version")
@@ -99,7 +99,7 @@ func (sc *StartupChecker) checkFfmpeg() {
 			}
 		}
 	}
-	
+
 	if !found {
 		log.Printf("  ⚠️ ffmpeg not found. WebM to MP4 conversion will not work.")
 		log.Printf("  💡 Install with: sudo apt install ffmpeg")
@@ -109,7 +109,7 @@ func (sc *StartupChecker) checkFfmpeg() {
 // checkChrome checks if Chrome/Chromium is available for browser extraction
 func (sc *StartupChecker) checkChrome() {
 	log.Printf("\n🌐 Checking Chrome/Chromium...")
-	
+
 	homeDir := os.Getenv("HOME")
 	candidates := []string{
 		filepath.Join(homeDir, "chrome/chrome"),
@@ -117,7 +117,7 @@ func (sc *StartupChecker) checkChrome() {
 		"/usr/bin/chromium",
 		"/usr/bin/chromium-browser",
 	}
-	
+
 	found := false
 	for _, path := range candidates {
 		if _, err := os.Stat(path); err == nil {
@@ -130,7 +130,7 @@ func (sc *StartupChecker) checkChrome() {
 			}
 		}
 	}
-	
+
 	if !found {
 		log.Printf("  ⚠️ Chrome/Chromium not found. Browser fallback extraction will not work.")
 		log.Printf("  💡 Chrome can be installed for enhanced extraction capabilities")
@@ -140,17 +140,17 @@ func (sc *StartupChecker) checkChrome() {
 // checkAuthFiles checks for authentication cookie files
 func (sc *StartupChecker) checkAuthFiles() {
 	log.Printf("\n🍪 Checking authentication files...")
-	
+
 	authFiles := map[string]string{
-		"Instagram":  "cookies/instagram_cookies.txt",
-		"Twitter/X":  "cookies/twitter_cookies.txt",
+		"Instagram": "cookies/instagram_cookies.txt",
+		"Twitter/X": "cookies/twitter_cookies.txt",
 		"TikTok":    "cookies/tiktok_cookies.txt",
 		"YouTube":   "cookies/youtube_cookies.txt",
 		"Reddit":    "cookies/reddit_cookies.txt",
 		"Facebook":  "cookies/facebook_cookies.txt",
 		"9GAG":      "cookies/9gag_cookies.txt",
 	}
-	
+
 	for platform, filename := range authFiles {
 		path := filepath.Join(sc.workingDir, filename)
 		if stat, err := os.Stat(path); err == nil {
@@ -164,13 +164,13 @@ func (sc *StartupChecker) checkAuthFiles() {
 // checkDirectories checks required directories
 func (sc *StartupChecker) checkDirectories() {
 	log.Printf("\n📁 Checking directories...")
-	
+
 	dirs := []string{
 		"temp",
 		"cache",
 		"logs",
 	}
-	
+
 	for _, dir := range dirs {
 		path := filepath.Join(sc.workingDir, dir)
 		if stat, err := os.Stat(path); err == nil && stat.IsDir() {
@@ -190,14 +190,14 @@ func (sc *StartupChecker) checkDirectories() {
 func (sc *StartupChecker) printPlatformSupport() {
 	log.Printf("\n📱 Platform Support Summary:")
 	log.Printf("================================")
-	
+
 	// Get Instagram service configuration
 	instagramFixedLink := config.GetInstagramService() + ".com"
-	
+
 	platforms := []struct {
-		Name        string
-		Supported   []string
-		FixedLink   string
+		Name      string
+		Supported []string
+		FixedLink string
 	}{
 		{
 			Name:      "📷 Instagram",
@@ -235,7 +235,7 @@ func (sc *StartupChecker) printPlatformSupport() {
 			FixedLink: "none",
 		},
 	}
-	
+
 	for _, p := range platforms {
 		log.Printf("\n%s:", p.Name)
 		log.Printf("  Supported: %s", strings.Join(p.Supported, ", "))
@@ -243,6 +243,6 @@ func (sc *StartupChecker) printPlatformSupport() {
 			log.Printf("  Fallback: %s", p.FixedLink)
 		}
 	}
-	
+
 	log.Printf("\n================================")
 }

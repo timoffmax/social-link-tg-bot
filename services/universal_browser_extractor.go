@@ -90,7 +90,7 @@ func (ube *UniversalBrowserExtractor) detectPlatform(mediaURL string) string {
 
 func (ube *UniversalBrowserExtractor) extractInstagramMedia(mediaURL string) ([]*MediaInfo, error) {
 	log.Printf("📸 Extracting Instagram media with headless browser")
-	
+
 	// Extract username from URL
 	username := ExtractInstagramUsername(mediaURL)
 
@@ -197,7 +197,7 @@ func (ube *UniversalBrowserExtractor) extractTwitterMedia(mediaURL string) ([]*M
 		log.Printf("❌ Browser rendering also failed: %v", err)
 		return nil, fmt.Errorf("all Twitter extraction methods failed")
 	}
-	
+
 	// Extract images from rendered HTML
 	imagePatterns := []string{
 		// Twitter image patterns with css-9pa8cd class (2025 structure)
@@ -207,9 +207,9 @@ func (ube *UniversalBrowserExtractor) extractTwitterMedia(mediaURL string) ([]*M
 		`<img[^>]*src="(https://pbs\.twimg\.com/media/[^"?]+\?format=jpg[^"]*)"`,
 		`<img[^>]*src="(https://pbs\.twimg\.com/media/[^"]+)"[^>]*alt="Image"`,
 	}
-	
+
 	imageURLs := ube.extractURLsWithPatterns(html, imagePatterns)
-	
+
 	// Filter out profile images and other non-tweet images
 	var tweetImages []string
 	for _, url := range imageURLs {
@@ -219,9 +219,9 @@ func (ube *UniversalBrowserExtractor) extractTwitterMedia(mediaURL string) ([]*M
 			tweetImages = append(tweetImages, cleanURL)
 		}
 	}
-	
+
 	log.Printf("🖼️ Found %d Twitter images via browser", len(tweetImages))
-	
+
 	// If we found images, download them
 	if len(tweetImages) > 0 {
 		var mediaInfos []*MediaInfo
@@ -230,7 +230,7 @@ func (ube *UniversalBrowserExtractor) extractTwitterMedia(mediaURL string) ([]*M
 		displayName, username := ube.extractTwitterAuthorInfo(html)
 		tweetText := ube.extractTwitterCaption(html)
 		caption := FormatAuthorCaption("twitter", displayName, username, tweetText)
-		
+
 		// Download each image
 		for i, imageURL := range tweetImages {
 			filename, err := ube.downloadMediaFile(imageURL, "twitter", "photo", i)
@@ -238,7 +238,7 @@ func (ube *UniversalBrowserExtractor) extractTwitterMedia(mediaURL string) ([]*M
 				log.Printf("❌ Failed to download Twitter image %d: %v", i+1, err)
 				continue
 			}
-			
+
 			mediaInfo := &MediaInfo{
 				Type:     "photo",
 				URL:      mediaURL,
@@ -247,7 +247,7 @@ func (ube *UniversalBrowserExtractor) extractTwitterMedia(mediaURL string) ([]*M
 			}
 			mediaInfos = append(mediaInfos, mediaInfo)
 		}
-		
+
 		if len(mediaInfos) > 0 {
 			return mediaInfos, nil
 		}
@@ -274,7 +274,7 @@ func (ube *UniversalBrowserExtractor) extractTikTokMedia(mediaURL string) ([]*Me
 	if detectedUsername != "" {
 		username = detectedUsername
 	}
-	
+
 	// Debug: Save HTML content for analysis (temporary)
 	if os.Getenv("DEBUG_TIKTOK") == "true" {
 		debugFile := filepath.Join(ube.tempDir, fmt.Sprintf("tiktok_debug_%d.html", time.Now().Unix()))
@@ -293,7 +293,7 @@ func (ube *UniversalBrowserExtractor) extractTikTokMedia(mediaURL string) ([]*Me
 	}
 
 	imageURLs := ube.extractURLsWithPatterns(html, slideshowPatterns)
-	
+
 	// Deduplicate TikTok images using hash from URL
 	uniqueImages := ube.deduplicateTikTokImages(imageURLs)
 	log.Printf("🖼️ Found %d unique TikTok slideshow images (deduplicated from %d)", len(uniqueImages), len(imageURLs))
@@ -357,7 +357,7 @@ func (ube *UniversalBrowserExtractor) extractYouTubeMedia(mediaURL string) ([]*M
 
 	// Extract username from URL
 	username := ExtractYouTubeChannel(mediaURL)
-	
+
 	// Check if this is a community post and transform URL if needed
 	isYouTubePost := strings.Contains(mediaURL, "/post/")
 	if isYouTubePost {
@@ -373,7 +373,7 @@ func (ube *UniversalBrowserExtractor) extractYouTubeMedia(mediaURL string) ([]*M
 	if isYouTubePost {
 		timeout = 60 * time.Second
 		log.Printf("📺 Using extended 60-second timeout for YouTube community post")
-		
+
 		// Use specialized YouTube community post extraction
 		// Author info will be extracted inside the specialized function
 		return ube.extractYouTubeCommunityPost(mediaURL, username, "")
@@ -393,7 +393,7 @@ func (ube *UniversalBrowserExtractor) extractYouTubeMedia(mediaURL string) ([]*M
 	var mediaInfos []*MediaInfo
 
 	// Already determined isYouTubePost above
-	
+
 	var mediaPatterns []string
 	if isYouTubePost {
 		// YouTube Community Post patterns (images, polls, text)
@@ -437,7 +437,7 @@ func (ube *UniversalBrowserExtractor) extractYouTubeMedia(mediaURL string) ([]*M
 	for i, mediaItemURL := range mediaURLs {
 		var filename string
 		var err error
-		
+
 		if isYouTubePost {
 			// For community posts, download directly
 			filename, err = ube.downloadMediaFile(mediaItemURL, "youtube", "photo", i)
@@ -445,14 +445,14 @@ func (ube *UniversalBrowserExtractor) extractYouTubeMedia(mediaURL string) ([]*M
 			// For Shorts/Videos, try to upgrade thumbnail quality
 			highResURL := strings.Replace(mediaItemURL, "hqdefault.jpg", "maxresdefault.jpg", 1)
 			highResURL = strings.Replace(highResURL, "mqdefault.jpg", "maxresdefault.jpg", 1)
-			
+
 			filename, err = ube.downloadMediaFile(highResURL, "youtube", "photo", i)
 			if err != nil {
 				// Fallback to original quality
 				filename, err = ube.downloadMediaFile(mediaItemURL, "youtube", "photo", i)
 			}
 		}
-		
+
 		if err != nil {
 			log.Printf("❌ Failed to download YouTube media %d: %v", i+1, err)
 			continue
@@ -507,7 +507,7 @@ func (ube *UniversalBrowserExtractor) extract9GAGMedia(mediaURL string) ([]*Medi
 	} else {
 		log.Printf("✅ 9GAG HTTP extraction succeeded, HTML length: %d", len(html))
 	}
-	
+
 	log.Printf("📄 Retrieved HTML content from 9GAG, length: %d characters", len(html))
 
 	// Check if this is age-restricted content
@@ -570,7 +570,7 @@ func (ube *UniversalBrowserExtractor) extract9GAGMedia(mediaURL string) ([]*Medi
 	}
 
 	videoURLs := ube.extractURLsWithPatterns(html, videoPatterns)
-	
+
 	// Deduplicate 9GAG videos (often multiple qualities of same video)
 	uniqueVideos := ube.deduplicate9GAGVideos(videoURLs)
 	log.Printf("🎥 Found %d unique 9GAG videos (deduplicated from %d)", len(uniqueVideos), len(videoURLs))
@@ -604,19 +604,19 @@ func (ube *UniversalBrowserExtractor) extract9GAGMedia(mediaURL string) ([]*Medi
 
 func (ube *UniversalBrowserExtractor) tryImproved9GAGFallback(pageURL string) (string, error) {
 	log.Printf("🌐 Trying improved 9GAG HTTP fallback")
-	
+
 	client := &http.Client{
 		Timeout: 15 * time.Second,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			return nil // Follow redirects
 		},
 	}
-	
+
 	req, err := http.NewRequest("GET", pageURL, nil)
 	if err != nil {
 		return "", err
 	}
-	
+
 	// Set headers to better mimic a real browser session
 	req.Header.Set("User-Agent", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
 	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7")
@@ -633,17 +633,17 @@ func (ube *UniversalBrowserExtractor) tryImproved9GAGFallback(pageURL string) (s
 	req.Header.Set("Sec-Fetch-User", "?1")
 	req.Header.Set("Upgrade-Insecure-Requests", "1")
 	req.Header.Set("Referer", "https://9gag.com/")
-	
+
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", err
 	}
 	defer resp.Body.Close()
-	
+
 	if resp.StatusCode != 200 {
 		return "", fmt.Errorf("HTTP %d: %s", resp.StatusCode, resp.Status)
 	}
-	
+
 	var reader io.Reader = resp.Body
 	if resp.Header.Get("Content-Encoding") == "gzip" {
 		gzipReader, err := gzip.NewReader(resp.Body)
@@ -653,12 +653,12 @@ func (ube *UniversalBrowserExtractor) tryImproved9GAGFallback(pageURL string) (s
 		defer gzipReader.Close()
 		reader = gzipReader
 	}
-	
+
 	bodyBytes, err := io.ReadAll(reader)
 	if err != nil {
 		return "", err
 	}
-	
+
 	return string(bodyBytes), nil
 }
 
@@ -670,7 +670,7 @@ func (ube *UniversalBrowserExtractor) trySimple9GAGFallback(pageURL string) (str
 	if err != nil {
 		return "", err
 	}
-	
+
 	// Set headers to mimic a regular browser
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36")
 	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8")
@@ -685,11 +685,11 @@ func (ube *UniversalBrowserExtractor) trySimple9GAGFallback(pageURL string) (str
 		return "", err
 	}
 	defer resp.Body.Close()
-	
+
 	if resp.StatusCode != 200 {
 		return "", fmt.Errorf("HTTP %d: %s", resp.StatusCode, resp.Status)
 	}
-	
+
 	var reader io.Reader = resp.Body
 	if resp.Header.Get("Content-Encoding") == "gzip" {
 		gzipReader, err := gzip.NewReader(resp.Body)
@@ -699,30 +699,30 @@ func (ube *UniversalBrowserExtractor) trySimple9GAGFallback(pageURL string) (str
 		defer gzipReader.Close()
 		reader = gzipReader
 	}
-	
+
 	bodyBytes, err := io.ReadAll(reader)
 	if err != nil {
 		return "", err
 	}
-	
+
 	return string(bodyBytes), nil
 }
 
 func (ube *UniversalBrowserExtractor) tryRedditHTTPExtraction(pageURL string) (string, error) {
 	log.Printf("🌐 Trying Reddit HTTP extraction")
-	
+
 	client := &http.Client{
 		Timeout: 15 * time.Second,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			return nil // Follow redirects
 		},
 	}
-	
+
 	req, err := http.NewRequest("GET", pageURL, nil)
 	if err != nil {
 		return "", err
 	}
-	
+
 	// Set headers to mimic a real browser session
 	req.Header.Set("User-Agent", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
 	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7")
@@ -739,17 +739,17 @@ func (ube *UniversalBrowserExtractor) tryRedditHTTPExtraction(pageURL string) (s
 	req.Header.Set("Sec-Fetch-User", "?1")
 	req.Header.Set("Upgrade-Insecure-Requests", "1")
 	req.Header.Set("Referer", "https://www.reddit.com/")
-	
+
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", err
 	}
 	defer resp.Body.Close()
-	
+
 	if resp.StatusCode != 200 {
 		return "", fmt.Errorf("HTTP %d: %s", resp.StatusCode, resp.Status)
 	}
-	
+
 	var reader io.Reader = resp.Body
 	if resp.Header.Get("Content-Encoding") == "gzip" {
 		gzipReader, err := gzip.NewReader(resp.Body)
@@ -759,12 +759,12 @@ func (ube *UniversalBrowserExtractor) tryRedditHTTPExtraction(pageURL string) (s
 		defer gzipReader.Close()
 		reader = gzipReader
 	}
-	
+
 	bodyBytes, err := io.ReadAll(reader)
 	if err != nil {
 		return "", err
 	}
-	
+
 	return string(bodyBytes), nil
 }
 
@@ -828,7 +828,7 @@ func (ube *UniversalBrowserExtractor) extractRedditMedia(mediaURL string) ([]*Me
 		}
 	}
 
-	// Extract videos  
+	// Extract videos
 	videoURLs := ube.extractURLsWithPatterns(html, videoPatterns)
 	log.Printf("🎬 Found %d Reddit videos", len(videoURLs))
 
@@ -851,7 +851,7 @@ func (ube *UniversalBrowserExtractor) extractRedditMedia(mediaURL string) ([]*Me
 		textContent := ube.extractRedditTextPost(html)
 		if textContent != "" {
 			log.Printf("📝 Found Reddit text post content")
-			
+
 			// Create a text-only MediaInfo for Reddit text post
 			mediaInfo := &MediaInfo{
 				Type:     "text",
@@ -1194,14 +1194,14 @@ func (ube *UniversalBrowserExtractor) deduplicate9GAGVideos(videoURLs []string) 
 func (ube *UniversalBrowserExtractor) is9GAGVideoHigherQuality(newURL, existingURL string) bool {
 	// Prefer URLs that don't contain quality indicators for lower quality
 	lowQualityIndicators := []string{"thumb", "preview", "small", "mobile", "_s.mp4", "_m.mp4"}
-	
+
 	newURLLower := strings.ToLower(newURL)
 	existingURLLower := strings.ToLower(existingURL)
-	
+
 	// Count low quality indicators in each URL
 	newLowQualityCount := 0
 	existingLowQualityCount := 0
-	
+
 	for _, indicator := range lowQualityIndicators {
 		if strings.Contains(newURLLower, indicator) {
 			newLowQualityCount++
@@ -1210,14 +1210,14 @@ func (ube *UniversalBrowserExtractor) is9GAGVideoHigherQuality(newURL, existingU
 			existingLowQualityCount++
 		}
 	}
-	
+
 	// Prefer the URL with fewer low quality indicators
 	if newLowQualityCount < existingLowQualityCount {
 		return true
 	} else if newLowQualityCount > existingLowQualityCount {
 		return false
 	}
-	
+
 	// If same number of indicators, prefer longer URL (often higher quality)
 	return len(newURL) > len(existingURL)
 }
@@ -1283,18 +1283,18 @@ func (ube *UniversalBrowserExtractor) extractTwitterCaption(html string) string 
 		re := regexp.MustCompile(pattern)
 		if match := re.FindStringSubmatch(html); len(match) > 1 {
 			caption := strings.TrimSpace(match[1])
-			
+
 			// Clean up common artifacts
 			caption = strings.ReplaceAll(caption, "\\n", "\n")
 			caption = strings.ReplaceAll(caption, "\\\"", "\"")
 			caption = strings.ReplaceAll(caption, "\\/", "/")
-			
+
 			// Skip generic descriptions
-			if caption != "" && 
-			   !strings.Contains(strings.ToLower(caption), "twitter") && 
-			   !strings.Contains(strings.ToLower(caption), "x.com") &&
-			   !strings.Contains(strings.ToLower(caption), "see posts, photos") &&
-			   len(caption) > maxLength {
+			if caption != "" &&
+				!strings.Contains(strings.ToLower(caption), "twitter") &&
+				!strings.Contains(strings.ToLower(caption), "x.com") &&
+				!strings.Contains(strings.ToLower(caption), "see posts, photos") &&
+				len(caption) > maxLength {
 				bestCaption = caption
 				maxLength = len(caption)
 			}
@@ -1448,24 +1448,24 @@ func (ube *UniversalBrowserExtractor) extractRedditTextPost(html string) string 
 		`<div[^>]*class="md text-14-scalable"[^>]*style="--emote-size: 20px">(.+?)</div>`,
 		`<div[^>]*class="md text-14-scalable"[^>]*>(.+?)</div>`,
 		`<div[^>]*data-post-click-location="text-body"[^>]*>(.+?)</div>`,
-		
+
 		// Modern Reddit patterns
 		`<div[^>]*data-testid="post-content"[^>]*>(.+?)</div>`,
 		`<div[^>]*class="[^"]*usertext-body[^"]*"[^>]*>(.+?)</div>`,
 		`<div[^>]*class="[^"]*RichTextJSON-root[^"]*"[^>]*>(.+?)</div>`,
-		
+
 		// Old Reddit patterns
 		`<div[^>]*class="[^"]*md[^"]*"[^>]*>(.+?)</div>`,
-		
+
 		// Meta tag patterns (for HTTP simple responses)
 		`<meta[^>]*property="og:description"[^>]*content="([^"]+)"[^>]*>`,
 		`<meta[^>]*name="twitter:description"[^>]*content="([^"]+)"[^>]*>`,
 		`<meta[^>]*property="og:title"[^>]*content="([^"]+)"[^>]*>`,
-		
+
 		// JSON structured data
 		`"selftext":\s*"([^"]+)"`,
 		`"text":\s*"([^"]+)"`,
-		
+
 		// Fallback: post title from title tag
 		`<title>([^<]+)</title>`,
 	}
@@ -1475,7 +1475,7 @@ func (ube *UniversalBrowserExtractor) extractRedditTextPost(html string) string 
 		matches := re.FindStringSubmatch(html)
 		if len(matches) > 1 {
 			content := strings.TrimSpace(matches[1])
-			
+
 			// Clean up content - extract text from paragraph tags
 			if strings.Contains(content, "<p") {
 				// Extract text from all paragraph tags and join with line breaks
@@ -1499,17 +1499,17 @@ func (ube *UniversalBrowserExtractor) extractRedditTextPost(html string) string 
 				// Remove any HTML tags if no paragraphs found
 				content = regexp.MustCompile(`<[^>]+>`).ReplaceAllString(content, "")
 			}
-			
+
 			// Basic text cleanup
 			content = strings.ReplaceAll(content, "\\n", "\n")
-			content = strings.ReplaceAll(content, "\\r", "\r") 
+			content = strings.ReplaceAll(content, "\\r", "\r")
 			content = strings.ReplaceAll(content, "\\t", "\t")
 			content = strings.ReplaceAll(content, "\\/", "/")
 			content = strings.ReplaceAll(content, "&amp;", "&")
 			content = strings.ReplaceAll(content, "&lt;", "<")
 			content = strings.ReplaceAll(content, "&gt;", ">")
 			content = strings.ReplaceAll(content, "&quot;", "\"")
-			
+
 			// Filter out common non-content matches
 			contentLower := strings.ToLower(content)
 			if content != "" &&
@@ -1643,7 +1643,7 @@ func (ube *UniversalBrowserExtractor) addPlatformHeaders(req *http.Request, plat
 		req.Header.Set("x-ig-app-id", "936619743392459")
 		req.Header.Set("x-ig-www-claim", "0")
 		req.Header.Set("x-requested-with", "XMLHttpRequest")
-		
+
 		// Add Instagram cookies if available
 		if cookiesPath := filepath.Join(ube.workingDir, "cookies.txt"); ube.fileExists(cookiesPath) {
 			ube.addInstagramCookiesFromFile(req, cookiesPath)
@@ -1685,24 +1685,24 @@ func (ube *UniversalBrowserExtractor) addInstagramCookiesFromFile(req *http.Requ
 		return
 	}
 	defer file.Close()
-	
+
 	content, err := io.ReadAll(file)
 	if err != nil {
 		return
 	}
-	
+
 	lines := strings.Split(string(content), "\n")
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
-		
+
 		parts := strings.Fields(line)
 		if len(parts) >= 7 && strings.Contains(parts[0], "instagram.com") {
 			cookieName := parts[5]
 			cookieValue := parts[6]
-			
+
 			// Add important Instagram cookies
 			if cookieName == "sessionid" || cookieName == "csrftoken" || cookieName == "ds_user_id" {
 				cookie := &http.Cookie{
@@ -1720,7 +1720,7 @@ func (ube *UniversalBrowserExtractor) renderPageWithBrowserFor9GAG(pageURL strin
 	// Give 9GAG more time to resolve - it might just be slow
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
-	
+
 	log.Printf("🌐 Starting 9GAG extraction for: %s", pageURL)
 
 	// Find Chrome executable
@@ -1827,7 +1827,7 @@ func (ube *UniversalBrowserExtractor) renderPageWithBrowserFor9GAG(pageURL strin
 	defer browserCancel()
 
 	var htmlContent string
-	
+
 	// Try a more patient approach - give 9GAG time to load
 	err := chromedp.Run(browserCtx,
 		// Navigate to 9GAG domain first to set cookies
@@ -1846,16 +1846,16 @@ func (ube *UniversalBrowserExtractor) renderPageWithBrowserFor9GAG(pageURL strin
 		// Try to handle age confirmation popup if present
 		ube.handle9GAGAgeConfirmation(),
 	)
-	
+
 	if err != nil {
 		log.Printf("⚠️ 9GAG navigation failed: %v, trying to get HTML anyway", err)
 	}
-	
+
 	// Try to get HTML content even if navigation partially failed
 	err = chromedp.Run(browserCtx,
 		chromedp.InnerHTML(`html`, &htmlContent, chromedp.ByQuery),
 	)
-	
+
 	// If that fails, try getting document content directly
 	if err != nil || len(htmlContent) < 1000 {
 		log.Printf("⚠️ Failed to get HTML via innerHTML, trying document.documentElement.outerHTML")
@@ -1879,7 +1879,7 @@ func (ube *UniversalBrowserExtractor) renderPageWithBrowserFor9GAG(pageURL strin
 
 func (ube *UniversalBrowserExtractor) render9GAGWithAuthentication(pageURL string) (string, error) {
 	log.Printf("🔐 Attempting authenticated 9GAG access with age verification")
-	
+
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
@@ -2036,14 +2036,14 @@ func (ube *UniversalBrowserExtractor) set9GAGAgeVerificationCookies() chromedp.A
 			document.cookie = "nsfw_ok=1; domain=.9gag.com; path=/; max-age=86400";
 			document.cookie = "user_preference=mature_allowed; domain=.9gag.com; path=/; max-age=86400";
 		`
-		
+
 		err := chromedp.Evaluate(script, nil).Do(ctx)
 		if err != nil {
 			log.Printf("⚠️ Failed to set 9GAG cookies: %v", err)
 		} else {
 			log.Printf("🍪 Set 9GAG age verification cookies")
 		}
-		
+
 		return nil // Continue even if cookie setting fails
 	})
 }
@@ -2117,7 +2117,7 @@ func (ube *UniversalBrowserExtractor) injectStealthScripts() chromedp.Action {
 		delete window.navigator.__proto__.webdriver;
 		console.log('🕵️ Stealth scripts injected successfully');
 	`
-	
+
 	return chromedp.Evaluate(stealthScript, nil)
 }
 
@@ -2131,15 +2131,15 @@ func (ube *UniversalBrowserExtractor) getRandomUserAgent() string {
 		"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2.1 Safari/605.1.15",
 		"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
 	}
-	
+
 	// Use URL hash as seed for consistent randomness per URL
-	
+
 	hasher := md5.New()
 	hasher.Write([]byte("9gag"))
 	hash := hasher.Sum(nil)
 	seed := binary.BigEndian.Uint64(hash[:8])
-	
-	return userAgents[seed % uint64(len(userAgents))]
+
+	return userAgents[seed%uint64(len(userAgents))]
 }
 
 // isTorRunning checks if Tor is running on the default SOCKS port
@@ -2164,11 +2164,11 @@ func (ube *UniversalBrowserExtractor) extractInstagramAuthorInfo(html string) (d
 		// Profile link patterns
 		`href="/([^/]+)/"[^>]*>([^<]+)</a>.*?Verified`,
 	}
-	
+
 	for _, pattern := range patterns {
 		re := regexp.MustCompile(pattern)
 		matches := re.FindStringSubmatch(html)
-		
+
 		if len(matches) >= 3 {
 			if strings.Contains(pattern, "og:title") || strings.Contains(pattern, "twitter:title") {
 				displayName = strings.TrimSpace(matches[1])
@@ -2180,14 +2180,14 @@ func (ube *UniversalBrowserExtractor) extractInstagramAuthorInfo(html string) (d
 				username = strings.TrimSpace(matches[1])
 				displayName = strings.TrimSpace(matches[2])
 			}
-			
+
 			if displayName != "" || username != "" {
 				log.Printf("✅ Extracted Instagram author: %s (@%s)", displayName, username)
 				return displayName, username
 			}
 		}
 	}
-	
+
 	return "", ""
 }
 
@@ -2208,11 +2208,11 @@ func (ube *UniversalBrowserExtractor) extractTikTokAuthorInfo(html string) (disp
 		`"uniqueId":"([^"]+)".*?"nickname":"([^"]+)"`,
 		`"author":\s*{\s*"uniqueId":\s*"([^"]+)",\s*"nickname":\s*"([^"]+)"`,
 	}
-	
+
 	for _, pattern := range patterns {
 		re := regexp.MustCompile(pattern)
 		matches := re.FindStringSubmatch(html)
-		
+
 		if len(matches) >= 2 {
 			if strings.Contains(pattern, "browse-username.*browser-nickname") {
 				// Username comes first, display name second
@@ -2237,18 +2237,18 @@ func (ube *UniversalBrowserExtractor) extractTikTokAuthorInfo(html string) (disp
 					username = strings.TrimSpace(matches[2])
 				}
 			}
-			
+
 			// Clean up extracted values
 			displayName = strings.TrimSpace(displayName)
 			username = strings.TrimSpace(username)
-			
+
 			if displayName != "" || username != "" {
 				log.Printf("✅ Extracted TikTok author: %s (@%s)", displayName, username)
 				return displayName, username
 			}
 		}
 	}
-	
+
 	log.Printf("⚠️ No TikTok author found in HTML")
 	return "", ""
 }
@@ -2264,14 +2264,14 @@ func (ube *UniversalBrowserExtractor) extractYouTubeAuthorInfo(html string) (dis
 		`"ownerChannelName":"([^"]+)"`,
 		`"author":"([^"]+)"`,
 	}
-	
+
 	for _, pattern := range patterns {
 		re := regexp.MustCompile(pattern)
 		matches := re.FindStringSubmatch(html)
-		
+
 		if len(matches) >= 2 {
 			channelName := strings.TrimSpace(matches[1])
-			
+
 			// Skip generic titles
 			if !strings.Contains(channelName, "YouTube") && len(channelName) > 2 {
 				log.Printf("✅ Extracted YouTube channel: %s", channelName)
@@ -2279,7 +2279,7 @@ func (ube *UniversalBrowserExtractor) extractYouTubeAuthorInfo(html string) (dis
 			}
 		}
 	}
-	
+
 	return "", ""
 }
 
@@ -2294,14 +2294,14 @@ func (ube *UniversalBrowserExtractor) extractRedditAuthorInfo(html string) (disp
 		`"subreddit":"([^"]+)"`,
 		`/r/([^/"]+)`,
 	}
-	
+
 	for _, pattern := range patterns {
 		re := regexp.MustCompile(pattern)
 		matches := re.FindStringSubmatch(html)
-		
+
 		if len(matches) >= 2 {
 			author := strings.TrimSpace(matches[1])
-			
+
 			if author != "" && author != "null" {
 				if strings.Contains(pattern, "subreddit") || strings.Contains(pattern, "/r/") {
 					log.Printf("✅ Extracted Reddit subreddit: r/%s", author)
@@ -2313,7 +2313,7 @@ func (ube *UniversalBrowserExtractor) extractRedditAuthorInfo(html string) (disp
 			}
 		}
 	}
-	
+
 	return "", ""
 }
 
@@ -2327,44 +2327,44 @@ func (ube *UniversalBrowserExtractor) extractFacebookAuthorInfo(html string) (di
 		`data-ad-rendering-role="profile_name"[^>]*>.*?<h2[^>]*>.*?<span[^>]*>.*?<a[^>]*>.*?<strong[^>]*>.*?<span[^>]*>([^<]+)</span>`,
 		// Aria-label patterns for page links (extract page name only, no username)
 		`<a[^>]*aria-label="([^"]+)"[^>]*href="[^"]*facebook\.com/([^/?"]+)`,
-		// Meta tag patterns  
+		// Meta tag patterns
 		`<meta[^>]*property="og:title"[^>]*content="([^"]+)"`,
 		`<meta[^>]*name="twitter:title"[^>]*content="([^"]+)"`,
 		// JSON patterns
 		`"name":"([^"]+)"`,
 	}
-	
+
 	for _, pattern := range patterns {
 		re := regexp.MustCompile(pattern)
 		matches := re.FindStringSubmatch(html)
-		
+
 		if len(matches) >= 2 {
 			if len(matches) >= 3 && strings.Contains(pattern, "facebook.com") {
 				displayName = strings.TrimSpace(matches[1])
 				potentialUsername := strings.TrimSpace(matches[2])
 				// Only use as username if it's not a special path
-				if potentialUsername != "share" && potentialUsername != "reel" && potentialUsername != "stories" && 
-				   potentialUsername != "pages" && potentialUsername != "groups" && potentialUsername != "watch" {
+				if potentialUsername != "share" && potentialUsername != "reel" && potentialUsername != "stories" &&
+					potentialUsername != "pages" && potentialUsername != "groups" && potentialUsername != "watch" {
 					username = potentialUsername
 				}
 			} else {
 				displayName = strings.TrimSpace(matches[1])
 			}
-			
+
 			// Clean up the display name
 			displayName = strings.TrimSpace(displayName)
 			displayName = regexp.MustCompile(`\s+`).ReplaceAllString(displayName, " ")
-			
+
 			// Additional filtering for Facebook
-			if displayName != "" && !strings.Contains(displayName, "Facebook") && 
-			   displayName != "..." && displayName != "share" && len(displayName) > 1 {
+			if displayName != "" && !strings.Contains(displayName, "Facebook") &&
+				displayName != "..." && displayName != "share" && len(displayName) > 1 {
 				// For Facebook, we typically only show display name (no username)
 				log.Printf("✅ Extracted Facebook author: %s", displayName)
 				return displayName, "" // Return empty username for Facebook
 			}
 		}
 	}
-	
+
 	log.Printf("⚠️ No Facebook author found in HTML")
 	return "", ""
 }
@@ -2377,11 +2377,11 @@ func (ube *UniversalBrowserExtractor) extract9GAGAuthorInfo(html string) (displa
 		`"displayName":"([^"]+)".*?"username":"([^"]+)"`,
 		`data-username="([^"]+)"`,
 	}
-	
+
 	for _, pattern := range patterns {
 		re := regexp.MustCompile(pattern)
 		matches := re.FindStringSubmatch(html)
-		
+
 		if len(matches) >= 2 {
 			if len(matches) >= 3 {
 				displayName = strings.TrimSpace(matches[1])
@@ -2389,48 +2389,48 @@ func (ube *UniversalBrowserExtractor) extract9GAGAuthorInfo(html string) (displa
 			} else {
 				username = strings.TrimSpace(matches[1])
 			}
-			
+
 			if displayName != "" || username != "" {
 				log.Printf("✅ Extracted 9GAG author: %s (@%s)", displayName, username)
 				return displayName, username
 			}
 		}
 	}
-	
+
 	return "", ""
 }
 
 // extractYouTubeCommunityPost handles YouTube community posts with specialized browser extraction
 func (ube *UniversalBrowserExtractor) extractYouTubeCommunityPost(mediaURL, username, displayName string) ([]*MediaInfo, error) {
 	log.Printf("📺 Starting specialized YouTube community post extraction")
-	
+
 	// Try enhanced browser extraction first
 	mediaInfos, err := ube.extractYouTubeCommunityPostWithBrowser(mediaURL, username, displayName)
 	if err == nil && len(mediaInfos) > 0 {
 		log.Printf("✅ Enhanced browser extraction succeeded with %d items", len(mediaInfos))
 		return mediaInfos, nil
 	}
-	
+
 	log.Printf("⚠️ Enhanced browser extraction failed: %v", err)
 	log.Printf("🔄 Trying fallback browser extraction...")
-	
+
 	// Try fallback browser extraction
 	mediaInfos, err = ube.extractYouTubeCommunityPostFallback(mediaURL, username, displayName)
 	if err == nil && len(mediaInfos) > 0 {
 		log.Printf("✅ Fallback browser extraction succeeded with %d items", len(mediaInfos))
 		return mediaInfos, nil
 	}
-	
+
 	log.Printf("⚠️ Fallback browser extraction failed: %v", err)
 	log.Printf("🔄 Trying API fallback...")
-	
+
 	// Try third-party API as last resort
 	mediaInfos, err = ube.extractYouTubeCommunityPostViaAPI(mediaURL, username, displayName)
 	if err == nil && len(mediaInfos) > 0 {
 		log.Printf("✅ API fallback succeeded with %d items", len(mediaInfos))
 		return mediaInfos, nil
 	}
-	
+
 	log.Printf("❌ All YouTube community post extraction methods failed")
 	return nil, fmt.Errorf("all extraction methods failed for YouTube community post")
 }
@@ -2438,11 +2438,11 @@ func (ube *UniversalBrowserExtractor) extractYouTubeCommunityPost(mediaURL, user
 // extractYouTubeCommunityPostWithBrowser uses enhanced Chrome with anti-bot evasion for YouTube community posts
 func (ube *UniversalBrowserExtractor) extractYouTubeCommunityPostWithBrowser(mediaURL, username, displayName string) ([]*MediaInfo, error) {
 	log.Printf("📺 Starting enhanced browser extraction for YouTube community post")
-	
+
 	// Create context with extended timeout
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	
+
 	// Enhanced Chrome options for YouTube community posts
 	opts := append(chromedp.DefaultExecAllocatorOptions[:],
 		chromedp.Flag("headless", "new"), // Use new headless mode
@@ -2453,7 +2453,7 @@ func (ube *UniversalBrowserExtractor) extractYouTubeCommunityPostWithBrowser(med
 		chromedp.Flag("no-first-run", true),
 		chromedp.Flag("disable-default-apps", true),
 		chromedp.Flag("disable-blink-features", "AutomationControlled"), // Hide automation
-		chromedp.Flag("virtual-time-budget", "45000"), // 45 seconds for full page load
+		chromedp.Flag("virtual-time-budget", "45000"),                   // 45 seconds for full page load
 		chromedp.Flag("run-all-compositor-stages-before-draw", true),
 		chromedp.Flag("enable-automation", false),
 		chromedp.Flag("disable-background-timer-throttling", true),
@@ -2463,20 +2463,20 @@ func (ube *UniversalBrowserExtractor) extractYouTubeCommunityPostWithBrowser(med
 		chromedp.WindowSize(1920, 1080),
 		chromedp.UserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"),
 	)
-	
+
 	// Add YouTube cookies if available
 	youtubeCookiesPath := filepath.Join(ube.workingDir, "youtube_cookies.txt")
 	if _, err := os.Stat(youtubeCookiesPath); err == nil {
 		opts = append(opts, chromedp.Flag("cookie-file", youtubeCookiesPath))
 		log.Printf("🍪 Using YouTube cookies: %s", youtubeCookiesPath)
 	}
-	
+
 	allocCtx, cancel2 := chromedp.NewExecAllocator(ctx, opts...)
 	defer cancel2()
-	
+
 	taskCtx, cancel3 := chromedp.NewContext(allocCtx)
 	defer cancel3()
-	
+
 	var html string
 	err := chromedp.Run(taskCtx,
 		chromedp.Navigate(mediaURL),
@@ -2484,13 +2484,13 @@ func (ube *UniversalBrowserExtractor) extractYouTubeCommunityPostWithBrowser(med
 		chromedp.Sleep(3*time.Second), // Let JavaScript load
 		chromedp.OuterHTML("html", &html),
 	)
-	
+
 	if err != nil {
 		return nil, fmt.Errorf("enhanced browser navigation failed: %v", err)
 	}
-	
+
 	log.Printf("📺 Enhanced browser rendered %d bytes of HTML", len(html))
-	
+
 	// Extract images and text from rendered HTML
 	return ube.parseYouTubeCommunityPostHTML(html, mediaURL, username, displayName)
 }
@@ -2498,15 +2498,15 @@ func (ube *UniversalBrowserExtractor) extractYouTubeCommunityPostWithBrowser(med
 // extractYouTubeCommunityPostFallback uses simpler browser setup as fallback
 func (ube *UniversalBrowserExtractor) extractYouTubeCommunityPostFallback(mediaURL, username, displayName string) ([]*MediaInfo, error) {
 	log.Printf("📺 Starting fallback browser extraction for YouTube community post")
-	
+
 	// Use the existing renderPageWithBrowser method with extended timeout
 	html, err := ube.renderPageWithBrowserTimeout(mediaURL, 45*time.Second, 45*time.Second)
 	if err != nil {
 		return nil, fmt.Errorf("fallback browser extraction failed: %v", err)
 	}
-	
+
 	log.Printf("📺 Fallback browser rendered %d bytes of HTML", len(html))
-	
+
 	// Extract images and text from rendered HTML
 	return ube.parseYouTubeCommunityPostHTML(html, mediaURL, username, displayName)
 }
@@ -2514,7 +2514,7 @@ func (ube *UniversalBrowserExtractor) extractYouTubeCommunityPostFallback(mediaU
 // extractYouTubeCommunityPostViaAPI uses third-party API as last resort
 func (ube *UniversalBrowserExtractor) extractYouTubeCommunityPostViaAPI(mediaURL, username, displayName string) ([]*MediaInfo, error) {
 	log.Printf("📺 Starting API fallback for YouTube community post")
-	
+
 	// Extract post ID from URL
 	postID := ""
 	if strings.Contains(mediaURL, "/post/") {
@@ -2523,34 +2523,34 @@ func (ube *UniversalBrowserExtractor) extractYouTubeCommunityPostViaAPI(mediaURL
 			postID = strings.Split(parts[1], "?")[0] // Remove query parameters
 		}
 	}
-	
+
 	if postID == "" {
 		return nil, fmt.Errorf("could not extract post ID from URL: %s", mediaURL)
 	}
-	
+
 	log.Printf("📺 Extracted post ID: %s", postID)
-	
+
 	// Try YouTube operational API
 	apiURL := fmt.Sprintf("https://yt.lemnoslife.com/community?part=snippet,contentDetails&id=%s", postID)
 	log.Printf("📺 Calling API: %s", apiURL)
-	
+
 	resp, err := SharedHTTPClient.Get(apiURL)
 	if err != nil {
 		return nil, fmt.Errorf("API request failed: %v", err)
 	}
 	defer resp.Body.Close()
-	
+
 	if resp.StatusCode != 200 {
 		return nil, fmt.Errorf("API returned HTTP %d", resp.StatusCode)
 	}
-	
+
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read API response: %v", err)
 	}
-	
+
 	log.Printf("📺 API response: %d bytes", len(body))
-	
+
 	// For now, return a text-only result indicating API was called
 	// TODO: Parse the JSON response to extract actual content
 	mediaInfo := &MediaInfo{
@@ -2558,16 +2558,16 @@ func (ube *UniversalBrowserExtractor) extractYouTubeCommunityPostViaAPI(mediaURL
 		URL:     mediaURL,
 		Caption: FormatAuthorCaption("youtube", displayName, username, "YouTube Community Post (via API)"),
 	}
-	
+
 	return []*MediaInfo{mediaInfo}, nil
 }
 
 // parseYouTubeCommunityPostHTML extracts images and text from YouTube community post HTML
 func (ube *UniversalBrowserExtractor) parseYouTubeCommunityPostHTML(html, mediaURL, username, displayName string) ([]*MediaInfo, error) {
 	log.Printf("📺 Parsing YouTube community post HTML (%d bytes)", len(html))
-	
+
 	var mediaInfos []*MediaInfo
-	
+
 	// Enhanced YouTube community post image patterns
 	imagePatterns := []string{
 		// High-quality community post images
@@ -2591,18 +2591,18 @@ func (ube *UniversalBrowserExtractor) parseYouTubeCommunityPostHTML(html, mediaU
 		`background-image:\s*url\("(https://yt[0-9]\.ggpht\.com/[^"]*)"`,
 		`background-image:\s*url\("(https://i\.ytimg\.com/[^"]*\.(jpg|jpeg|png|webp)[^"]*)"`,
 	}
-	
+
 	imageURLs := ube.extractURLsWithPatterns(html, imagePatterns)
 	log.Printf("📺 Found %d potential YouTube community post images", len(imageURLs))
-	
+
 	// Upgrade image quality and remove duplicates
 	uniqueImages := ube.upgradeYouTubeImageQuality(imageURLs)
 	log.Printf("📺 Found %d unique high-quality images", len(uniqueImages))
-	
+
 	// Extract community post text content
 	postText := ube.extractYouTubeCommunityPostText(html)
 	log.Printf("📺 Extracted post text: %.200s", postText)
-	
+
 	// Download images
 	for i, imageURL := range uniqueImages {
 		filename, err := ube.downloadMediaFile(imageURL, "youtube", "photo", i)
@@ -2610,7 +2610,7 @@ func (ube *UniversalBrowserExtractor) parseYouTubeCommunityPostHTML(html, mediaU
 			log.Printf("⚠️ Failed to download YouTube community post image %d: %v", i, err)
 			continue
 		}
-		
+
 		mediaInfo := &MediaInfo{
 			Type:     "photo",
 			URL:      mediaURL,
@@ -2619,7 +2619,7 @@ func (ube *UniversalBrowserExtractor) parseYouTubeCommunityPostHTML(html, mediaU
 		}
 		mediaInfos = append(mediaInfos, mediaInfo)
 	}
-	
+
 	// If no images found, create text-only post
 	if len(mediaInfos) == 0 && postText != "" {
 		mediaInfo := &MediaInfo{
@@ -2629,7 +2629,7 @@ func (ube *UniversalBrowserExtractor) parseYouTubeCommunityPostHTML(html, mediaU
 		}
 		mediaInfos = append(mediaInfos, mediaInfo)
 	}
-	
+
 	log.Printf("📺 Successfully extracted %d media items from YouTube community post", len(mediaInfos))
 	return mediaInfos, nil
 }
@@ -2649,11 +2649,11 @@ func (ube *UniversalBrowserExtractor) extractYouTubeCommunityPostText(html strin
 		`class="[^"]*content-text[^"]*"[^>]*>([^<]*)</`,
 		`class="[^"]*post-content[^"]*"[^>]*>([^<]*)</`,
 	}
-	
+
 	for _, pattern := range textPatterns {
 		re := regexp.MustCompile(pattern)
 		matches := re.FindStringSubmatch(html)
-		
+
 		if len(matches) >= 2 {
 			text := strings.TrimSpace(matches[1])
 			// Decode HTML entities
@@ -2664,13 +2664,13 @@ func (ube *UniversalBrowserExtractor) extractYouTubeCommunityPostText(html strin
 			text = strings.ReplaceAll(text, "&#39;", "'")
 			text = strings.ReplaceAll(text, `\"`, `"`)
 			text = strings.ReplaceAll(text, `\\n`, "\n")
-			
+
 			if text != "" && len(text) > 10 { // Avoid very short matches
 				return text
 			}
 		}
 	}
-	
+
 	return ""
 }
 
@@ -2678,31 +2678,31 @@ func (ube *UniversalBrowserExtractor) extractYouTubeCommunityPostText(html strin
 func (ube *UniversalBrowserExtractor) upgradeYouTubeImageQuality(imageURLs []string) []string {
 	seen := make(map[string]bool)
 	var uniqueImages []string
-	
+
 	for _, imageURL := range imageURLs {
 		// Upgrade quality parameters
 		upgradedURL := imageURL
-		
+
 		// Upgrade small thumbnails to larger sizes
 		upgradedURL = regexp.MustCompile(`=s[0-9]+`).ReplaceAllString(upgradedURL, "=s800")
 		upgradedURL = regexp.MustCompile(`=w[0-9]+-h[0-9]+`).ReplaceAllString(upgradedURL, "=w800-h600")
-		
+
 		// Upgrade YouTube thumbnails to higher quality
 		if strings.Contains(upgradedURL, "i.ytimg.com") {
 			upgradedURL = strings.ReplaceAll(upgradedURL, "default.jpg", "maxresdefault.jpg")
 			upgradedURL = strings.ReplaceAll(upgradedURL, "hqdefault.jpg", "maxresdefault.jpg")
 			upgradedURL = strings.ReplaceAll(upgradedURL, "mqdefault.jpg", "maxresdefault.jpg")
 		}
-		
+
 		// Remove duplicates based on base URL (ignore quality parameters)
 		baseURL := regexp.MustCompile(`[?&].*$`).ReplaceAllString(upgradedURL, "")
 		baseURL = regexp.MustCompile(`=s[0-9]+.*$`).ReplaceAllString(baseURL, "")
-		
+
 		if !seen[baseURL] {
 			seen[baseURL] = true
 			uniqueImages = append(uniqueImages, upgradedURL)
 		}
 	}
-	
+
 	return uniqueImages
 }

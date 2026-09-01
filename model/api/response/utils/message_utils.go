@@ -10,33 +10,32 @@ import (
 
 func GetAllLinks(message *response.TgMessage) []string {
 	var result []string
-	
+
 	if config.IsInstagramEnabled() {
 		instagramLinks := GetInstagramLinks(message)
 		result = append(result, instagramLinks...)
 	}
-	
+
 	if config.IsTikTokEnabled() {
 		tikTokLinks := GetTikTokLinks(message)
 		result = append(result, tikTokLinks...)
 	}
-	
+
 	if config.IsTwitterEnabled() {
 		twitterLinks := GetTwitterLinks(message)
 		result = append(result, twitterLinks...)
 	}
-	
+
 	if config.IsYouTubeEnabled() {
 		youtubeLinks := GetYouTubeLinks(message)
 		result = append(result, youtubeLinks...)
 	}
-	
-	
+
 	if config.IsRedditEnabled() {
 		redditLinks := GetRedditLinks(message)
 		result = append(result, redditLinks...)
 	}
-	
+
 	if config.IsFacebookEnabled() {
 		facebookLinks := GetFacebookLinks(message)
 		result = append(result, facebookLinks...)
@@ -52,33 +51,32 @@ func GetAllLinks(message *response.TgMessage) []string {
 
 func GetAllSocialLinks(message *response.TgMessage, chatID int64) []string {
 	var result []string
-	
+
 	if config.IsInstagramEnabled() && services.IsPlatformEnabledForChat(chatID, "instagram") {
 		instagramLinks := GetOriginalInstagramLinks(message)
 		result = append(result, instagramLinks...)
 	}
-	
+
 	if config.IsTikTokEnabled() && services.IsPlatformEnabledForChat(chatID, "tiktok") {
 		tikTokLinks := GetOriginalTikTokLinks(message)
 		result = append(result, tikTokLinks...)
 	}
-	
+
 	if config.IsTwitterEnabled() && services.IsPlatformEnabledForChat(chatID, "twitter") {
 		twitterLinks := GetOriginalTwitterLinks(message)
 		result = append(result, twitterLinks...)
 	}
-	
+
 	if config.IsYouTubeEnabled() && services.IsPlatformEnabledForChat(chatID, "youtube") {
 		youtubeLinks := GetOriginalYouTubeLinks(message)
 		result = append(result, youtubeLinks...)
 	}
-	
-	
+
 	if config.IsRedditEnabled() && services.IsPlatformEnabledForChat(chatID, "reddit") {
 		redditLinks := GetOriginalRedditLinks(message)
 		result = append(result, redditLinks...)
 	}
-	
+
 	if config.IsFacebookEnabled() && services.IsPlatformEnabledForChat(chatID, "facebook") {
 		facebookLinks := GetOriginalFacebookLinks(message)
 		result = append(result, facebookLinks...)
@@ -178,12 +176,12 @@ func cleanInstagramURL(url string) string {
 	if idx := strings.Index(url, "?"); idx != -1 {
 		url = url[:idx]
 	}
-	
+
 	// Ensure URL ends with trailing slash for consistency
 	if !strings.HasSuffix(url, "/") {
 		url = url + "/"
 	}
-	
+
 	return url
 }
 
@@ -197,12 +195,11 @@ func GetOriginalTwitterLinks(message *response.TgMessage) []string {
 	return regex.FindAllString(message.Text, -1)
 }
 
-
 func GetYouTubeLinks(message *response.TgMessage) []string {
 	// Match YouTube Shorts, Posts, and Community posts: youtube.com/shorts/*, youtube.com/post/*, youtube.com/channel/*/community*, youtu.be/*, m.youtube.com/shorts/*
 	regex := regexp.MustCompile(`https?:\/\/(www\.|m\.)?(youtube\.com\/(shorts|post)\/|youtube\.com\/channel\/[^\/]+\/community|youtu\.be\/)[^\s]+`)
 	result := regex.FindAllString(message.Text, -1)
-	
+
 	// No fixed link service for YouTube, return as-is
 	return result
 }
@@ -213,11 +210,10 @@ func GetOriginalYouTubeLinks(message *response.TgMessage) []string {
 	return regex.FindAllString(message.Text, -1)
 }
 
-
 func GetRedditLinks(message *response.TgMessage) []string {
 	regex := regexp.MustCompile(`https?:\/\/(www\.|old\.|m\.|np\.)?reddit\.com\/r\/[^\s]+`)
 	result := regex.FindAllString(message.Text, -1)
-	
+
 	// No fixed link service for Reddit, return as-is
 	return result
 }
@@ -230,7 +226,7 @@ func GetOriginalRedditLinks(message *response.TgMessage) []string {
 func GetFacebookLinks(message *response.TgMessage) []string {
 	regex := regexp.MustCompile(`https?:\/\/(www\.|m\.|mobile\.)?facebook\.com\/[^\s]+`)
 	result := regex.FindAllString(message.Text, -1)
-	
+
 	// No fixed link service for Facebook, return as-is
 	return result
 }

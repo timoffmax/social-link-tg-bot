@@ -28,7 +28,7 @@ import (
 var (
 	processedUpdates = make(map[int64]bool)
 	updatesMutex     sync.RWMutex
-	botUsername       string // Bot's username, fetched on startup
+	botUsername      string // Bot's username, fetched on startup
 
 	// updateSemaphore limits the number of concurrent update-processing goroutines
 	// to prevent resource exhaustion under heavy load.
@@ -50,8 +50,8 @@ func fetchBotInfo() error {
 	defer resp.Body.Close()
 
 	var result struct {
-		Ok     bool             `json:"ok"`
-		Result response.TgUser  `json:"result"`
+		Ok     bool            `json:"ok"`
+		Result response.TgUser `json:"result"`
 	}
 
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
@@ -75,19 +75,19 @@ func isTimezoneValid(timezoneStr string) bool {
 	if err == nil {
 		return true
 	}
-	
+
 	// Handle Europe/Kyiv -> Europe/Kiev fallback
 	if timezoneStr == "Europe/Kyiv" {
 		_, err = time.LoadLocation("Europe/Kiev")
 		return err == nil
 	}
-	
+
 	// Handle Europe/Kiev -> Europe/Kyiv fallback
 	if timezoneStr == "Europe/Kiev" {
 		_, err = time.LoadLocation("Europe/Kyiv")
 		return err == nil
 	}
-	
+
 	return false
 }
 
@@ -98,7 +98,7 @@ func loadTimezoneWithFallback(timezoneStr string) *time.Location {
 	if err == nil {
 		return loc
 	}
-	
+
 	// Handle Europe/Kyiv -> Europe/Kiev fallback
 	if timezoneStr == "Europe/Kyiv" {
 		loc, err = time.LoadLocation("Europe/Kiev")
@@ -106,7 +106,7 @@ func loadTimezoneWithFallback(timezoneStr string) *time.Location {
 			return loc
 		}
 	}
-	
+
 	// Handle Europe/Kiev -> Europe/Kyiv fallback
 	if timezoneStr == "Europe/Kiev" {
 		loc, err = time.LoadLocation("Europe/Kyiv")
@@ -114,7 +114,7 @@ func loadTimezoneWithFallback(timezoneStr string) *time.Location {
 			return loc
 		}
 	}
-	
+
 	// Final fallback to UTC
 	return time.UTC
 }
@@ -226,7 +226,7 @@ func getRecentUpdates(offset int) []*response.TgUpdate {
 	updates := message.NewGetUpdates(payload.TgPlGetUpdates{
 		Offset:         offset,
 		AllowedUpdates: []string{"message", "callback_query"},
-		Timeout:        5,  // Short polling timeout (5 seconds) for faster response to new messages
+		Timeout:        5,   // Short polling timeout (5 seconds) for faster response to new messages
 		Limit:          100, // Get up to 100 updates at once
 	})
 
@@ -284,7 +284,7 @@ func processUpdate(upd *response.TgUpdate) {
 
 	// Get original social media links
 	socialLinks := utils.GetAllSocialLinks(&origMessage, origChat.Id)
-	
+
 	log.Printf("Found %d social media links: %v", len(socialLinks), socialLinks)
 
 	if len(socialLinks) == 0 {
@@ -293,7 +293,7 @@ func processUpdate(upd *response.TgUpdate) {
 
 	// Initialize smart downloader
 	downloader := services.NewSmartDownloader()
-	
+
 	// Check if downloader is available, fallback to fixed links if not
 	if !downloader.IsAvailable() {
 		log.Println("Downloader not available, falling back to fixed links")
@@ -329,7 +329,7 @@ func processUpdate(upd *response.TgUpdate) {
 	if shouldEnforceLimit(int64(origUser.Id), origChat.Id, origUser.Username, origMessage.MessageId) {
 		return
 	}
-	
+
 	// Process social media links concurrently for better performance
 	if len(socialLinks) == 1 {
 		// Single link - process directly (no need for goroutine overhead)
@@ -340,7 +340,7 @@ func processUpdate(upd *response.TgUpdate) {
 		// Multiple links - process concurrently with goroutines
 		log.Printf("🚀 [MULTI-THREAD] Starting concurrent processing of %d links", len(socialLinks))
 		var wg sync.WaitGroup
-		
+
 		for i, socialUrl := range socialLinks {
 			wg.Add(1)
 			go func(index int, url string) {
@@ -350,7 +350,7 @@ func processUpdate(upd *response.TgUpdate) {
 				log.Printf("🏁 [THREAD-%d] DONE: Finished processing link %d/%d: %s", index+1, index+1, len(socialLinks), url)
 			}(i, socialUrl)
 		}
-		
+
 		log.Printf("⏳ [MULTI-THREAD] Waiting for all %d threads to complete...", len(socialLinks))
 		wg.Wait()
 		log.Printf("✅ [MULTI-THREAD] All %d links processed successfully", len(socialLinks))
@@ -409,7 +409,7 @@ func processMediaDownload(url string, origChat *response.TgChat, origMessage *re
 	mediaInfos, err := downloader.DownloadMedia(url)
 	if err != nil {
 		log.Printf("Failed to download media from %s: %v", url, err)
-		
+
 		// Skip error notifications for platforms that commonly fail (silently fail)
 		if strings.Contains(url, "reddit.com") || strings.Contains(url, "facebook.com") || strings.Contains(url, "9gag.com") {
 			platformName := "Reddit"
@@ -446,7 +446,7 @@ func processMediaDownload(url string, origChat *response.TgChat, origMessage *re
 			services.LogTelegramMessage(origChat.Id, "error-skipped", false, "")
 			return
 		}
-		
+
 		// For Instagram videos, we already tried fixed link first, so don't fallback
 		// For other platforms (TikTok, Twitter) that didn't try fixed link first, fallback
 		if !strings.Contains(url, "instagram.com") || (!strings.Contains(url, "/reel/") && !strings.Contains(url, "/tv/")) {
@@ -465,7 +465,7 @@ func processMediaDownload(url string, origChat *response.TgChat, origMessage *re
 				return
 			}
 		}
-		
+
 		// Send error message for other platforms
 		errorText := getErrorMessage(url)
 		if errorText != "" {
@@ -480,12 +480,12 @@ func processMediaDownload(url string, origChat *response.TgChat, origMessage *re
 		}
 		return
 	}
-	
+
 	// Check if this is a fixed link response (text-only with no filename)
 	if len(mediaInfos) == 1 && mediaInfos[0].Type == "text" && mediaInfos[0].Filename == "" {
 		// Add formatted original link to text content
 		textWithURL := mediaInfos[0].Caption + services.FormatOriginalLink(url)
-		
+
 		// Disable web page preview for extracted content (e.g. Reddit text posts)
 		// but keep it for fixed link responses where the preview IS the content
 		isFixedLink := strings.HasPrefix(strings.TrimSpace(mediaInfos[0].Caption), "http")
@@ -508,21 +508,21 @@ func processMediaDownload(url string, origChat *response.TgChat, origMessage *re
 
 	// Group photos and send them together, send other media individually
 	log.Printf("Downloaded %d media files from %s", len(mediaInfos), url)
-	
+
 	// Debug: Log all media items
 	for i, media := range mediaInfos {
 		captionPreview := media.Caption
 		if len(captionPreview) > 50 {
 			captionPreview = captionPreview[:50] + "..."
 		}
-		log.Printf("🔍 [DEBUG] Media %d: Type=%s, URL=%s, Caption=%s, Filename=%s", 
+		log.Printf("🔍 [DEBUG] Media %d: Type=%s, URL=%s, Caption=%s, Filename=%s",
 			i+1, media.Type, media.URL, captionPreview, media.Filename)
 	}
-	
+
 	// Separate photos from other media types
 	var photos []*services.MediaInfo
 	var otherMedia []*services.MediaInfo
-	
+
 	for _, mediaInfo := range mediaInfos {
 		if mediaInfo.Type == "photo" {
 			// Check if file exists before adding to photos group
@@ -535,7 +535,7 @@ func processMediaDownload(url string, origChat *response.TgChat, origMessage *re
 			otherMedia = append(otherMedia, mediaInfo)
 		}
 	}
-	
+
 	// For TikTok slideshows, ensure only the first photo has the generic caption
 	if strings.Contains(url, "tiktok.com") && len(photos) > 1 {
 		for i := 1; i < len(photos); i++ {
@@ -545,7 +545,7 @@ func processMediaDownload(url string, origChat *response.TgChat, origMessage *re
 			}
 		}
 	}
-	
+
 	// Send photos as a media group if there are multiple photos
 	if len(photos) > 1 {
 		log.Printf("Sending %d photos as media group", len(photos))
@@ -582,11 +582,11 @@ func processMediaDownload(url string, origChat *response.TgChat, origMessage *re
 		}
 		downloader.CleanupFile(photos[0].Filename)
 	}
-	
+
 	// Send other media types individually
 	for i, mediaInfo := range otherMedia {
 		log.Printf("Sending media file %d/%d: %s (type: %s)", i+1, len(otherMedia), mediaInfo.Filename, mediaInfo.Type)
-		
+
 		// Check if file exists before sending (skip for text-only content)
 		if mediaInfo.Type != "text" {
 			if _, err := os.Stat(mediaInfo.Filename); os.IsNotExist(err) {
@@ -594,14 +594,14 @@ func processMediaDownload(url string, origChat *response.TgChat, origMessage *re
 				continue
 			}
 		}
-		
+
 		err := sendMediaFile(mediaInfo, origChat, origMessage, url)
 		if err != nil {
 			log.Printf("Failed to send media file %s: %v", mediaInfo.Filename, err)
-			
+
 			// Try fallback: send as document instead of video
 			log.Printf("Trying fallback: sending video as document...")
-			
+
 			documentPayload := payload.TgPlSendDocument{
 				ChatId:              origChat.Id,
 				Document:            "video.mp4",
@@ -613,10 +613,10 @@ func processMediaDownload(url string, origChat *response.TgChat, origMessage *re
 			message.NewSendDocument(documentPayload)
 			// Note: NewSendDocument automatically sends the message
 			log.Printf("✅ Successfully sent video as document: %s", mediaInfo.Filename)
-			
+
 			// Track document send
 			trackMediaSent(int64(origMessage.From.Id), origMessage.From.Username, origChat.Id, origChat.Title, url, "document")
-			
+
 			downloader.CleanupFile(mediaInfo.Filename)
 		} else {
 			log.Printf("Successfully sent media file: %s", mediaInfo.Filename)
@@ -651,7 +651,7 @@ func extractAuthorInfo(fullCaption, platform string) string {
 	if fullCaption == "" {
 		return ""
 	}
-	
+
 	switch platform {
 	case "twitter":
 		// For Twitter, try to extract the author line (usually first line with @username)
@@ -665,7 +665,7 @@ func extractAuthorInfo(fullCaption, platform string) string {
 		if len(lines) > 0 && len(lines[0]) < 100 {
 			return strings.TrimSpace(lines[0])
 		}
-		
+
 	case "instagram":
 		// For Instagram, try to extract username (usually has @username)
 		lines := strings.Split(fullCaption, "\n")
@@ -676,7 +676,7 @@ func extractAuthorInfo(fullCaption, platform string) string {
 		}
 		// Fallback: return a generic Instagram indicator
 		return "📸 Instagram"
-		
+
 	case "tiktok":
 		// For TikTok, extract author/creator info
 		lines := strings.Split(fullCaption, "\n")
@@ -686,7 +686,7 @@ func extractAuthorInfo(fullCaption, platform string) string {
 			}
 		}
 		return "🎵 TikTok"
-		
+
 	case "youtube":
 		// For YouTube, extract channel name (usually first line)
 		lines := strings.Split(fullCaption, "\n")
@@ -694,7 +694,7 @@ func extractAuthorInfo(fullCaption, platform string) string {
 			return strings.TrimSpace(lines[0])
 		}
 		return "📺 YouTube"
-		
+
 	case "reddit":
 		// For Reddit, extract subreddit/author info
 		lines := strings.Split(fullCaption, "\n")
@@ -704,12 +704,12 @@ func extractAuthorInfo(fullCaption, platform string) string {
 			}
 		}
 		return "🤖 Reddit"
-		
+
 	case "facebook":
 		// For Facebook, generic fallback
 		return "📘 Facebook"
 	}
-	
+
 	// Generic fallback
 	return "📱 Social Media"
 }
@@ -721,7 +721,7 @@ func sendMediaFile(mediaInfo *services.MediaInfo, origChat *response.TgChat, ori
 	// correctly as-is, while unescaping them here would produce raw '<'/'&'
 	// that Telegram rejects with a 400.
 	caption := mediaInfo.Caption
-	
+
 	// Check description settings and filter caption if needed
 	platform := detectPlatformFromUrl(url)
 	if platform != "" && !services.IsDescriptionEnabledForChat(origChat.Id, platform) {
@@ -729,7 +729,7 @@ func sendMediaFile(mediaInfo *services.MediaInfo, origChat *response.TgChat, ori
 		// Keep only author info, remove the main description
 		caption = extractAuthorInfo(caption, platform)
 	}
-	
+
 	// For Twitter/X posts, handle long text intelligently
 	if (strings.Contains(mediaInfo.URL, "twitter.com") || strings.Contains(mediaInfo.URL, "x.com")) &&
 		len(caption) > 1024 && mediaInfo.Type != "text" {
@@ -775,7 +775,7 @@ func sendMediaFile(mediaInfo *services.MediaInfo, origChat *response.TgChat, ori
 		}
 		message.NewSendMessage(textPayload)
 		// Note: NewSendMessage automatically sends the message
-		
+
 	case "photo":
 		photoPayload := payload.TgPlSendPhoto{
 			ChatId:              origChat.Id,
@@ -790,7 +790,7 @@ func sendMediaFile(mediaInfo *services.MediaInfo, origChat *response.TgChat, ori
 		// Check if the photo was sent successfully
 		if response.ResponsePayload != nil && response.ResponsePayload.MessageId != 0 {
 			log.Printf("✅ Photo sent successfully! Message ID: %d", response.ResponsePayload.MessageId)
-			
+
 			// Track photo send
 			trackMediaSent(int64(origMessage.From.Id), origMessage.From.Username, origChat.Id, origChat.Title, url, "photo")
 		} else {
@@ -801,21 +801,21 @@ func sendMediaFile(mediaInfo *services.MediaInfo, origChat *response.TgChat, ori
 
 	case "video":
 		finalVideoPath := mediaInfo.Filename
-		
+
 		// Check if this is a WebM file that needs conversion
 		if strings.HasSuffix(strings.ToLower(mediaInfo.Filename), ".webm") {
 			log.Printf("🎬 WebM video detected, attempting conversion to MP4")
-			
+
 			// Initialize video converter with proper working directory
 			workingDir, _ := os.Getwd()
 			videoConverter := services.NewVideoConverter(workingDir, os.TempDir())
-			
+
 			if videoConverter.IsAvailable() {
 				// Try to convert WebM to MP4
 				convertedPath, err := videoConverter.ConvertWebMToMP4(mediaInfo.Filename)
 				if err != nil {
 					log.Printf("❌ WebM conversion failed: %v, falling back to document", err)
-					
+
 					// Fallback: send as document
 					documentPayload := payload.TgPlSendDocument{
 						ChatId:              origChat.Id,
@@ -827,15 +827,15 @@ func sendMediaFile(mediaInfo *services.MediaInfo, origChat *response.TgChat, ori
 						DisableNotification: true,
 					}
 					message.NewSendDocument(documentPayload)
-					
+
 					// Track document send
 					trackMediaSent(int64(origMessage.From.Id), origMessage.From.Username, origChat.Id, origChat.Title, url, "document")
-					
+
 					return nil
 				} else {
 					log.Printf("✅ Successfully converted WebM to MP4: %s", convertedPath)
 					finalVideoPath = convertedPath
-					
+
 					// Clean up original WebM file after successful conversion
 					defer func() {
 						if err := os.Remove(mediaInfo.Filename); err != nil {
@@ -851,7 +851,7 @@ func sendMediaFile(mediaInfo *services.MediaInfo, origChat *response.TgChat, ori
 				}
 			} else {
 				log.Printf("⚠️ ffmpeg not available, sending WebM as document")
-				
+
 				// Fallback: send as document
 				documentPayload := payload.TgPlSendDocument{
 					ChatId:              origChat.Id,
@@ -863,14 +863,14 @@ func sendMediaFile(mediaInfo *services.MediaInfo, origChat *response.TgChat, ori
 					DisableNotification: true,
 				}
 				message.NewSendDocument(documentPayload)
-				
+
 				// Track document send
 				trackMediaSent(int64(origMessage.From.Id), origMessage.From.Username, origChat.Id, origChat.Title, url, "document")
-				
+
 				return nil
 			}
 		}
-		
+
 		// Send as video (either original MP4 or converted from WebM) with reply and silent notification
 		videoPayload := payload.TgPlSendVideo{
 			ChatId:              origChat.Id,
@@ -883,7 +883,7 @@ func sendMediaFile(mediaInfo *services.MediaInfo, origChat *response.TgChat, ori
 		}
 		message.NewSendVideo(videoPayload)
 		// Note: NewSendVideo automatically sends the message
-		
+
 		// Track video send
 		trackMediaSent(int64(origMessage.From.Id), origMessage.From.Username, origChat.Id, origChat.Title, url, "video")
 
@@ -891,7 +891,7 @@ func sendMediaFile(mediaInfo *services.MediaInfo, origChat *response.TgChat, ori
 		// Determine the document type for better user experience
 		var documentName string
 		var enhancedCaption string
-		
+
 		if strings.HasSuffix(strings.ToLower(mediaInfo.Filename), ".webm") {
 			documentName = "video.webm"
 			enhancedCaption = fmt.Sprintf("🎥 Video (WebM format)\n\n%s", caption)
@@ -900,7 +900,7 @@ func sendMediaFile(mediaInfo *services.MediaInfo, origChat *response.TgChat, ori
 			documentName = "document.bin"
 			enhancedCaption = caption
 		}
-		
+
 		documentPayload := payload.TgPlSendDocument{
 			ChatId:              origChat.Id,
 			Document:            documentName,
@@ -921,18 +921,18 @@ func sendPhotosAsMediaGroup(photos []*services.MediaInfo, origChat *response.TgC
 	if len(photos) == 0 {
 		return fmt.Errorf("no photos to send")
 	}
-	
+
 	// Create media array for the media group
 	var mediaArray []payload.InputMediaPhoto
 	var filePaths []string
-	
+
 	for i, photoInfo := range photos {
 		// Use attach:// prefix for file uploads in media groups
 		mediaItem := payload.InputMediaPhoto{
 			Type:  "photo",
 			Media: fmt.Sprintf("attach://photo%d", i),
 		}
-		
+
 		// Only add caption to the first photo to avoid clutter
 		if i == 0 && photoInfo.Caption != "" {
 			// Sent with ParseModeHTML — entities must stay escaped (see sendMediaFile)
@@ -955,11 +955,11 @@ func sendPhotosAsMediaGroup(photos []*services.MediaInfo, origChat *response.TgC
 				mediaItem.ParseMode = ""
 			}
 		}
-		
+
 		mediaArray = append(mediaArray, mediaItem)
 		filePaths = append(filePaths, photoInfo.Filename)
 	}
-	
+
 	// Create the media group payload with reply and silent notification
 	mediaGroupPayload := payload.TgPlSendMediaGroup{
 		ChatId:              origChat.Id,
@@ -968,7 +968,7 @@ func sendPhotosAsMediaGroup(photos []*services.MediaInfo, origChat *response.TgC
 		ReplyToMessageId:    origMessage.MessageId,
 		DisableNotification: true,
 	}
-	
+
 	// Send the media group
 	result := message.NewSendMediaGroup(mediaGroupPayload)
 	if result.Err != nil {
@@ -1013,7 +1013,7 @@ func getFixedUrl(url string) string {
 		result := strings.Replace(url, "https://www.instagram.com", "https://"+domain, 1)
 		return strings.Replace(result, "https://instagram.com", "https://"+domain, 1)
 	}
-	
+
 	// TikTok
 	if strings.Contains(url, "tiktok.com") {
 		return strings.Replace(url, "tiktok.com", "tiktxk.com", 1)
@@ -1031,7 +1031,7 @@ func getFixedUrl(url string) string {
 	if strings.Contains(url, "x.com") {
 		return strings.Replace(url, "x.com", "fixupx.com", 1)
 	}
-	
+
 	// YouTube doesn't have fixed link services
 	// Return empty string to trigger fallback message
 
@@ -1065,7 +1065,7 @@ func getErrorMessage(url string) string {
 			"The content may be private, deleted, or the account might be restricted. " +
 			"Instagram has strict anti-bot measures that sometimes prevent downloads."
 	}
-	
+
 	return fmt.Sprintf("❌ Failed to download media from %s", url)
 }
 
@@ -1076,30 +1076,29 @@ func tryGetTweetText(url string, downloader *services.YtDlpDownloader) string {
 		log.Printf("Failed to get tweet info: %v", err)
 		return ""
 	}
-	
+
 	// Return the description (tweet text) if available
 	if info.Description != "" {
 		return info.Description
 	}
-	
+
 	// Fallback to title if description is empty
 	if info.Title != "" {
 		return info.Title
 	}
-	
+
 	return ""
 }
-
 
 // isUpdateTooOld checks if an update is older than 1 minute
 func isUpdateTooOld(update *response.TgUpdate) bool {
 	if update.Message.Date == 0 {
 		return false
 	}
-	
+
 	updateTime := time.Unix(int64(update.Message.Date), 0)
 	oneMinuteAgo := time.Now().Add(-1 * time.Minute)
-	
+
 	return updateTime.Before(oneMinuteAgo)
 }
 
@@ -1107,14 +1106,14 @@ func isUpdateTooOld(update *response.TgUpdate) bool {
 func cleanupOldUpdates() {
 	updatesMutex.Lock()
 	defer updatesMutex.Unlock()
-	
+
 	// Keep only the last 1000 update IDs to prevent unbounded memory growth
 	if len(processedUpdates) > 1000 {
 		log.Printf("🧹 Cleaning up old processed update IDs (current count: %d)", len(processedUpdates))
-		
+
 		// Clear the map and start fresh
 		processedUpdates = make(map[int64]bool)
-		
+
 		log.Printf("✅ Cleaned up processed update IDs")
 	}
 }
@@ -1130,10 +1129,10 @@ type TwitterThread struct {
 func detectTwitterThreads(urls []string) []TwitterThread {
 	// Regex to extract Twitter/X URLs and parse them
 	twitterRegex := regexp.MustCompile(`https?://(twitter|x)\.com/([^/]+)/status/(\d+)`)
-	
+
 	// Map to group tweets by username
 	tweetsByUser := make(map[string][]TwitterTweet)
-	
+
 	// Parse all Twitter URLs
 	for _, url := range urls {
 		matches := twitterRegex.FindStringSubmatch(url)
@@ -1144,42 +1143,42 @@ func detectTwitterThreads(urls []string) []TwitterThread {
 			if err != nil {
 				continue
 			}
-			
+
 			tweet := TwitterTweet{
 				URL:      url,
 				TweetID:  tweetID,
 				Username: username,
 			}
-			
+
 			tweetsByUser[username] = append(tweetsByUser[username], tweet)
 		}
 	}
-	
+
 	var threads []TwitterThread
-	
+
 	// Check each user's tweets for thread patterns
 	for username, tweets := range tweetsByUser {
 		if len(tweets) < 2 {
 			continue // Need at least 2 tweets for a thread
 		}
-		
+
 		// Sort tweets by ID (chronological order)
 		sort.Slice(tweets, func(i, j int) bool {
 			return tweets[i].TweetID < tweets[j].TweetID
 		})
-		
+
 		// Detect consecutive threads
 		thread := TwitterThread{
 			Username: username,
 			URLs:     []string{tweets[0].URL},
 			TweetIDs: []int64{tweets[0].TweetID},
 		}
-		
+
 		for i := 1; i < len(tweets); i++ {
 			// Check if this tweet could be part of the thread
 			// Twitter IDs are roughly sequential, allow some gap but not too much
 			idDiff := tweets[i].TweetID - tweets[i-1].TweetID
-			
+
 			if idDiff > 0 && idDiff < 10000000000 { // Reasonable gap for thread replies
 				// Add to current thread
 				thread.URLs = append(thread.URLs, tweets[i].URL)
@@ -1189,7 +1188,7 @@ func detectTwitterThreads(urls []string) []TwitterThread {
 				if len(thread.URLs) >= 2 {
 					threads = append(threads, thread)
 				}
-				
+
 				// Start new thread
 				thread = TwitterThread{
 					Username: username,
@@ -1198,13 +1197,13 @@ func detectTwitterThreads(urls []string) []TwitterThread {
 				}
 			}
 		}
-		
+
 		// Add final thread if it has multiple tweets
 		if len(thread.URLs) >= 2 {
 			threads = append(threads, thread)
 		}
 	}
-	
+
 	return threads
 }
 
@@ -1218,13 +1217,13 @@ type TwitterTweet struct {
 // processTwitterThread handles a detected Twitter thread
 func processTwitterThread(thread TwitterThread, origChat *response.TgChat, origMessage *response.TgMessage, downloader *services.SmartDownloader) {
 	log.Printf("🧵 [THREAD] Processing thread from @%s with %d tweets", thread.Username, len(thread.URLs))
-	
+
 	// Check if this is a content-based thread (pseudo-URLs with #thread-part-)
 	isContentThread := len(thread.URLs) > 1 && strings.Contains(thread.URLs[1], "#thread-part-")
-	
+
 	if isContentThread {
 		log.Printf("🧵 [CONTENT-THREAD] Detected content-based thread, extracting text parts")
-		
+
 		// Re-extract the thread content to get the actual text
 		originalURL := thread.URLs[0]
 		cliBrowser := services.NewCliBrowserExtractor(downloader.GetWorkingDir(), downloader.GetTempDir())
@@ -1233,37 +1232,37 @@ func processTwitterThread(thread TwitterThread, origChat *response.TgChat, origM
 			log.Printf("❌ [CONTENT-THREAD] Failed to re-render for content: %v", err)
 			return
 		}
-		
+
 		contentParts := parseTwitterThreadContent(html, thread.Username, "", originalURL)
-		
+
 		// Process the original tweet first (normal processing)
 		log.Printf("🧵 [CONTENT-THREAD] Processing original tweet: %s", originalURL)
 		processMediaDownload(originalURL, origChat, origMessage, downloader)
-		
+
 		// Then send additional content parts as text messages
 		for i := 1; i < len(contentParts); i++ {
 			time.Sleep(500 * time.Millisecond) // Delay between parts
-			
+
 			content := contentParts[i]
 			log.Printf("🧵 [CONTENT-THREAD] Sending thread part %d: %.100s...", i, content.Caption)
-			
+
 			// Send as text message with proper formatting
 			sendThreadTextMessage(content.Caption, origChat, origMessage)
 		}
-		
+
 		log.Printf("🧵 [CONTENT-THREAD] Completed processing content thread from @%s", thread.Username)
 	} else {
 		// Standard URL-based thread processing
 		for i, url := range thread.URLs {
 			log.Printf("🧵 [URL-THREAD] Processing tweet %d/%d: %s", i+1, len(thread.URLs), url)
 			processMediaDownload(url, origChat, origMessage, downloader)
-			
+
 			// Small delay between thread posts to maintain order
 			if i < len(thread.URLs)-1 {
 				time.Sleep(500 * time.Millisecond)
 			}
 		}
-		
+
 		log.Printf("🧵 [URL-THREAD] Completed processing thread from @%s", thread.Username)
 	}
 }
@@ -1271,15 +1270,15 @@ func processTwitterThread(thread TwitterThread, origChat *response.TgChat, origM
 // sendThreadTextMessage sends a text-only message as part of a thread
 func sendThreadTextMessage(text string, origChat *response.TgChat, origMessage *response.TgMessage) error {
 	log.Printf("Sending thread text to chat ID: %d", origChat.Id)
-	
+
 	// Decode HTML entities
 	cleanText := html.UnescapeString(text)
-	
+
 	// Limit text length to Telegram's message limit (4096 characters)
 	if len(cleanText) > 4090 {
 		cleanText = cleanText[:4087] + "..."
 	}
-	
+
 	// Send text message with reply and silent notification
 	textPayload := payload.TgPlSendMessage{
 		ChatId:              origChat.Id,
@@ -1287,13 +1286,13 @@ func sendThreadTextMessage(text string, origChat *response.TgChat, origMessage *
 		ReplyToMessageId:    origMessage.MessageId,
 		DisableNotification: true,
 	}
-	
+
 	response := message.NewSendMessage(textPayload)
 	if response == nil {
 		log.Printf("❌ Failed to send thread text message")
 		return fmt.Errorf("failed to send thread text message")
 	}
-	
+
 	log.Printf("✅ Sent thread text message (%.100s...)", cleanText)
 	return nil
 }
@@ -1309,43 +1308,43 @@ func cleanURLParams(originalURL string) string {
 	// List of common tracking parameters to remove
 	trackingParams := map[string]bool{
 		// UTM parameters
-		"utm_source":    true,
-		"utm_medium":    true,
-		"utm_campaign":  true,
-		"utm_term":      true,
-		"utm_content":   true,
-		"utm_id":        true,
-		
+		"utm_source":   true,
+		"utm_medium":   true,
+		"utm_campaign": true,
+		"utm_term":     true,
+		"utm_content":  true,
+		"utm_id":       true,
+
 		// Social media tracking
-		"t":             true, // Twitter sharing parameter
-		"s":             true, // Twitter sharing parameter
-		"fbclid":        true, // Facebook click ID
-		"gclid":         true, // Google click ID
-		"msclkid":       true, // Microsoft click ID
-		"igshid":        true, // Instagram share ID
-		
+		"t":       true, // Twitter sharing parameter
+		"s":       true, // Twitter sharing parameter
+		"fbclid":  true, // Facebook click ID
+		"gclid":   true, // Google click ID
+		"msclkid": true, // Microsoft click ID
+		"igshid":  true, // Instagram share ID
+
 		// General tracking
-		"ref":           true,
-		"ref_src":       true,
-		"source":        true,
-		"campaign":      true,
-		"_hsenc":        true, // HubSpot
-		"_hsmi":         true, // HubSpot
-		"mc_cid":        true, // MailChimp
-		"mc_eid":        true, // MailChimp
+		"ref":      true,
+		"ref_src":  true,
+		"source":   true,
+		"campaign": true,
+		"_hsenc":   true, // HubSpot
+		"_hsmi":    true, // HubSpot
+		"mc_cid":   true, // MailChimp
+		"mc_eid":   true, // MailChimp
 	}
 
 	// Get query parameters
 	values := parsedURL.Query()
-	
+
 	// Remove tracking parameters
 	for param := range trackingParams {
 		values.Del(param)
 	}
-	
+
 	// Set cleaned query parameters
 	parsedURL.RawQuery = values.Encode()
-	
+
 	return parsedURL.String()
 }
 
@@ -1353,44 +1352,44 @@ func cleanURLParams(originalURL string) string {
 func discoverTwitterThreads(urls []string, downloader *services.SmartDownloader) []TwitterThread {
 	// Regex to extract Twitter/X URLs
 	twitterRegex := regexp.MustCompile(`https?://(twitter|x)\.com/([^/]+)/status/(\d+)`)
-	
+
 	var allThreads []TwitterThread
-	
+
 	for _, originalURL := range urls {
 		matches := twitterRegex.FindStringSubmatch(originalURL)
 		if len(matches) < 4 {
 			continue // Not a Twitter URL
 		}
-		
+
 		username := matches[2]
 		originalTweetID := matches[3]
-		
+
 		log.Printf("🔍 [AUTO-THREAD] Checking for thread continuation from @%s (ID: %s)", username, originalTweetID)
-		
+
 		// Fetch the tweet page HTML using browser rendering (same as image extraction)
 		followUpURLs, err := fetchTwitterThreadWithBrowser(originalURL, username, originalTweetID, downloader)
 		if err != nil {
 			log.Printf("❌ [AUTO-THREAD] Failed to fetch thread for %s: %v", originalURL, err)
 			continue
 		}
-		
+
 		if len(followUpURLs) == 0 {
 			log.Printf("📄 [AUTO-THREAD] No follow-up tweets found for @%s", username)
 			continue
 		}
-		
+
 		// Create thread with original URL + discovered follow-ups
 		allURLs := []string{originalURL}
-		
+
 		// Parse original tweet ID
 		originalTweetIDInt, _ := strconv.ParseInt(originalTweetID, 10, 64)
-		
+
 		// Filter and sort follow-up URLs by tweet ID
 		type tweetWithID struct {
 			URL     string
 			TweetID int64
 		}
-		
+
 		var validFollowUps []tweetWithID
 		for _, url := range followUpURLs {
 			if urlMatches := twitterRegex.FindStringSubmatch(url); len(urlMatches) >= 4 {
@@ -1402,62 +1401,62 @@ func discoverTwitterThreads(urls []string, downloader *services.SmartDownloader)
 				}
 			}
 		}
-		
+
 		// Sort follow-ups by tweet ID (chronological order)
 		sort.Slice(validFollowUps, func(i, j int) bool {
 			return validFollowUps[i].TweetID < validFollowUps[j].TweetID
 		})
-		
+
 		// Add sorted follow-ups to URLs
 		for _, tweet := range validFollowUps {
 			allURLs = append(allURLs, tweet.URL)
 		}
-		
+
 		// Build tweet IDs array
 		var tweetIDs []int64
 		tweetIDs = append(tweetIDs, originalTweetIDInt)
 		for _, tweet := range validFollowUps {
 			tweetIDs = append(tweetIDs, tweet.TweetID)
 		}
-		
+
 		thread := TwitterThread{
 			URLs:     allURLs,
 			Username: username,
 			TweetIDs: tweetIDs,
 		}
-		
+
 		log.Printf("✅ [AUTO-THREAD] Discovered thread from @%s with %d total tweets", username, len(allURLs))
 		allThreads = append(allThreads, thread)
 	}
-	
+
 	return allThreads
 }
 
 // fetchTwitterThreadWithBrowser uses the existing CLI browser to render Twitter and find thread URLs
 func fetchTwitterThreadWithBrowser(tweetURL, authorUsername, originalTweetID string, downloader *services.SmartDownloader) ([]string, error) {
 	log.Printf("🌐 [AUTO-THREAD] Using browser rendering for thread discovery")
-	
+
 	// Use the existing CLI browser extractor that's already integrated
 	// Get working directory for proper cookie path resolution
 	workingDir := downloader.GetWorkingDir()
 	tempDir := downloader.GetTempDir()
 	cliBrowser := services.NewCliBrowserExtractor(workingDir, tempDir)
-	
+
 	// Render the page using Chrome (same approach as Twitter image extraction)
 	html, err := cliBrowser.RenderPageForTwitterThread(tweetURL)
 	if err != nil {
 		return nil, fmt.Errorf("browser rendering failed: %v", err)
 	}
-	
+
 	log.Printf("🔍 [AUTO-THREAD] Browser rendered HTML: %d bytes", len(html))
-	
+
 	// Debug: Check if HTML contains the username at all
 	usernameCount := strings.Count(html, authorUsername)
 	log.Printf("🔍 [AUTO-THREAD] HTML contains username '%s' %d times", authorUsername, usernameCount)
-	
+
 	// Try both URL-based and content-based thread detection
 	urls := parseTwitterThreadURLs(html, authorUsername, originalTweetID)
-	
+
 	// If no URLs found, try content-based approach
 	if len(urls) == 0 {
 		log.Printf("🔍 [AUTO-THREAD] No follow-up URLs found, trying content-based thread detection")
@@ -1472,52 +1471,52 @@ func fetchTwitterThreadWithBrowser(tweetURL, authorUsername, originalTweetID str
 			}
 		}
 	}
-	
+
 	return urls, nil
 }
 
 // parseTwitterThreadContent extracts thread content from multiple tweetText elements
 func parseTwitterThreadContent(html, authorUsername, originalTweetID, originalURL string) []services.MediaInfo {
 	var threadItems []services.MediaInfo
-	
+
 	log.Printf("🔍 [AUTO-THREAD] Parsing tweetText elements for thread content from @%s", authorUsername)
-	
+
 	// Check if the tweet contains a thread indicator (👇 or "thread" text)
-	hasThreadIndicator := strings.Contains(html, "👇") || 
-						 strings.Contains(strings.ToLower(html), "thread") ||
-						 strings.Contains(html, "Show this thread")
-	
+	hasThreadIndicator := strings.Contains(html, "👇") ||
+		strings.Contains(strings.ToLower(html), "thread") ||
+		strings.Contains(html, "Show this thread")
+
 	if hasThreadIndicator {
 		log.Printf("🧵 [AUTO-THREAD] Thread indicator found in HTML - this appears to be a thread")
 	}
-	
+
 	// Pattern to find tweetText elements - handle nested content
 	tweetTextPattern := regexp.MustCompile(`(?s)<div[^>]*data-testid="tweetText"[^>]*>(.*?)</div>`)
-	
+
 	// Also look for tweet containers that might contain thread parts
 	tweetContainerPattern := regexp.MustCompile(`(?s)<article[^>]*data-testid="tweet"[^>]*>.*?</article>`)
-	
+
 	// Find all tweetText matches
 	matches := tweetTextPattern.FindAllStringSubmatch(html, -1)
 	containerMatches := tweetContainerPattern.FindAllString(html, -1)
-	
+
 	log.Printf("🔍 [AUTO-THREAD] Found %d tweetText elements and %d tweet containers in HTML", len(matches), len(containerMatches))
-	
+
 	for i, match := range matches {
 		if len(match) >= 2 {
 			rawContent := match[1]
-			
+
 			// Clean the tweet content (remove HTML tags, decode entities)
 			cleanContent := cleanTweetText(rawContent)
-			
+
 			// Skip empty content
 			if strings.TrimSpace(cleanContent) == "" {
 				log.Printf("   ❌ TweetText %d: Empty content, skipping", i+1)
 				continue
 			}
-			
+
 			log.Printf("   ✅ TweetText %d: Found content (%.100s...)", i+1, cleanContent)
-			
+
 			// Create a MediaInfo for this thread part (text-only)
 			mediaInfo := services.MediaInfo{
 				Type:    "text", // Special type for thread text content
@@ -1525,18 +1524,18 @@ func parseTwitterThreadContent(html, authorUsername, originalTweetID, originalUR
 				Caption: cleanContent,
 				// No filename for text-only content
 			}
-			
+
 			threadItems = append(threadItems, mediaInfo)
 		}
 	}
-	
+
 	log.Printf("🔍 [AUTO-THREAD] Extracted %d thread content items for @%s", len(threadItems), authorUsername)
-	
+
 	// If we found thread indicators but only 1 content item, the thread might be in replies
 	// that aren't loaded in the current view. For now, we'll treat it as a single tweet.
 	if hasThreadIndicator && len(threadItems) == 1 {
 		log.Printf("🧵 [AUTO-THREAD] Thread indicator found but only 1 content item - thread parts may be in separate replies")
-		
+
 		// Check if the content has natural break points that could be split
 		content := threadItems[0].Caption
 		if len(content) > 500 && (strings.Contains(content, "👇") || strings.Count(content, "\n\n") >= 3) {
@@ -1544,17 +1543,17 @@ func parseTwitterThreadContent(html, authorUsername, originalTweetID, originalUR
 			// For now, return as single item - could implement intelligent splitting later
 		}
 	}
-	
+
 	return threadItems
 }
 
 // cleanTweetText removes HTML tags and decodes entities from tweet content
 func cleanTweetText(rawText string) string {
 	text := rawText
-	
+
 	// Remove HTML tags
 	text = regexp.MustCompile(`<[^>]*>`).ReplaceAllString(text, "")
-	
+
 	// Decode HTML entities
 	text = strings.ReplaceAll(text, "&amp;", "&")
 	text = strings.ReplaceAll(text, "&lt;", "<")
@@ -1562,57 +1561,57 @@ func cleanTweetText(rawText string) string {
 	text = strings.ReplaceAll(text, "&quot;", `"`)
 	text = strings.ReplaceAll(text, "&#39;", "'")
 	text = strings.ReplaceAll(text, "&#34;", `"`)
-	
+
 	// Decode JSON escape sequences
 	text = strings.ReplaceAll(text, `\"`, `"`)
 	text = strings.ReplaceAll(text, `\\n`, "\n")
 	text = strings.ReplaceAll(text, `\\t`, "\t")
 	text = strings.ReplaceAll(text, `\\r`, "\r")
-	
+
 	// Remove pic.twitter.com links
 	picTwitterPattern := regexp.MustCompile(`\s*pic\.twitter\.com/[a-zA-Z0-9]+\s*`)
 	text = picTwitterPattern.ReplaceAllString(text, "")
-	
+
 	// Clean up multiple spaces and newlines
 	text = regexp.MustCompile(`\s+`).ReplaceAllString(text, " ")
 	text = strings.TrimSpace(text)
-	
+
 	return text
 }
 
 // parseTwitterThreadURLs extracts follow-up tweet URLs from Twitter HTML, excluding the original tweet
 func parseTwitterThreadURLs(html, authorUsername, originalTweetID string) []string {
 	var urls []string
-	
+
 	// Debug: Save HTML sample for pattern analysis
 	debugSample := html
 	if len(debugSample) > 2000 {
 		debugSample = debugSample[:2000] + "...[TRUNCATED]"
 	}
 	log.Printf("🔍 [AUTO-THREAD] HTML sample (first 2000 chars): %s", debugSample)
-	
+
 	// Multiple patterns to find tweet links from the same author in conversation
-	
+
 	// Pattern 1: Basic relative links like /med_goblin/status/1934423928782377439
 	linkPattern := regexp.MustCompile(fmt.Sprintf(`/(%s)/status/(\d+)`, regexp.QuoteMeta(authorUsername)))
-	
+
 	// Pattern 2: Full URLs like https://x.com/med_goblin/status/1934423928782377439
 	fullURLPattern := regexp.MustCompile(fmt.Sprintf(`https?://(twitter|x)\.com/(%s)/status/(\d+)`, regexp.QuoteMeta(authorUsername)))
-	
+
 	// Pattern 3: Href attributes with quotes
 	hrefPattern := regexp.MustCompile(fmt.Sprintf(`href="[^"]*?/(%s)/status/(\d+)[^"]*"`, regexp.QuoteMeta(authorUsername)))
-	
+
 	// Pattern 4: Data attributes that might contain URLs
 	dataPattern := regexp.MustCompile(fmt.Sprintf(`data-[^=]*="[^"]*?/(%s)/status/(\d+)[^"]*"`, regexp.QuoteMeta(authorUsername)))
-	
+
 	// Pattern 5: JSON-style URLs (in case of embedded data)
 	jsonPattern := regexp.MustCompile(fmt.Sprintf(`"[^"]*?/(%s)/status/(\d+)[^"]*"`, regexp.QuoteMeta(authorUsername)))
-	
-	// Pattern 6: URL with query parameters 
+
+	// Pattern 6: URL with query parameters
 	queryPattern := regexp.MustCompile(fmt.Sprintf(`https?://(twitter|x)\.com/(%s)/status/(\d+)(?:\?[^"\s>]*)?`, regexp.QuoteMeta(authorUsername)))
-	
+
 	log.Printf("🔍 [AUTO-THREAD] Using %d regex patterns to find thread URLs", 6)
-	
+
 	// Find all matches
 	linkMatches := linkPattern.FindAllStringSubmatch(html, -1)
 	fullURLMatches := fullURLPattern.FindAllStringSubmatch(html, -1)
@@ -1620,10 +1619,10 @@ func parseTwitterThreadURLs(html, authorUsername, originalTweetID string) []stri
 	dataMatches := dataPattern.FindAllStringSubmatch(html, -1)
 	jsonMatches := jsonPattern.FindAllStringSubmatch(html, -1)
 	queryMatches := queryPattern.FindAllStringSubmatch(html, -1)
-	
-	log.Printf("🔍 [AUTO-THREAD] Pattern matches - Link: %d, Full URL: %d, Href: %d, Data: %d, JSON: %d, Query: %d", 
+
+	log.Printf("🔍 [AUTO-THREAD] Pattern matches - Link: %d, Full URL: %d, Href: %d, Data: %d, JSON: %d, Query: %d",
 		len(linkMatches), len(fullURLMatches), len(hrefMatches), len(dataMatches), len(jsonMatches), len(queryMatches))
-	
+
 	// Debug: Log raw matches found
 	log.Printf("🔍 [AUTO-THREAD] Raw link matches:")
 	for i, match := range linkMatches {
@@ -1631,54 +1630,54 @@ func parseTwitterThreadURLs(html, authorUsername, originalTweetID string) []stri
 			log.Printf("   Link match %d: %v", i+1, match)
 		}
 	}
-	
+
 	log.Printf("🔍 [AUTO-THREAD] Raw full URL matches:")
 	for i, match := range fullURLMatches {
 		if i < 5 { // Log first 5 matches
 			log.Printf("   Full URL match %d: %v", i+1, match)
 		}
 	}
-	
+
 	log.Printf("🔍 [AUTO-THREAD] Raw href matches:")
 	for i, match := range hrefMatches {
 		if i < 5 { // Log first 5 matches
 			log.Printf("   Href match %d: %v", i+1, match)
 		}
 	}
-	
+
 	log.Printf("🔍 [AUTO-THREAD] Raw data matches:")
 	for i, match := range dataMatches {
 		if i < 5 { // Log first 5 matches
 			log.Printf("   Data match %d: %v", i+1, match)
 		}
 	}
-	
+
 	log.Printf("🔍 [AUTO-THREAD] Raw JSON matches:")
 	for i, match := range jsonMatches {
 		if i < 5 { // Log first 5 matches
 			log.Printf("   JSON match %d: %v", i+1, match)
 		}
 	}
-	
+
 	log.Printf("🔍 [AUTO-THREAD] Raw query matches:")
 	for i, match := range queryMatches {
 		if i < 5 { // Log first 5 matches
 			log.Printf("   Query match %d: %v", i+1, match)
 		}
 	}
-	
+
 	log.Printf("🔍 [AUTO-THREAD] Original tweet ID to exclude: %s", originalTweetID)
-	
+
 	// Convert relative links to full URLs
 	seenTweetIDs := make(map[string]bool)
-	
+
 	for _, match := range linkMatches {
 		if len(match) >= 3 {
 			username := match[1]
 			tweetID := match[2]
-			
+
 			log.Printf("🔍 [AUTO-THREAD] Processing link match: username=%s, tweetID=%s", username, tweetID)
-			
+
 			// Skip the original tweet and duplicates
 			if tweetID == originalTweetID {
 				log.Printf("   ❌ Skipped: matches original tweet ID (%s)", originalTweetID)
@@ -1689,20 +1688,20 @@ func parseTwitterThreadURLs(html, authorUsername, originalTweetID string) []stri
 				continue
 			}
 			seenTweetIDs[tweetID] = true
-			
+
 			fullURL := fmt.Sprintf("https://x.com/%s/status/%s", username, tweetID)
 			urls = append(urls, fullURL)
 			log.Printf("   ✅ Added URL: %s", fullURL)
 		}
 	}
-	
+
 	// Add full URLs found in HTML
 	for _, match := range fullURLMatches {
 		if len(match) >= 4 {
 			tweetID := match[3]
-			
+
 			log.Printf("🔍 [AUTO-THREAD] Processing full URL match: tweetID=%s, fullURL=%s", tweetID, match[0])
-			
+
 			// Skip the original tweet and duplicates
 			if tweetID == originalTweetID {
 				log.Printf("   ❌ Skipped: matches original tweet ID (%s)", originalTweetID)
@@ -1713,21 +1712,21 @@ func parseTwitterThreadURLs(html, authorUsername, originalTweetID string) []stri
 				continue
 			}
 			seenTweetIDs[tweetID] = true
-			
+
 			fullURL := match[0]
 			urls = append(urls, fullURL)
 			log.Printf("   ✅ Added URL: %s", fullURL)
 		}
 	}
-	
+
 	// Add href URLs found in HTML
 	for _, match := range hrefMatches {
 		if len(match) >= 3 {
 			username := match[1]
 			tweetID := match[2]
-			
+
 			log.Printf("🔍 [AUTO-THREAD] Processing href match: username=%s, tweetID=%s", username, tweetID)
-			
+
 			// Skip the original tweet and duplicates
 			if tweetID == originalTweetID {
 				log.Printf("   ❌ Skipped: matches original tweet ID (%s)", originalTweetID)
@@ -1738,21 +1737,21 @@ func parseTwitterThreadURLs(html, authorUsername, originalTweetID string) []stri
 				continue
 			}
 			seenTweetIDs[tweetID] = true
-			
+
 			fullURL := fmt.Sprintf("https://x.com/%s/status/%s", username, tweetID)
 			urls = append(urls, fullURL)
 			log.Printf("   ✅ Added URL: %s", fullURL)
 		}
 	}
-	
+
 	// Add data attribute URLs
 	for _, match := range dataMatches {
 		if len(match) >= 3 {
 			username := match[1]
 			tweetID := match[2]
-			
+
 			log.Printf("🔍 [AUTO-THREAD] Processing data match: username=%s, tweetID=%s", username, tweetID)
-			
+
 			// Skip the original tweet and duplicates
 			if tweetID == originalTweetID {
 				log.Printf("   ❌ Skipped: matches original tweet ID (%s)", originalTweetID)
@@ -1763,21 +1762,21 @@ func parseTwitterThreadURLs(html, authorUsername, originalTweetID string) []stri
 				continue
 			}
 			seenTweetIDs[tweetID] = true
-			
+
 			fullURL := fmt.Sprintf("https://x.com/%s/status/%s", username, tweetID)
 			urls = append(urls, fullURL)
 			log.Printf("   ✅ Added URL: %s", fullURL)
 		}
 	}
-	
+
 	// Add JSON-style URLs
 	for _, match := range jsonMatches {
 		if len(match) >= 3 {
 			username := match[1]
 			tweetID := match[2]
-			
+
 			log.Printf("🔍 [AUTO-THREAD] Processing JSON match: username=%s, tweetID=%s", username, tweetID)
-			
+
 			// Skip the original tweet and duplicates
 			if tweetID == originalTweetID {
 				log.Printf("   ❌ Skipped: matches original tweet ID (%s)", originalTweetID)
@@ -1788,20 +1787,20 @@ func parseTwitterThreadURLs(html, authorUsername, originalTweetID string) []stri
 				continue
 			}
 			seenTweetIDs[tweetID] = true
-			
+
 			fullURL := fmt.Sprintf("https://x.com/%s/status/%s", username, tweetID)
 			urls = append(urls, fullURL)
 			log.Printf("   ✅ Added URL: %s", fullURL)
 		}
 	}
-	
+
 	// Add query parameter URLs
 	for _, match := range queryMatches {
 		if len(match) >= 4 {
 			tweetID := match[3]
-			
+
 			log.Printf("🔍 [AUTO-THREAD] Processing query match: tweetID=%s, fullURL=%s", tweetID, match[0])
-			
+
 			// Skip the original tweet and duplicates
 			if tweetID == originalTweetID {
 				log.Printf("   ❌ Skipped: matches original tweet ID (%s)", originalTweetID)
@@ -1812,22 +1811,22 @@ func parseTwitterThreadURLs(html, authorUsername, originalTweetID string) []stri
 				continue
 			}
 			seenTweetIDs[tweetID] = true
-			
+
 			fullURL := match[0]
 			urls = append(urls, fullURL)
 			log.Printf("   ✅ Added URL: %s", fullURL)
 		}
 	}
-	
+
 	log.Printf("🔍 [AUTO-THREAD] Found %d potential follow-up URLs for @%s", len(urls), authorUsername)
-	
+
 	// Debug: Log first few URLs found for troubleshooting
 	for i, url := range urls {
 		if i < 3 { // Log first 3 URLs
 			log.Printf("🔍 [AUTO-THREAD] Found URL %d: %s", i+1, url)
 		}
 	}
-	
+
 	return urls
 }
 
@@ -1850,7 +1849,7 @@ func handleBotCommand(origMessage *response.TgMessage, origChat *response.TgChat
 	command := strings.ToLower(commandText)
 
 	log.Printf("🤖 Processing command: %s from user %d in chat %d", command, origUser.Id, origChat.Id)
-	
+
 	switch command {
 	case "/start", "/help", "/menu":
 		handleStartCommand(origMessage, origChat, origUser)
@@ -1890,7 +1889,7 @@ func handleBotCommand(origMessage *response.TgMessage, origChat *response.TgChat
 func handleStartCommand(origMessage *response.TgMessage, origChat *response.TgChat, origUser *response.TgUser) {
 	var menuText strings.Builder
 	isGroupChat := origChat.Type != "private"
-	
+
 	menuText.WriteString("🤖 <b>Social Link Bot</b>\n\n")
 	menuText.WriteString("I download and send actual media files from social media platforms — no more link previews!\n\n")
 
@@ -1940,17 +1939,17 @@ func handleStartCommand(origMessage *response.TgMessage, origChat *response.TgCh
 	menuText.WriteString("\n━━━━━━━━━━━━━━━━━━━━\n")
 	menuText.WriteString("💚 Support the bot: /donate\n")
 	menuText.WriteString("💡 <i>Tip: Just paste a link to get started!</i>")
-	
+
 	// Create interactive keyboard with menu buttons
 	keyboard := createMainMenuKeyboard(isGroupChat, origUser.Id)
-	
+
 	helpMsg := payload.TgPlSendMessage{
 		ChatId:      origChat.Id,
 		ParseMode:   payload.ParseModeHTML,
 		Text:        menuText.String(),
 		ReplyMarkup: keyboard,
 	}
-	
+
 	message.NewSendMessage(helpMsg)
 	log.Printf("✅ Sent interactive help/start message to user %d", origUser.Id)
 }
@@ -2003,7 +2002,7 @@ func handleStatsCommand(origMessage *response.TgMessage, origChat *response.TgCh
 	if len(args) > 1 {
 		period = strings.ToLower(args[1])
 	}
-	
+
 	// Validate period
 	validPeriods := []string{"today", "week", "month", "year"}
 	isValidPeriod := false
@@ -2013,7 +2012,7 @@ func handleStatsCommand(origMessage *response.TgMessage, origChat *response.TgCh
 			break
 		}
 	}
-	
+
 	if !isValidPeriod {
 		errorMsg := payload.TgPlSendMessage{
 			ChatId:              origChat.Id,
@@ -2025,7 +2024,7 @@ func handleStatsCommand(origMessage *response.TgMessage, origChat *response.TgCh
 		message.NewSendMessage(errorMsg)
 		return
 	}
-	
+
 	// Get media statistics
 	stats, err := services.GetMediaStats(origChat.Id, period)
 	if err != nil {
@@ -2040,27 +2039,27 @@ func handleStatsCommand(origMessage *response.TgMessage, origChat *response.TgCh
 		message.NewSendMessage(errorMsg)
 		return
 	}
-	
+
 	// Get user statistics
 	userStats, err := services.GetUserMediaStats(origChat.Id, period)
 	if err != nil {
 		log.Printf("Error getting user media stats: %v", err)
 	}
-	
+
 	// Build stats message
 	var statsText strings.Builder
-	
+
 	// Period header
 	periodEmoji := map[string]string{
 		"today": "📅",
-		"week":  "📊", 
+		"week":  "📊",
 		"month": "📉",
 		"year":  "📋",
 	}
-	
+
 	statsText.WriteString(fmt.Sprintf("%s <b>%s Statistics</b>\n", periodEmoji[period], strings.Title(period)))
 	statsText.WriteString(fmt.Sprintf("<i>Chat: %s</i>\n\n", html.EscapeString(origChat.Title)))
-	
+
 	// Overall stats
 	if stats.Total == 0 {
 		statsText.WriteString("📭 No media shared " + period + ".\n")
@@ -2068,7 +2067,7 @@ func handleStatsCommand(origMessage *response.TgMessage, origChat *response.TgCh
 		statsText.WriteString(fmt.Sprintf("📊 <b>Total Media:</b> %d\n", stats.Total))
 		statsText.WriteString(fmt.Sprintf("📷 Photos: %d\n", stats.TotalPhotos))
 		statsText.WriteString(fmt.Sprintf("🎥 Videos: %d\n\n", stats.TotalVideos))
-		
+
 		// Platform breakdown
 		if len(stats.Platforms) > 0 {
 			statsText.WriteString("🌐 <b>By Platform:</b>\n")
@@ -2085,7 +2084,7 @@ func handleStatsCommand(origMessage *response.TgMessage, origChat *response.TgCh
 				if emoji == "" {
 					emoji = "🔗"
 				}
-				
+
 				statsText.WriteString(fmt.Sprintf("%s <b>%s:</b> %d", emoji, strings.Title(platform.Platform), platform.Total))
 				if platform.Photos > 0 && platform.Videos > 0 {
 					statsText.WriteString(fmt.Sprintf(" (📷%d, 🎥%d)", platform.Photos, platform.Videos))
@@ -2093,7 +2092,7 @@ func handleStatsCommand(origMessage *response.TgMessage, origChat *response.TgCh
 				statsText.WriteString("\n")
 			}
 		}
-		
+
 		// User breakdown (only in group chats)
 		if origChat.Type != "private" && len(userStats) > 0 {
 			statsText.WriteString("\n👥 <b>By User:</b>\n")
@@ -2101,27 +2100,27 @@ func handleStatsCommand(origMessage *response.TgMessage, origChat *response.TgCh
 			if len(userStats) < displayCount {
 				displayCount = len(userStats)
 			}
-			
+
 			for i := 0; i < displayCount; i++ {
 				user := userStats[i]
 				username := user.Username
 				if username == "" {
 					username = fmt.Sprintf("User %d", user.UserID)
 				}
-				
+
 				statsText.WriteString(fmt.Sprintf("• <b>%s:</b> %d", html.EscapeString(username), user.Total))
 				if user.Photos > 0 && user.Videos > 0 {
 					statsText.WriteString(fmt.Sprintf(" (📷%d, 🎥%d)", user.Photos, user.Videos))
 				}
 				statsText.WriteString("\n")
 			}
-			
+
 			if len(userStats) > displayCount {
-				statsText.WriteString(fmt.Sprintf("... and %d more users\n", len(userStats) - displayCount))
+				statsText.WriteString(fmt.Sprintf("... and %d more users\n", len(userStats)-displayCount))
 			}
 		}
 	}
-	
+
 	// Create stats message
 	statsMsg := payload.TgPlSendMessage{
 		ChatId:              origChat.Id,
@@ -2130,7 +2129,7 @@ func handleStatsCommand(origMessage *response.TgMessage, origChat *response.TgCh
 		ReplyToMessageId:    origMessage.MessageId,
 		DisableNotification: true,
 	}
-	
+
 	message.NewSendMessage(statsMsg)
 	log.Printf("📊 Stats command (%s) completed for user %d in chat %d", period, origUser.Id, origChat.Id)
 }
@@ -2151,17 +2150,17 @@ func handleMyLimitCommand(origMessage *response.TgMessage, origChat *response.Tg
 		message.NewSendMessage(errorMsg)
 		return
 	}
-	
+
 	// Get current daily usage
 	dailyCount, err := services.GetDailyMediaCount(int64(origUser.Id), origChat.Id)
 	if err != nil {
 		log.Printf("Error getting daily media count: %v", err)
 		dailyCount = 0
 	}
-	
+
 	// Build limit message
 	var limitText strings.Builder
-	
+
 	// Header
 	limitText.WriteString("🚫 <b>Your Media Limit</b>\n")
 	if origChat.Type != "private" {
@@ -2169,17 +2168,17 @@ func handleMyLimitCommand(origMessage *response.TgMessage, origChat *response.Tg
 	} else {
 		limitText.WriteString("\n")
 	}
-	
+
 	// Current usage
 	limitText.WriteString(fmt.Sprintf("📊 <b>Today's Usage:</b> %d media items\n", dailyCount))
-	
+
 	// Limit information
 	if limit == 0 {
 		limitText.WriteString("🔓 <b>Daily Limit:</b> No limit set\n")
 		limitText.WriteString("💚 Status: <b>Unlimited</b>\n")
 	} else {
 		limitText.WriteString(fmt.Sprintf("🔒 <b>Daily Limit:</b> %d media items\n", limit))
-		
+
 		// Status
 		if dailyCount >= limit {
 			limitText.WriteString("🔴 Status: <b>Limit Reached</b>\n")
@@ -2187,7 +2186,7 @@ func handleMyLimitCommand(origMessage *response.TgMessage, origChat *response.Tg
 			remaining := limit - dailyCount
 			limitText.WriteString(fmt.Sprintf("🟢 Status: <b>%d remaining</b>\n", remaining))
 		}
-		
+
 		// Limit type
 		if isGroupDefault {
 			limitText.WriteString("ℹ️ <i>Using group default limit</i>\n")
@@ -2195,7 +2194,7 @@ func handleMyLimitCommand(origMessage *response.TgMessage, origChat *response.Tg
 			limitText.WriteString("👤 <i>Individual limit set</i>\n")
 		}
 	}
-	
+
 	// Reset time information
 	if limit > 0 {
 		resetTime, timeUntilReset, err := services.GetTimezoneAwareResetTime(origChat.Id)
@@ -2204,12 +2203,12 @@ func handleMyLimitCommand(origMessage *response.TgMessage, origChat *response.Tg
 			limitText.WriteString(fmt.Sprintf("📅 <b>Reset time:</b> %s\n", resetTime.Format("15:04 MST")))
 		}
 	}
-	
+
 	// Footer
 	if origChat.Type != "private" {
 		limitText.WriteString("\n💡 <i>Admins can modify limits with /setlimit</i>")
 	}
-	
+
 	limitMsg := payload.TgPlSendMessage{
 		ChatId:              origChat.Id,
 		ParseMode:           payload.ParseModeHTML,
@@ -2217,7 +2216,7 @@ func handleMyLimitCommand(origMessage *response.TgMessage, origChat *response.Tg
 		ReplyToMessageId:    origMessage.MessageId,
 		DisableNotification: true,
 	}
-	
+
 	message.NewSendMessage(limitMsg)
 	log.Printf("🚫 MyLimit command completed for user %d in chat %d (limit: %d, used: %d)", origUser.Id, origChat.Id, limit, dailyCount)
 }
@@ -2255,14 +2254,14 @@ func handleSetLimitCommand(origMessage *response.TgMessage, origChat *response.T
 		message.NewSendMessage(errorMsg)
 		return
 	}
-	
+
 	args := strings.Fields(origMessage.Text)
-	
+
 	// Parse arguments
 	var targetUserID int64
 	var limitValue int
 	var err error
-	
+
 	if len(args) == 2 {
 		// Format: /setlimit <limit> (for replied message)
 		limitValue, err = strconv.Atoi(args[1])
@@ -2277,7 +2276,7 @@ func handleSetLimitCommand(origMessage *response.TgMessage, origChat *response.T
 			message.NewSendMessage(errorMsg)
 			return
 		}
-		
+
 		// Check if this is a reply to another message
 		if origMessage.ReplyToMessage != nil && origMessage.ReplyToMessage.From.Id != 0 {
 			targetUserID = int64(origMessage.ReplyToMessage.From.Id)
@@ -2306,7 +2305,7 @@ func handleSetLimitCommand(origMessage *response.TgMessage, origChat *response.T
 			message.NewSendMessage(errorMsg)
 			return
 		}
-		
+
 		limitValue, err = strconv.Atoi(args[2])
 		if err != nil {
 			errorMsg := payload.TgPlSendMessage{
@@ -2331,7 +2330,7 @@ func handleSetLimitCommand(origMessage *response.TgMessage, origChat *response.T
 		message.NewSendMessage(errorMsg)
 		return
 	}
-	
+
 	// Validate limit value
 	if limitValue < 0 {
 		errorMsg := payload.TgPlSendMessage{
@@ -2344,7 +2343,7 @@ func handleSetLimitCommand(origMessage *response.TgMessage, origChat *response.T
 		message.NewSendMessage(errorMsg)
 		return
 	}
-	
+
 	// Set the limit
 	err = services.SetUserMediaLimit(targetUserID, origChat.Id, limitValue)
 	if err != nil {
@@ -2359,25 +2358,25 @@ func handleSetLimitCommand(origMessage *response.TgMessage, origChat *response.T
 		message.NewSendMessage(errorMsg)
 		return
 	}
-	
+
 	// Get current usage for the user
 	dailyCount, err := services.GetDailyMediaCount(targetUserID, origChat.Id)
 	if err != nil {
 		log.Printf("Error getting daily media count: %v", err)
 		dailyCount = 0
 	}
-	
+
 	// Build success message
 	var successText strings.Builder
 	successText.WriteString("✅ <b>User Limit Updated</b>\n\n")
-	
+
 	if limitValue == 0 {
 		successText.WriteString(fmt.Sprintf("🔓 <b>User %d:</b> Limit removed\n", targetUserID))
 		successText.WriteString("💚 Status: <b>Unlimited</b>\n")
 	} else {
 		successText.WriteString(fmt.Sprintf("🔒 <b>User %d:</b> Limit set to %d\n", targetUserID, limitValue))
 		successText.WriteString(fmt.Sprintf("📊 <b>Today's Usage:</b> %d media items\n", dailyCount))
-		
+
 		if dailyCount >= limitValue {
 			successText.WriteString("🔴 Status: <b>Limit Reached</b>\n")
 		} else {
@@ -2385,9 +2384,9 @@ func handleSetLimitCommand(origMessage *response.TgMessage, origChat *response.T
 			successText.WriteString(fmt.Sprintf("🟢 Status: <b>%d remaining</b>\n", remaining))
 		}
 	}
-	
+
 	successText.WriteString(fmt.Sprintf("\n👮 <i>Set by admin: %s</i>", html.EscapeString(origUser.Username)))
-	
+
 	successMsg := payload.TgPlSendMessage{
 		ChatId:              origChat.Id,
 		ParseMode:           payload.ParseModeHTML,
@@ -2395,7 +2394,7 @@ func handleSetLimitCommand(origMessage *response.TgMessage, origChat *response.T
 		ReplyToMessageId:    origMessage.MessageId,
 		DisableNotification: true,
 	}
-	
+
 	message.NewSendMessage(successMsg)
 	log.Printf("👮 SetLimit command completed by user %d in chat %d (target: %d, limit: %d)", origUser.Id, origChat.Id, targetUserID, limitValue)
 }
@@ -2412,9 +2411,9 @@ func handleSetGroupLimitCommand(origMessage *response.TgMessage, origChat *respo
 		message.NewSendMessage(errorMsg)
 		return
 	}
-	
+
 	args := strings.Fields(origMessage.Text)
-	
+
 	// Check if limit value is provided
 	if len(args) != 2 {
 		errorMsg := payload.TgPlSendMessage{
@@ -2427,7 +2426,7 @@ func handleSetGroupLimitCommand(origMessage *response.TgMessage, origChat *respo
 		message.NewSendMessage(errorMsg)
 		return
 	}
-	
+
 	// Parse limit value
 	limitValue, err := strconv.Atoi(args[1])
 	if err != nil {
@@ -2441,7 +2440,7 @@ func handleSetGroupLimitCommand(origMessage *response.TgMessage, origChat *respo
 		message.NewSendMessage(errorMsg)
 		return
 	}
-	
+
 	// Validate limit value
 	if limitValue < 0 {
 		errorMsg := payload.TgPlSendMessage{
@@ -2454,7 +2453,7 @@ func handleSetGroupLimitCommand(origMessage *response.TgMessage, origChat *respo
 		message.NewSendMessage(errorMsg)
 		return
 	}
-	
+
 	// Set the group limit
 	err = services.SetGroupMediaLimit(origChat.Id, origChat.Title, limitValue)
 	if err != nil {
@@ -2469,11 +2468,11 @@ func handleSetGroupLimitCommand(origMessage *response.TgMessage, origChat *respo
 		message.NewSendMessage(errorMsg)
 		return
 	}
-	
+
 	// Build success message
 	var successText strings.Builder
 	successText.WriteString("✅ <b>Group Default Limit Updated</b>\n\n")
-	
+
 	if limitValue == 0 {
 		successText.WriteString("🔓 <b>Group Limit:</b> Removed\n")
 		successText.WriteString("💚 <b>Status:</b> No default limit for new users\n")
@@ -2481,16 +2480,16 @@ func handleSetGroupLimitCommand(origMessage *response.TgMessage, origChat *respo
 		successText.WriteString(fmt.Sprintf("🔒 <b>Group Limit:</b> %d media items per day\n", limitValue))
 		successText.WriteString("📋 <b>Status:</b> Applied to all users without individual limits\n")
 	}
-	
+
 	// Get current timezone
 	timezone, err := services.GetGroupTimezone(origChat.Id)
 	if err == nil && timezone != "" {
 		successText.WriteString(fmt.Sprintf("🌍 <b>Timezone:</b> %s\n", timezone))
 	}
-	
+
 	successText.WriteString(fmt.Sprintf("\n👮 <i>Set by admin: %s</i>", html.EscapeString(origUser.Username)))
 	successText.WriteString("\n\n💡 <i>Individual user limits override group default</i>")
-	
+
 	successMsg := payload.TgPlSendMessage{
 		ChatId:              origChat.Id,
 		ParseMode:           payload.ParseModeHTML,
@@ -2498,7 +2497,7 @@ func handleSetGroupLimitCommand(origMessage *response.TgMessage, origChat *respo
 		ReplyToMessageId:    origMessage.MessageId,
 		DisableNotification: true,
 	}
-	
+
 	message.NewSendMessage(successMsg)
 	log.Printf("🏢 SetGroupLimit command completed by user %d in chat %d (limit: %d)", origUser.Id, origChat.Id, limitValue)
 }
@@ -2515,9 +2514,9 @@ func handleSetGroupTimezoneCommand(origMessage *response.TgMessage, origChat *re
 		message.NewSendMessage(errorMsg)
 		return
 	}
-	
+
 	args := strings.Fields(origMessage.Text)
-	
+
 	// Check if timezone is provided
 	if len(args) != 2 {
 		errorMsg := payload.TgPlSendMessage{
@@ -2530,10 +2529,10 @@ func handleSetGroupTimezoneCommand(origMessage *response.TgMessage, origChat *re
 		message.NewSendMessage(errorMsg)
 		return
 	}
-	
+
 	// Parse timezone
 	timezone := args[1]
-	
+
 	// Validate timezone
 	if !isTimezoneValid(timezone) {
 		errorMsg := payload.TgPlSendMessage{
@@ -2546,7 +2545,7 @@ func handleSetGroupTimezoneCommand(origMessage *response.TgMessage, origChat *re
 		message.NewSendMessage(errorMsg)
 		return
 	}
-	
+
 	// Set the group timezone
 	err := services.SetGroupTimezone(origChat.Id, origChat.Title, timezone)
 	if err != nil {
@@ -2561,36 +2560,36 @@ func handleSetGroupTimezoneCommand(origMessage *response.TgMessage, origChat *re
 		message.NewSendMessage(errorMsg)
 		return
 	}
-	
+
 	// Get current time in the new timezone
 	loc := loadTimezoneWithFallback(timezone)
 	currentTime := time.Now().In(loc)
-	
+
 	// Calculate next reset time
 	_, timeUntilReset, err := services.GetTimezoneAwareResetTime(origChat.Id)
 	if err != nil {
 		log.Printf("Error getting reset time: %v", err)
 	}
-	
+
 	// Build success message
 	var successText strings.Builder
 	successText.WriteString("✅ <b>Group Timezone Updated</b>\n\n")
 	successText.WriteString(fmt.Sprintf("🌍 <b>Timezone:</b> %s\n", timezone))
 	successText.WriteString(fmt.Sprintf("🕐 <b>Current time:</b> %s\n", currentTime.Format("15:04:05 MST")))
-	
+
 	if timeUntilReset > 0 {
 		successText.WriteString(fmt.Sprintf("⏰ <b>Next limit reset:</b> %s\n", formatDuration(timeUntilReset)))
 	}
-	
+
 	// Get current group limit
 	groupLimit, err := services.GetGroupMediaLimit(origChat.Id)
 	if err == nil && groupLimit > 0 {
 		successText.WriteString(fmt.Sprintf("🔒 <b>Group Limit:</b> %d media items per day\n", groupLimit))
 	}
-	
+
 	successText.WriteString(fmt.Sprintf("\n👮 <i>Set by admin: %s</i>", html.EscapeString(origUser.Username)))
 	successText.WriteString("\n\n💡 <i>Daily limits now reset at midnight in this timezone</i>")
-	
+
 	successMsg := payload.TgPlSendMessage{
 		ChatId:              origChat.Id,
 		ParseMode:           payload.ParseModeHTML,
@@ -2598,7 +2597,7 @@ func handleSetGroupTimezoneCommand(origMessage *response.TgMessage, origChat *re
 		ReplyToMessageId:    origMessage.MessageId,
 		DisableNotification: true,
 	}
-	
+
 	message.NewSendMessage(successMsg)
 	log.Printf("🌍 SetGroupTimezone command completed by user %d in chat %d (timezone: %s)", origUser.Id, origChat.Id, timezone)
 }
@@ -3019,7 +3018,7 @@ func createMainMenuKeyboard(isGroupChat bool, userID int) *api.TgInlineKeyboardM
 // handleCallbackQuery handles button presses from inline keyboards
 func handleCallbackQuery(callbackQuery *response.TgCallbackQuery) {
 	log.Printf("📱 Handling callback query: %s from user %d", callbackQuery.Data, callbackQuery.From.Id)
-	
+
 	// Create a fake message object to reuse existing command handlers
 	fakeMessage := response.TgMessage{
 		MessageId: callbackQuery.Message.MessageId,
@@ -3028,7 +3027,7 @@ func handleCallbackQuery(callbackQuery *response.TgCallbackQuery) {
 		Text:      callbackQuery.Data,
 		Date:      int(time.Now().Unix()),
 	}
-	
+
 	// Process the command based on callback data
 	if strings.HasPrefix(callbackQuery.Data, "/stats") {
 		handleStatsCommand(&fakeMessage, &callbackQuery.Message.Chat, &callbackQuery.From)
@@ -3083,20 +3082,20 @@ func handleCallbackQuery(callbackQuery *response.TgCallbackQuery) {
 // handleSetLimitStartCallback handles the "Set User Limit" button press
 func handleSetLimitStartCallback(origChat *response.TgChat, origUser *response.TgUser, messageId int) {
 	log.Printf("👮 Admin %d initiated set limit process in chat %d", origUser.Id, origChat.Id)
-	
+
 	instructionMsg := payload.TgPlSendMessage{
 		ChatId:    origChat.Id,
 		ParseMode: payload.ParseModeHTML,
 		Text:      "👮 <b>Set User Media Limit</b>\n\n📝 <b>How to set limits:</b>\n\n🔹 <b>Reply to user's message + send:</b>\n   <code>/setlimit [number]</code>\n\n🔹 <b>Or use user ID:</b>\n   <code>/setlimit [user_id] [number]</code>\n\n📋 <b>Examples:</b>\n• <code>/setlimit 5</code> (reply to user)\n• <code>/setlimit 123456789 10</code> (user ID)\n• <code>/setlimit 0</code> (remove limit)\n\n💡 <i>Tip: Reply to someone's message, then send the command for easiest setup!</i>",
 	}
-	
+
 	message.NewSendMessage(instructionMsg)
 }
 
 // handleGroupSettingsCallback handles the "Group Settings" button press
 func handleGroupSettingsCallback(origChat *response.TgChat, origUser *response.TgUser, messageId int) {
 	log.Printf("🏢 Admin %d opened group settings in chat %d", origUser.Id, origChat.Id)
-	
+
 	// Get current group settings
 	groupInfo, err := services.GetGroupLimitInfo(origChat.Id)
 	if err != nil {
@@ -3109,12 +3108,12 @@ func handleGroupSettingsCallback(origChat *response.TgChat, origUser *response.T
 		message.NewSendMessage(errorMsg)
 		return
 	}
-	
+
 	// Build settings message
 	var settingsText strings.Builder
 	settingsText.WriteString("🏢 <b>Group Settings</b>\n")
 	settingsText.WriteString(fmt.Sprintf("<i>Chat: %s</i>\n\n", html.EscapeString(origChat.Title)))
-	
+
 	// Group limit settings
 	settingsText.WriteString("📊 <b>Group Default Limit:</b>\n")
 	if groupInfo.DefaultDailyLimit == 0 {
@@ -3124,50 +3123,50 @@ func handleGroupSettingsCallback(origChat *response.TgChat, origUser *response.T
 		settingsText.WriteString(fmt.Sprintf("🔒 %d media items per day\n", groupInfo.DefaultDailyLimit))
 		settingsText.WriteString("📋 <b>Status:</b> Applied to users without individual limits\n")
 	}
-	
+
 	// Timezone settings
 	settingsText.WriteString(fmt.Sprintf("\n🌍 <b>Timezone:</b> %s\n", groupInfo.Timezone))
-	
+
 	// Get current time in group timezone
 	loc, err := time.LoadLocation(groupInfo.Timezone)
 	if err == nil {
 		currentTime := time.Now().In(loc)
 		settingsText.WriteString(fmt.Sprintf("🕐 <b>Current time:</b> %s\n", currentTime.Format("15:04:05 MST")))
-		
+
 		// Calculate next reset time
 		_, timeUntilReset, err := services.GetTimezoneAwareResetTime(origChat.Id)
 		if err == nil && timeUntilReset > 0 {
 			settingsText.WriteString(fmt.Sprintf("⏰ <b>Next limit reset:</b> %s\n", formatDuration(timeUntilReset)))
 		}
 	}
-	
+
 	// Management commands
 	settingsText.WriteString("\n⚙️ <b>Management Commands:</b>\n")
 	settingsText.WriteString("• <code>/setgrouplimit [number]</code> - Set group default limit\n")
 	settingsText.WriteString("• <code>/setgrouptimezone [timezone]</code> - Set group timezone\n")
 	settingsText.WriteString("• <code>/setlimit @user [number]</code> - Set individual user limit\n")
-	
+
 	// Examples
 	settingsText.WriteString("\n💡 <b>Examples:</b>\n")
 	settingsText.WriteString("• <code>/setgrouplimit 5</code> (5 items per day)\n")
 	settingsText.WriteString("• <code>/setgrouplimit 0</code> (remove limit)\n")
 	settingsText.WriteString("• <code>/setgrouptimezone Europe/London</code>\n")
 	settingsText.WriteString("• <code>/setgrouptimezone America/New_York</code>\n")
-	
+
 	// Footer
 	settingsText.WriteString("\n━━━━━━━━━━━━━━━━━━━━\n")
 	settingsText.WriteString("📈 Use buttons below to configure settings")
-	
+
 	// Create interactive keyboard for group settings
 	keyboard := createGroupSettingsKeyboard()
-	
+
 	settingsMsg := payload.TgPlSendMessage{
 		ChatId:      origChat.Id,
 		ParseMode:   payload.ParseModeHTML,
 		Text:        settingsText.String(),
 		ReplyMarkup: keyboard,
 	}
-	
+
 	message.NewSendMessage(settingsMsg)
 }
 
@@ -3205,7 +3204,7 @@ func createGroupSettingsKeyboard() *api.TgInlineKeyboardMarkup {
 			{Text: "⬅️ Back to Main Menu", CallbackData: "/help"},
 		},
 	}
-	
+
 	return &api.TgInlineKeyboardMarkup{
 		InlineKeyboard: buttons,
 	}
@@ -3232,7 +3231,7 @@ func createTimezoneMenuKeyboard() *api.TgInlineKeyboardMarkup {
 			{Text: "⬅️ Back to Settings", CallbackData: "/group_settings"},
 		},
 	}
-	
+
 	return &api.TgInlineKeyboardMarkup{
 		InlineKeyboard: buttons,
 	}
@@ -3261,7 +3260,7 @@ func createAmericasTimezoneKeyboard() *api.TgInlineKeyboardMarkup {
 			{Text: "⬅️ Back", CallbackData: "/timezone_menu"},
 		},
 	}
-	
+
 	return &api.TgInlineKeyboardMarkup{
 		InlineKeyboard: buttons,
 	}
@@ -3290,7 +3289,7 @@ func createEuropeTimezoneKeyboard() *api.TgInlineKeyboardMarkup {
 			{Text: "⬅️ Back", CallbackData: "/timezone_menu"},
 		},
 	}
-	
+
 	return &api.TgInlineKeyboardMarkup{
 		InlineKeyboard: buttons,
 	}
@@ -3319,7 +3318,7 @@ func createAsiaTimezoneKeyboard() *api.TgInlineKeyboardMarkup {
 			{Text: "⬅️ Back", CallbackData: "/timezone_menu"},
 		},
 	}
-	
+
 	return &api.TgInlineKeyboardMarkup{
 		InlineKeyboard: buttons,
 	}
@@ -3332,9 +3331,9 @@ func handleSetGroupLimitCallback(callbackQuery *response.TgCallbackQuery) {
 	if len(parts) != 2 {
 		return
 	}
-	
+
 	limitStr := parts[1]
-	
+
 	// Handle custom limit
 	if limitStr == "custom" {
 		customMsg := payload.TgPlSendMessage{
@@ -3345,20 +3344,20 @@ func handleSetGroupLimitCallback(callbackQuery *response.TgCallbackQuery) {
 		message.NewSendMessage(customMsg)
 		return
 	}
-	
+
 	// Parse limit value
 	limitValue, err := strconv.Atoi(limitStr)
 	if err != nil {
 		return
 	}
-	
+
 	// Set the group limit
 	err = services.SetGroupMediaLimit(callbackQuery.Message.Chat.Id, callbackQuery.Message.Chat.Title, limitValue)
 	if err != nil {
 		log.Printf("Error setting group limit: %v", err)
 		return
 	}
-	
+
 	// Send success message
 	var successText string
 	if limitValue == 0 {
@@ -3366,7 +3365,7 @@ func handleSetGroupLimitCallback(callbackQuery *response.TgCallbackQuery) {
 	} else {
 		successText = fmt.Sprintf("✅ <b>Group limit updated!</b>\n\n🔒 New limit: %d media items per day\n📋 Applied to all users without individual limits", limitValue)
 	}
-	
+
 	// Send success message with updated keyboard
 	newMsg := payload.TgPlSendMessage{
 		ChatId:      callbackQuery.Message.Chat.Id,
@@ -3385,17 +3384,17 @@ func handleTimezoneMenuCallback(origChat *response.TgChat, origUser *response.Tg
 		Text:        "🌍 <b>Select Timezone Region</b>\n\nChoose your region to set the group timezone:",
 		ReplyMarkup: createTimezoneMenuKeyboard(),
 	}
-	
+
 	message.NewSendMessage(timezoneMsg)
 }
 
 // handleTimezoneRegionCallback shows timezones for a specific region
 func handleTimezoneRegionCallback(callbackQuery *response.TgCallbackQuery) {
 	region := strings.TrimPrefix(callbackQuery.Data, "/tz_")
-	
+
 	var keyboard *api.TgInlineKeyboardMarkup
 	var regionName string
-	
+
 	switch region {
 	case "americas":
 		keyboard = createAmericasTimezoneKeyboard()
@@ -3445,14 +3444,14 @@ func handleTimezoneRegionCallback(callbackQuery *response.TgCallbackQuery) {
 	default:
 		return
 	}
-	
+
 	regionMsg := payload.TgPlSendMessage{
 		ChatId:      callbackQuery.Message.Chat.Id,
 		ParseMode:   payload.ParseModeHTML,
 		Text:        fmt.Sprintf("🌍 <b>%s Timezones</b>\n\nSelect your timezone:", regionName),
 		ReplyMarkup: keyboard,
 	}
-	
+
 	message.NewSendMessage(regionMsg)
 }
 
@@ -3460,30 +3459,30 @@ func handleTimezoneRegionCallback(callbackQuery *response.TgCallbackQuery) {
 func handleSetTimezoneCallback(callbackQuery *response.TgCallbackQuery) {
 	// Extract timezone from callback data
 	timezone := strings.TrimPrefix(callbackQuery.Data, "/setgrouptimezone_")
-	
+
 	// Set the group timezone
 	err := services.SetGroupTimezone(callbackQuery.Message.Chat.Id, callbackQuery.Message.Chat.Title, timezone)
 	if err != nil {
 		log.Printf("Error setting group timezone: %v", err)
 		return
 	}
-	
+
 	// Get current time in the new timezone
 	loc := loadTimezoneWithFallback(timezone)
 	currentTime := time.Now().In(loc)
-	
+
 	// Send success message
 	successText := fmt.Sprintf("✅ <b>Timezone Updated!</b>\n\n🌍 New timezone: %s\n🕐 Current time: %s\n\n⏰ Daily limits will now reset at midnight in this timezone.",
 		timezone,
 		currentTime.Format("15:04:05 MST"))
-	
+
 	successMsg := payload.TgPlSendMessage{
 		ChatId:      callbackQuery.Message.Chat.Id,
 		ParseMode:   payload.ParseModeHTML,
 		Text:        successText,
 		ReplyMarkup: createGroupSettingsKeyboard(),
 	}
-	
+
 	message.NewSendMessage(successMsg)
 }
 
@@ -3502,48 +3501,48 @@ func shouldEnforceLimit(userID int64, chatID int64, username string, messageID i
 		log.Printf("Error getting user limit: %v", err)
 		return false // Don't block on error
 	}
-	
+
 	// No limit set - allow processing
 	if limit == 0 {
 		return false
 	}
-	
+
 	// Check current usage
 	dailyCount, err := services.GetDailyMediaCount(userID, chatID)
 	if err != nil {
 		log.Printf("Error getting daily media count: %v", err)
 		return false // Don't block on error
 	}
-	
+
 	// User has exceeded limit
 	if dailyCount >= limit {
 		log.Printf("🚫 User %d has exceeded daily limit (%d/%d)", userID, dailyCount, limit)
-		
+
 		// Delete the message that triggered the limit
 		deletePayload := payload.TgPlDeleteMessage{
 			ChatId:    chatID,
 			MessageId: messageID,
 		}
 		message.NewDeleteMessage(deletePayload)
-		
+
 		// Get reset time information
 		resetTime, timeUntilReset, err := services.GetTimezoneAwareResetTime(chatID)
 		if err != nil {
 			log.Printf("Error getting reset time: %v", err)
 			timeUntilReset = 0
 		}
-		
+
 		// Build notification message
 		var notificationText strings.Builder
 		notificationText.WriteString(fmt.Sprintf("🚫 @%s, you've reached your daily media limit!\n\n", username))
 		notificationText.WriteString(fmt.Sprintf("📊 <b>Daily Limit:</b> %d media items\n", limit))
 		notificationText.WriteString(fmt.Sprintf("🔴 <b>Status:</b> Limit reached (%d/%d)\n", dailyCount, limit))
-		
+
 		if timeUntilReset > 0 {
 			notificationText.WriteString(fmt.Sprintf("⏰ <b>Resets in:</b> %s\n", formatDuration(timeUntilReset)))
 			notificationText.WriteString(fmt.Sprintf("📅 <b>Reset time:</b> %s\n", resetTime.Format("15:04 MST")))
 		}
-		
+
 		// Send notification
 		notificationMsg := payload.TgPlSendMessage{
 			ChatId:              chatID,
@@ -3552,10 +3551,10 @@ func shouldEnforceLimit(userID int64, chatID int64, username string, messageID i
 			DisableNotification: true,
 		}
 		message.NewSendMessage(notificationMsg)
-		
+
 		return true // Block processing
 	}
-	
+
 	return false // Allow processing
 }
 
@@ -3563,7 +3562,7 @@ func shouldEnforceLimit(userID int64, chatID int64, username string, messageID i
 func trackMediaSent(userID int64, username string, chatID int64, chatTitle string, url string, mediaType string) {
 	// Determine platform from URL
 	platform := getPlatformFromURL(url)
-	
+
 	// Record the media stat
 	err := services.RecordMediaStat(userID, username, chatID, chatTitle, platform, mediaType, url)
 	if err != nil {
@@ -3601,7 +3600,7 @@ func createPlatformSettingsKeyboard(chatID int64) (*api.TgInlineKeyboardMarkup, 
 	if err != nil {
 		return nil, err
 	}
-	
+
 	platforms := []struct {
 		Key   string
 		Name  string
@@ -3614,22 +3613,22 @@ func createPlatformSettingsKeyboard(chatID int64) (*api.TgInlineKeyboardMarkup, 
 		{"reddit", "Reddit", "🤖"},
 		{"facebook", "Facebook", "📘"},
 	}
-	
+
 	var buttons [][]api.TgInlineKeyboardButton
-	
+
 	// Create platform toggle buttons (2 per row)
 	for i := 0; i < len(platforms); i += 2 {
 		var row []api.TgInlineKeyboardButton
-		
+
 		for j := 0; j < 2 && i+j < len(platforms); j++ {
 			platform := platforms[i+j]
 			enabled := platformSettings[platform.Key]
-			
+
 			status := "❌"
 			if enabled {
 				status = "✅"
 			}
-			
+
 			button := api.TgInlineKeyboardButton{
 				Text:         fmt.Sprintf("%s %s %s", platform.Emoji, platform.Name, status),
 				CallbackData: fmt.Sprintf("/toggle_platform_%s", platform.Key),
@@ -3638,18 +3637,18 @@ func createPlatformSettingsKeyboard(chatID int64) (*api.TgInlineKeyboardMarkup, 
 		}
 		buttons = append(buttons, row)
 	}
-	
+
 	// Add control buttons
 	buttons = append(buttons, []api.TgInlineKeyboardButton{
 		{Text: "✅ Enable All", CallbackData: "/platform_enable_all"},
 		{Text: "❌ Disable All", CallbackData: "/platform_disable_all"},
 	})
-	
+
 	// Add back button
 	buttons = append(buttons, []api.TgInlineKeyboardButton{
 		{Text: "⬅️ Back to Group Settings", CallbackData: "/group_settings"},
 	})
-	
+
 	return &api.TgInlineKeyboardMarkup{
 		InlineKeyboard: buttons,
 	}, nil
@@ -3658,17 +3657,17 @@ func createPlatformSettingsKeyboard(chatID int64) (*api.TgInlineKeyboardMarkup, 
 // handlePlatformSettingsCallback handles the platform settings menu
 func handlePlatformSettingsCallback(origChat *response.TgChat, origUser *response.TgUser, messageId int) {
 	log.Printf("📱 Admin %d opened platform settings in chat %d", origUser.Id, origChat.Id)
-	
+
 	// Initialize settings if not exist
 	services.InitializeChatSettings(origChat.Id)
-	
+
 	// Get platform settings
 	platformSettings, err := services.GetChatPlatformSettings(origChat.Id)
 	if err != nil {
 		log.Printf("Error getting platform settings: %v", err)
 		return
 	}
-	
+
 	// Count enabled/disabled platforms
 	enabled, disabled := 0, 0
 	for _, isEnabled := range platformSettings {
@@ -3678,7 +3677,7 @@ func handlePlatformSettingsCallback(origChat *response.TgChat, origUser *respons
 			disabled++
 		}
 	}
-	
+
 	// Build settings message
 	var settingsText strings.Builder
 	settingsText.WriteString("📱 <b>Platform Settings</b>\n")
@@ -3686,24 +3685,23 @@ func handlePlatformSettingsCallback(origChat *response.TgChat, origUser *respons
 	settingsText.WriteString("🎯 <b>Configure which social media platforms the bot should process in this chat.</b>\n\n")
 	settingsText.WriteString(fmt.Sprintf("📊 <b>Status:</b> %d enabled, %d disabled\n\n", enabled, disabled))
 	settingsText.WriteString("💡 <i>Click platform buttons below to toggle on/off</i>")
-	
+
 	// Create keyboard
 	keyboard, err := createPlatformSettingsKeyboard(origChat.Id)
 	if err != nil {
 		log.Printf("Error creating platform settings keyboard: %v", err)
 		return
 	}
-	
+
 	settingsMsg := payload.TgPlSendMessage{
 		ChatId:      origChat.Id,
 		ParseMode:   payload.ParseModeHTML,
 		Text:        settingsText.String(),
 		ReplyMarkup: keyboard,
 	}
-	
+
 	message.NewSendMessage(settingsMsg)
 }
-
 
 // handleTogglePlatformCallback handles individual platform toggle
 func handleTogglePlatformCallback(callbackQuery response.TgCallbackQuery) {
@@ -3711,20 +3709,20 @@ func handleTogglePlatformCallback(callbackQuery response.TgCallbackQuery) {
 	platform := strings.TrimPrefix(callbackQuery.Data, "/toggle_platform_")
 	chatID := callbackQuery.Message.Chat.Id
 	userID := callbackQuery.From.Id
-	
+
 	log.Printf("📱 User %d toggling platform %s in chat %d", userID, platform, chatID)
-	
+
 	// Get current setting
 	currentSetting := services.IsPlatformEnabledForChat(chatID, platform)
 	newSetting := !currentSetting
-	
+
 	// Update platform setting
 	err := services.SetChatPlatformEnabled(chatID, platform, newSetting)
 	if err != nil {
 		log.Printf("Error updating platform setting: %v", err)
 		return
 	}
-	
+
 	// Refresh the platform settings menu
 	handlePlatformSettingsCallback(&callbackQuery.Message.Chat, &callbackQuery.From, callbackQuery.Message.MessageId)
 }
@@ -3733,18 +3731,18 @@ func handleTogglePlatformCallback(callbackQuery response.TgCallbackQuery) {
 func handlePlatformEnableAllCallback(callbackQuery response.TgCallbackQuery) {
 	chatID := callbackQuery.Message.Chat.Id
 	userID := callbackQuery.From.Id
-	
+
 	log.Printf("📱 User %d enabling all platforms in chat %d", userID, chatID)
-	
+
 	platforms := []string{"instagram", "tiktok", "twitter", "youtube", "reddit", "facebook"}
-	
+
 	for _, platform := range platforms {
 		err := services.SetChatPlatformEnabled(chatID, platform, true)
 		if err != nil {
 			log.Printf("Error enabling platform %s: %v", platform, err)
 		}
 	}
-	
+
 	// Refresh the platform settings menu
 	handlePlatformSettingsCallback(&callbackQuery.Message.Chat, &callbackQuery.From, callbackQuery.Message.MessageId)
 }
@@ -3753,47 +3751,47 @@ func handlePlatformEnableAllCallback(callbackQuery response.TgCallbackQuery) {
 func handlePlatformDisableAllCallback(callbackQuery response.TgCallbackQuery) {
 	chatID := callbackQuery.Message.Chat.Id
 	userID := callbackQuery.From.Id
-	
+
 	log.Printf("📱 User %d disabling all platforms in chat %d", userID, chatID)
-	
+
 	platforms := []string{"instagram", "tiktok", "twitter", "youtube", "reddit", "facebook"}
-	
+
 	for _, platform := range platforms {
 		err := services.SetChatPlatformEnabled(chatID, platform, false)
 		if err != nil {
 			log.Printf("Error disabling platform %s: %v", platform, err)
 		}
 	}
-	
+
 	// Refresh the platform settings menu
 	handlePlatformSettingsCallback(&callbackQuery.Message.Chat, &callbackQuery.From, callbackQuery.Message.MessageId)
 }
 
 // Description Settings Functions
 
-// handleDescriptionSettingsCallback handles the description settings menu  
+// handleDescriptionSettingsCallback handles the description settings menu
 func handleDescriptionSettingsCallback(origChat *response.TgChat, origUser *response.TgUser, messageId int) {
 	log.Printf("📝 User %d accessing description settings in chat %d", origUser.Id, origChat.Id)
-	
+
 	// Create keyboard
 	keyboard, err := createDescriptionSettingsKeyboard(origChat.Id)
 	if err != nil {
 		log.Printf("Error creating description settings keyboard: %v", err)
 		return
 	}
-	
+
 	// Get current settings for message
 	descriptionSettings, err := services.GetChatDescriptionSettings(origChat.Id)
 	if err != nil {
 		log.Printf("Error getting description settings: %v", err)
 		descriptionSettings = make(map[string]bool)
 	}
-	
+
 	// Count enabled/disabled descriptions
 	enabled := 0
 	disabled := 0
 	platforms := []string{"instagram", "tiktok", "twitter", "youtube", "reddit", "facebook"}
-	
+
 	for _, platform := range platforms {
 		if isEnabled, exists := descriptionSettings[platform]; !exists || isEnabled {
 			enabled++ // Default to enabled if not set
@@ -3801,7 +3799,7 @@ func handleDescriptionSettingsCallback(origChat *response.TgChat, origUser *resp
 			disabled++
 		}
 	}
-	
+
 	// Build settings message
 	var settingsText strings.Builder
 	settingsText.WriteString("📝 <b>Description Settings</b>\n")
@@ -3811,16 +3809,16 @@ func handleDescriptionSettingsCallback(origChat *response.TgChat, origUser *resp
 	settingsText.WriteString("🔇 <b>Disabled:</b> Shows only media + author info\n\n")
 	settingsText.WriteString(fmt.Sprintf("📊 <b>Status:</b> %d showing descriptions, %d minimal\n\n", enabled, disabled))
 	settingsText.WriteString("💡 <i>Click platform buttons below to toggle description visibility</i>")
-	
-	// Create message payload  
+
+	// Create message payload
 	msgPayload := payload.TgPlSendMessage{
-		ChatId:                origChat.Id,
-		ParseMode:            payload.ParseModeHTML,
-		Text:                 settingsText.String(),
-		ReplyMarkup:          keyboard,
+		ChatId:              origChat.Id,
+		ParseMode:           payload.ParseModeHTML,
+		Text:                settingsText.String(),
+		ReplyMarkup:         keyboard,
 		DisableNotification: true,
 	}
-	
+
 	// Send message
 	message.NewSendMessage(msgPayload)
 }
@@ -3833,7 +3831,7 @@ func createDescriptionSettingsKeyboard(chatID int64) (*api.TgInlineKeyboardMarku
 		log.Printf("Error getting description settings: %v", err)
 		descriptionSettings = make(map[string]bool)
 	}
-	
+
 	// Platform definitions with display names and emojis
 	platforms := []struct {
 		Key   string
@@ -3847,13 +3845,13 @@ func createDescriptionSettingsKeyboard(chatID int64) (*api.TgInlineKeyboardMarku
 		{"reddit", "Reddit", "🤖"},
 		{"facebook", "Facebook", "📘"},
 	}
-	
+
 	var rows [][]api.TgInlineKeyboardButton
-	
+
 	// Create platform toggle buttons (2 per row)
 	for i := 0; i < len(platforms); i += 2 {
 		var row []api.TgInlineKeyboardButton
-		
+
 		// First platform in row
 		platform1 := platforms[i]
 		enabled1 := true // Default to enabled
@@ -3864,13 +3862,13 @@ func createDescriptionSettingsKeyboard(chatID int64) (*api.TgInlineKeyboardMarku
 		if !enabled1 {
 			status1 = "🔇"
 		}
-		
+
 		button1 := api.TgInlineKeyboardButton{
 			Text:         fmt.Sprintf("%s %s %s", platform1.Emoji, platform1.Name, status1),
 			CallbackData: "/toggle_description_" + platform1.Key,
 		}
 		row = append(row, button1)
-		
+
 		// Second platform in row (if exists)
 		if i+1 < len(platforms) {
 			platform2 := platforms[i+1]
@@ -3882,28 +3880,28 @@ func createDescriptionSettingsKeyboard(chatID int64) (*api.TgInlineKeyboardMarku
 			if !enabled2 {
 				status2 = "🔇"
 			}
-			
+
 			button2 := api.TgInlineKeyboardButton{
 				Text:         fmt.Sprintf("%s %s %s", platform2.Emoji, platform2.Name, status2),
 				CallbackData: "/toggle_description_" + platform2.Key,
 			}
 			row = append(row, button2)
 		}
-		
+
 		rows = append(rows, row)
 	}
-	
+
 	// Add bulk action buttons
 	rows = append(rows, []api.TgInlineKeyboardButton{
 		{Text: "✅ Enable All Descriptions", CallbackData: "/description_enable_all"},
 		{Text: "🔇 Disable All Descriptions", CallbackData: "/description_disable_all"},
 	})
-	
+
 	// Add back button
 	rows = append(rows, []api.TgInlineKeyboardButton{
 		{Text: "🔙 Back to Settings", CallbackData: "/start"},
 	})
-	
+
 	return &api.TgInlineKeyboardMarkup{
 		InlineKeyboard: rows,
 	}, nil
@@ -3915,24 +3913,24 @@ func handleToggleDescriptionCallback(callbackQuery response.TgCallbackQuery) {
 	platform := strings.TrimPrefix(callbackQuery.Data, "/toggle_description_")
 	chatID := callbackQuery.Message.Chat.Id
 	userID := callbackQuery.From.Id
-	
+
 	// Get current state
 	currentState := services.IsDescriptionEnabledForChat(chatID, platform)
 	newState := !currentState
-	
+
 	// Toggle setting
 	err := services.SetChatDescriptionEnabled(chatID, platform, newState)
 	if err != nil {
 		log.Printf("Error toggling description for platform %s: %v", platform, err)
 		return
 	}
-	
+
 	action := "enabled"
 	if !newState {
 		action = "disabled"
 	}
 	log.Printf("📝 User %d %s descriptions for %s in chat %d", userID, action, platform, chatID)
-	
+
 	// Refresh the description settings menu
 	handleDescriptionSettingsCallback(&callbackQuery.Message.Chat, &callbackQuery.From, callbackQuery.Message.MessageId)
 }
@@ -3941,18 +3939,18 @@ func handleToggleDescriptionCallback(callbackQuery response.TgCallbackQuery) {
 func handleDescriptionEnableAllCallback(callbackQuery response.TgCallbackQuery) {
 	chatID := callbackQuery.Message.Chat.Id
 	userID := callbackQuery.From.Id
-	
+
 	log.Printf("📝 User %d enabling descriptions for all platforms in chat %d", userID, chatID)
-	
+
 	platforms := []string{"instagram", "tiktok", "twitter", "youtube", "reddit", "facebook"}
-	
+
 	for _, platform := range platforms {
 		err := services.SetChatDescriptionEnabled(chatID, platform, true)
 		if err != nil {
 			log.Printf("Error enabling descriptions for platform %s: %v", platform, err)
 		}
 	}
-	
+
 	// Refresh the description settings menu
 	handleDescriptionSettingsCallback(&callbackQuery.Message.Chat, &callbackQuery.From, callbackQuery.Message.MessageId)
 }
@@ -3961,9 +3959,9 @@ func handleDescriptionEnableAllCallback(callbackQuery response.TgCallbackQuery) 
 func handleDescriptionDisableAllCallback(callbackQuery response.TgCallbackQuery) {
 	chatID := callbackQuery.Message.Chat.Id
 	userID := callbackQuery.From.Id
-	
+
 	log.Printf("📝 User %d disabling descriptions for all platforms in chat %d", userID, chatID)
-	
+
 	platforms := []string{"instagram", "tiktok", "twitter", "youtube", "reddit", "facebook"}
 
 	for _, platform := range platforms {
@@ -4046,9 +4044,9 @@ func handleOwnerCommand(origMessage *response.TgMessage, origChat *response.TgCh
 	keyboard := createOwnerMenuKeyboard()
 
 	msg := payload.TgPlSendMessage{
-		ChatId:    origChat.Id,
-		ParseMode: payload.ParseModeHTML,
-		Text:      text,
+		ChatId:      origChat.Id,
+		ParseMode:   payload.ParseModeHTML,
+		Text:        text,
 		ReplyMarkup: keyboard,
 	}
 
@@ -4958,4 +4956,3 @@ func createBackToBroadcastKeyboard(postID int) *api.TgInlineKeyboardMarkup {
 		},
 	}
 }
-

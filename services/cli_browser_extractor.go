@@ -159,7 +159,7 @@ func (cbe *CliBrowserExtractor) extractTwitterImagesFromHTML(html, twitterURL st
 	}
 
 	log.Printf("🖼️ Found %d individual Twitter images (from %d total URLs)", len(tweetImages), len(imageURLs))
-	
+
 	// Debug: log if we found any pbs.twimg.com at all
 	if len(imageURLs) == 0 {
 		pbsCount := strings.Count(html, "pbs.twimg.com")
@@ -173,7 +173,7 @@ func (cbe *CliBrowserExtractor) extractTwitterImagesFromHTML(html, twitterURL st
 
 	// Extract caption from HTML
 	caption := cbe.extractTwitterCaption(html)
-	
+
 	// If caption extraction failed, fall back to Twitter extractor for text
 	if caption == "" {
 		log.Printf("🔍 CLI browser caption extraction failed, trying Twitter extractor for text")
@@ -276,10 +276,10 @@ func (cbe *CliBrowserExtractor) extractTwitterCaption(html string) string {
 			caption := strings.TrimSpace(match[1])
 			if caption != "" && caption != "null" && len(caption) > 10 {
 				// Skip if it's just domain names or generic text
-				if !strings.Contains(strings.ToLower(caption), "twitter") && 
-				   !strings.Contains(strings.ToLower(caption), "log in") &&
-				   !strings.Contains(strings.ToLower(caption), "sign up") {
-					
+				if !strings.Contains(strings.ToLower(caption), "twitter") &&
+					!strings.Contains(strings.ToLower(caption), "log in") &&
+					!strings.Contains(strings.ToLower(caption), "sign up") {
+
 					// Clean and decode the caption
 					caption = cbe.cleanTweetText(caption)
 					if len(caption) > 10 {
@@ -295,10 +295,10 @@ func (cbe *CliBrowserExtractor) extractTwitterCaption(html string) string {
 
 func (cbe *CliBrowserExtractor) cleanTweetText(rawText string) string {
 	text := rawText
-	
+
 	// Remove HTML tags
 	text = regexp.MustCompile(`<[^>]*>`).ReplaceAllString(text, "")
-	
+
 	// Decode HTML entities
 	text = strings.ReplaceAll(text, "&amp;", "&")
 	text = strings.ReplaceAll(text, "&lt;", "<")
@@ -306,21 +306,21 @@ func (cbe *CliBrowserExtractor) cleanTweetText(rawText string) string {
 	text = strings.ReplaceAll(text, "&quot;", "\"")
 	text = strings.ReplaceAll(text, "&#39;", "'")
 	text = strings.ReplaceAll(text, "&#34;", "\"")
-	
+
 	// Decode JSON escape sequences
 	text = strings.ReplaceAll(text, `\"`, `"`)
 	text = strings.ReplaceAll(text, `\\n`, "\n")
 	text = strings.ReplaceAll(text, `\\t`, "\t")
 	text = strings.ReplaceAll(text, `\\r`, "\r")
-	
+
 	// Remove pic.twitter.com links
 	picTwitterPattern := regexp.MustCompile(`\s*pic\.twitter\.com/[a-zA-Z0-9]+\s*`)
 	text = picTwitterPattern.ReplaceAllString(text, "")
-	
+
 	// Clean up multiple spaces and newlines
 	text = regexp.MustCompile(`\s+`).ReplaceAllString(text, " ")
 	text = strings.TrimSpace(text)
-	
+
 	return text
 }
 
@@ -331,11 +331,11 @@ func (cbe *CliBrowserExtractor) downloadMediaFile(mediaURL, platform, mediaType 
 	if mediaType == "video" {
 		extension = ".mp4"
 	}
-	
+
 	filename := filepath.Join(cbe.tempDir, fmt.Sprintf("%d_%s_%s_%d%s", timestamp, platform, mediaType, index, extension))
 
 	// Download file
-	cmd := exec.Command("curl", "-s", "-o", filename, 
+	cmd := exec.Command("curl", "-s", "-o", filename,
 		"-H", "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
 		"-H", "Referer: https://twitter.com/",
 		mediaURL)
@@ -395,12 +395,12 @@ func (cbe *CliBrowserExtractor) Extract9GAGContent(ninegagURL string) ([]*MediaI
 		"--disable-features=VizDisplayCompositor",
 		"--disable-extensions",
 		"--disable-plugins",
-		"--disable-images", // Speed up loading
+		"--disable-images",        // Speed up loading
 		"--disable-dev-shm-usage", // Prevent shared memory issues
 		"--no-first-run",
 		"--timeout=25", // 25 second timeout
 	}
-	
+
 	// Add 9GAG cookies if available
 	ninegagCookiesPath := filepath.Join(cbe.workingDir, "9gag_cookies.txt")
 	if _, err := os.Stat(ninegagCookiesPath); err == nil {
@@ -409,7 +409,7 @@ func (cbe *CliBrowserExtractor) Extract9GAGContent(ninegagURL string) ([]*MediaI
 	} else {
 		log.Printf("⚠️ 9GAG cookies not found at %s", ninegagCookiesPath)
 	}
-	
+
 	chromeArgs = append(chromeArgs, ninegagURL)
 	cmd := exec.Command(chromePath, chromeArgs...)
 
@@ -423,11 +423,11 @@ func (cbe *CliBrowserExtractor) Extract9GAGContent(ninegagURL string) ([]*MediaI
 	if err != nil {
 		// If it failed, try without virtual-time-budget (simpler approach)
 		log.Printf("⚠️ Chrome with virtual-time-budget failed, trying without virtual-time-budget")
-		
+
 		// Build simpler Chrome arguments without virtual-time-budget
 		chromeArgsSimple := []string{
 			"--headless",
-			"--disable-gpu", 
+			"--disable-gpu",
 			"--no-sandbox",
 			"--dump-dom",
 			"--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
@@ -436,21 +436,21 @@ func (cbe *CliBrowserExtractor) Extract9GAGContent(ninegagURL string) ([]*MediaI
 			"--no-first-run",
 			"--timeout=15",
 		}
-		
+
 		// Add 9GAG cookies if available
 		if _, err := os.Stat(ninegagCookiesPath); err == nil {
 			chromeArgsSimple = append(chromeArgsSimple, "--cookie-file="+ninegagCookiesPath)
 		}
-		
+
 		chromeArgsSimple = append(chromeArgsSimple, ninegagURL)
 		cmdSimple := exec.Command(chromePath, chromeArgsSimple...)
-		
+
 		ctxSimple, cancelSimple := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancelSimple()
 		cmdSimple = exec.CommandContext(ctxSimple, cmdSimple.Args[0], cmdSimple.Args[1:]...)
-		
+
 		output, err = cmdSimple.Output()
-		
+
 		if err != nil {
 			// As last resort, try simple HTTP request with user agent
 			log.Printf("⚠️ Chrome with JS also failed, trying simple HTTP request")
@@ -460,7 +460,7 @@ func (cbe *CliBrowserExtractor) Extract9GAGContent(ninegagURL string) ([]*MediaI
 
 	html := string(output)
 	log.Printf("📄 Chrome rendered 9GAG HTML: %d bytes", len(html))
-	
+
 	// Debug: log first 200 chars of HTML if it's small
 	if len(html) < 500 {
 		log.Printf("🔍 HTML content preview: %s", html)
@@ -577,7 +577,7 @@ func (cbe *CliBrowserExtractor) extract9GAGFromHTML(html, ninegagURL string) ([]
 		}
 
 		mediaInfo := &MediaInfo{
-			Type:     "video", 
+			Type:     "video",
 			URL:      ninegagURL,
 			Caption:  caption,
 			Filename: filename,
@@ -631,23 +631,23 @@ func (cbe *CliBrowserExtractor) extract9GAGCaption(html string) string {
 // trySimple9GAGHttp attempts a simple HTTP request as last resort
 func (cbe *CliBrowserExtractor) trySimple9GAGHttp(ninegagURL string) ([]*MediaInfo, error) {
 	log.Printf("🌐 Trying simple HTTP request for 9GAG as last resort")
-	
+
 	// Use curl with proper headers
-	cmd := exec.Command("curl", "-s", "-L", 
+	cmd := exec.Command("curl", "-s", "-L",
 		"-H", "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
 		"-H", "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
 		"-H", "Accept-Language: en-US,en;q=0.5",
 		"--max-time", "30",
 		ninegagURL)
-	
+
 	output, err := cmd.Output()
 	if err != nil {
 		return nil, fmt.Errorf("simple HTTP request failed: %v", err)
 	}
-	
+
 	html := string(output)
 	log.Printf("📄 Simple HTTP got %d bytes of HTML", len(html))
-	
+
 	// Try to extract media from the HTML
 	return cbe.extract9GAGFromHTML(html, ninegagURL)
 }
@@ -706,7 +706,7 @@ func (cbe *CliBrowserExtractor) RenderPageForTwitterThread(twitterURL string) (s
 		"--window-size=1920,1080",
 		"--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
 	}
-	
+
 	// Add Twitter cookies if available for better authentication and thread loading
 	twitterCookiesPath := filepath.Join(cbe.workingDir, "cookies", "twitter_cookies.txt")
 	if _, err := os.Stat(twitterCookiesPath); err == nil {
@@ -715,16 +715,16 @@ func (cbe *CliBrowserExtractor) RenderPageForTwitterThread(twitterURL string) (s
 	} else {
 		log.Printf("⚠️ [AUTO-THREAD] Twitter cookies not found at %s", twitterCookiesPath)
 	}
-	
+
 	// Try to modify URL to get better thread loading
 	// Sometimes adding specific parameters helps load the full conversation
 	enhancedURL := twitterURL
 	if !strings.Contains(twitterURL, "?") {
 		enhancedURL += "?conversation_id=" + extractTweetID(twitterURL)
 	}
-	
+
 	log.Printf("🔍 [AUTO-THREAD] Using enhanced URL for thread loading: %s", enhancedURL)
-	
+
 	args = append(args, "--dump-dom", enhancedURL)
 
 	log.Printf("🌐 [AUTO-THREAD] Executing Chrome: %s %v", chromePath, args)
@@ -734,7 +734,7 @@ func (cbe *CliBrowserExtractor) RenderPageForTwitterThread(twitterURL string) (s
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, chromePath, args...)
-	
+
 	// Capture both stdout and stderr
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -771,7 +771,7 @@ func (cbe *CliBrowserExtractor) ExtractYouTubeCommunityPost(youtubePostURL strin
 	// Find Chrome executable
 	chromePaths := []string{
 		"/usr/bin/google-chrome",
-		"/usr/bin/google-chrome-stable", 
+		"/usr/bin/google-chrome-stable",
 		"/usr/bin/chromium-browser",
 		"/usr/bin/chromium",
 		"/opt/google/chrome/chrome",
@@ -796,28 +796,28 @@ func (cbe *CliBrowserExtractor) ExtractYouTubeCommunityPost(youtubePostURL strin
 
 	// Enhanced Chrome arguments for YouTube community posts
 	chromeArgs := []string{
-		"--headless=new",                               // Use new headless mode
+		"--headless=new", // Use new headless mode
 		"--no-sandbox",
 		"--disable-gpu",
 		"--disable-dev-shm-usage",
 		"--disable-extensions",
 		"--no-first-run",
 		"--disable-default-apps",
-		"--virtual-time-budget=45000",                  // Extended time for YouTube loading
+		"--virtual-time-budget=45000", // Extended time for YouTube loading
 		"--run-all-compositor-stages-before-draw",
 		"--enable-automation",
 		"--disable-background-timer-throttling",
-		"--disable-backgrounding-occluded-windows", 
+		"--disable-backgrounding-occluded-windows",
 		"--disable-renderer-backgrounding",
 		"--disable-features=TranslateUI,VizDisplayCompositor",
 		"--user-data-dir=" + os.TempDir(),
 		"--window-size=1920,1080",
-		"--disable-web-security",                       // Allow cross-origin requests
+		"--disable-web-security", // Allow cross-origin requests
 		"--disable-features=VizDisplayCompositor",
 		"--disable-blink-features=AutomationControlled", // Hide automation
 		"--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
 	}
-	
+
 	// Add YouTube cookies if available for better access
 	youtubeCookiesPath := filepath.Join(cbe.workingDir, "youtube_cookies.txt")
 	if _, err := os.Stat(youtubeCookiesPath); err == nil {
@@ -826,7 +826,7 @@ func (cbe *CliBrowserExtractor) ExtractYouTubeCommunityPost(youtubePostURL strin
 	} else {
 		log.Printf("⚠️ YouTube cookies not found at %s", youtubeCookiesPath)
 	}
-	
+
 	chromeArgs = append(chromeArgs, "--dump-dom", youtubePostURL)
 
 	log.Printf("🌐 Executing enhanced Chrome for YouTube community post: %s %v", chromePath, chromeArgs)
@@ -836,7 +836,7 @@ func (cbe *CliBrowserExtractor) ExtractYouTubeCommunityPost(youtubePostURL strin
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, chromePath, chromeArgs...)
-	
+
 	// Capture both stdout and stderr
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -847,7 +847,7 @@ func (cbe *CliBrowserExtractor) ExtractYouTubeCommunityPost(youtubePostURL strin
 	if err != nil {
 		log.Printf("❌ Enhanced Chrome execution failed: %v", err)
 		log.Printf("❌ Chrome stderr: %s", stderr.String())
-		
+
 		// Try fallback approach without virtual-time-budget
 		log.Printf("🔄 Trying fallback approach without virtual-time-budget")
 		return cbe.extractYouTubeCommunityPostFallback(youtubePostURL, chromePath)
@@ -863,13 +863,13 @@ func (cbe *CliBrowserExtractor) ExtractYouTubeCommunityPost(youtubePostURL strin
 
 	// Extract content from rendered HTML
 	mediaInfos, err := cbe.extractYouTubeCommunityPostFromHTML(html, youtubePostURL)
-	
+
 	// If browser extraction failed, try third-party API fallback
 	if err != nil || len(mediaInfos) == 0 {
 		log.Printf("🔄 Browser extraction failed/empty, trying YouTube operational API fallback")
 		return cbe.extractYouTubeCommunityPostFromAPI(youtubePostURL)
 	}
-	
+
 	return mediaInfos, err
 }
 
@@ -902,7 +902,7 @@ func (cbe *CliBrowserExtractor) extractYouTubeCommunityPostFallback(youtubePostU
 
 	cmd := exec.CommandContext(ctx, chromePath, chromeArgsFallback...)
 	output, err := cmd.Output()
-	
+
 	if err != nil {
 		return nil, fmt.Errorf("fallback Chrome execution failed: %v", err)
 	}
@@ -911,13 +911,13 @@ func (cbe *CliBrowserExtractor) extractYouTubeCommunityPostFallback(youtubePostU
 	log.Printf("✅ Fallback Chrome rendered %d bytes of HTML", len(html))
 
 	mediaInfos, err := cbe.extractYouTubeCommunityPostFromHTML(html, youtubePostURL)
-	
+
 	// If fallback browser extraction also failed, try third-party API
 	if err != nil || len(mediaInfos) == 0 {
 		log.Printf("🔄 Fallback browser extraction failed/empty, trying YouTube operational API")
 		return cbe.extractYouTubeCommunityPostFromAPI(youtubePostURL)
 	}
-	
+
 	return mediaInfos, err
 }
 
@@ -957,13 +957,13 @@ func (cbe *CliBrowserExtractor) extractYouTubeCommunityPostFromHTML(html, youtub
 	seen := make(map[string]bool)
 	for _, url := range imageURLs {
 		// Skip profile pictures and channel avatars
-		if !strings.Contains(url, "s48-") && !strings.Contains(url, "s88-") && 
-		   !strings.Contains(url, "default") && !strings.Contains(url, "avatar") {
+		if !strings.Contains(url, "s48-") && !strings.Contains(url, "s88-") &&
+			!strings.Contains(url, "default") && !strings.Contains(url, "avatar") {
 			// Clean URL (remove HTML entities)
 			cleanURL := strings.ReplaceAll(url, "&amp;", "&")
 			// Upgrade to higher quality if possible
 			cleanURL = cbe.upgradeYouTubeImageURL(cleanURL)
-			
+
 			if !seen[cleanURL] {
 				communityImages = append(communityImages, cleanURL)
 				seen[cleanURL] = true
@@ -979,14 +979,14 @@ func (cbe *CliBrowserExtractor) extractYouTubeCommunityPostFromHTML(html, youtub
 	// If no images found, try alternative extraction methods
 	if len(communityImages) == 0 {
 		log.Printf("🔍 No images found with standard patterns, trying alternative extraction")
-		
+
 		// Look for any YouTube-hosted images in the HTML
 		alternativePatterns := []string{
 			`src="(https://[^"]*\.ytimg\.com/[^"]*)"`,
 			`src="(https://[^"]*\.ggpht\.com/[^"]*)"`,
 			`src="(https://[^"]*\.googleusercontent\.com/[^"]*)"`,
 		}
-		
+
 		for _, pattern := range alternativePatterns {
 			re := regexp.MustCompile(pattern)
 			matches := re.FindAllStringSubmatch(html, -1)
@@ -1000,7 +1000,7 @@ func (cbe *CliBrowserExtractor) extractYouTubeCommunityPostFromHTML(html, youtub
 				}
 			}
 		}
-		
+
 		log.Printf("🔍 Alternative extraction found %d additional images", len(communityImages))
 	}
 
@@ -1049,7 +1049,7 @@ func (cbe *CliBrowserExtractor) upgradeYouTubeImageURL(url string) string {
 	url = strings.ReplaceAll(url, "=w88", "=w800")  // Width medium to large
 	url = strings.ReplaceAll(url, "=h48", "=h800")  // Height small to large
 	url = strings.ReplaceAll(url, "=h88", "=h800")  // Height medium to large
-	
+
 	// For ytimg.com URLs, try to get max resolution
 	if strings.Contains(url, "ytimg.com") {
 		if !strings.Contains(url, "maxresdefault") && !strings.Contains(url, "hqdefault") {
@@ -1059,7 +1059,7 @@ func (cbe *CliBrowserExtractor) upgradeYouTubeImageURL(url string) string {
 			url = strings.ReplaceAll(url, "sddefault.jpg", "maxresdefault.jpg")
 		}
 	}
-	
+
 	return url
 }
 
@@ -1092,8 +1092,8 @@ func (cbe *CliBrowserExtractor) extractYouTubeCommunityCaption(html string) stri
 			if caption != "" && caption != "null" && len(caption) > 5 {
 				// Skip generic YouTube text
 				if !strings.Contains(strings.ToLower(caption), "youtube") ||
-				   !strings.Contains(strings.ToLower(caption), "sign in") ||
-				   len(caption) > 50 {
+					!strings.Contains(strings.ToLower(caption), "sign in") ||
+					len(caption) > 50 {
 					// Clean and decode the caption
 					caption = cbe.cleanYouTubeText(caption)
 					if len(caption) > 5 {
@@ -1110,10 +1110,10 @@ func (cbe *CliBrowserExtractor) extractYouTubeCommunityCaption(html string) stri
 // cleanYouTubeText cleans and decodes YouTube community post text
 func (cbe *CliBrowserExtractor) cleanYouTubeText(rawText string) string {
 	text := rawText
-	
+
 	// Remove HTML tags
 	text = regexp.MustCompile(`<[^>]*>`).ReplaceAllString(text, "")
-	
+
 	// Decode HTML entities
 	text = strings.ReplaceAll(text, "&amp;", "&")
 	text = strings.ReplaceAll(text, "&lt;", "<")
@@ -1122,17 +1122,17 @@ func (cbe *CliBrowserExtractor) cleanYouTubeText(rawText string) string {
 	text = strings.ReplaceAll(text, "&#39;", "'")
 	text = strings.ReplaceAll(text, "&#34;", "\"")
 	text = strings.ReplaceAll(text, "&nbsp;", " ")
-	
+
 	// Decode JSON escape sequences
 	text = strings.ReplaceAll(text, `\"`, `"`)
 	text = strings.ReplaceAll(text, `\\n`, "\n")
 	text = strings.ReplaceAll(text, `\\t`, "\t")
 	text = strings.ReplaceAll(text, `\\r`, "\r")
-	
+
 	// Clean up multiple spaces and newlines
 	text = regexp.MustCompile(`\s+`).ReplaceAllString(text, " ")
 	text = strings.TrimSpace(text)
-	
+
 	return text
 }
 
@@ -1141,7 +1141,7 @@ type YouTubeOperationalAPIResponse struct {
 	Items []struct {
 		ID      string `json:"id"`
 		Snippet struct {
-			Text            string `json:"text"`
+			Text              string `json:"text"`
 			AuthorDisplayName string `json:"authorDisplayName"`
 			AuthorChannelURL  string `json:"authorChannelUrl"`
 			PublishedAt       string `json:"publishedAt"`
@@ -1159,16 +1159,16 @@ type YouTubeOperationalAPIResponse struct {
 // extractYouTubeCommunityPostFromAPI uses YouTube operational API as fallback
 func (cbe *CliBrowserExtractor) extractYouTubeCommunityPostFromAPI(youtubePostURL string) ([]*MediaInfo, error) {
 	log.Printf("🌐 Using YouTube operational API for community post extraction")
-	
+
 	// Extract post ID from URL
 	postID := extractYouTubePostID(youtubePostURL)
 	if postID == "" {
 		return nil, fmt.Errorf("unable to extract post ID from URL: %s", youtubePostURL)
 	}
-	
+
 	// Call YouTube operational API
 	apiURL := fmt.Sprintf("https://yt.lemnoslife.com/community?part=snippet,contentDetails&id=%s", postID)
-	
+
 	req, err := http.NewRequest("GET", apiURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create API request: %v", err)
@@ -1181,28 +1181,28 @@ func (cbe *CliBrowserExtractor) extractYouTubeCommunityPostFromAPI(youtubePostUR
 		return nil, fmt.Errorf("API request failed: %v", err)
 	}
 	defer resp.Body.Close()
-	
+
 	if resp.StatusCode != 200 {
 		return nil, fmt.Errorf("API returned status %d", resp.StatusCode)
 	}
-	
+
 	body, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read API response: %v", err)
 	}
-	
+
 	var apiResponse YouTubeOperationalAPIResponse
 	if err := json.Unmarshal(body, &apiResponse); err != nil {
 		return nil, fmt.Errorf("failed to parse API response: %v", err)
 	}
-	
+
 	if len(apiResponse.Items) == 0 {
 		return nil, fmt.Errorf("no community post data found in API response")
 	}
-	
+
 	var mediaInfos []*MediaInfo
 	item := apiResponse.Items[0]
-	
+
 	// Format caption with author information
 	caption := ""
 	if item.Snippet.AuthorDisplayName != "" {
@@ -1210,23 +1210,23 @@ func (cbe *CliBrowserExtractor) extractYouTubeCommunityPostFromAPI(youtubePostUR
 	} else {
 		caption = item.Snippet.Text
 	}
-	
+
 	// Download images if available
 	if len(item.ContentDetails.Images) > 0 {
 		log.Printf("🖼️ API found %d images in community post", len(item.ContentDetails.Images))
-		
+
 		for i, image := range item.ContentDetails.Images {
 			// Skip very small images (likely thumbnails)
 			if image.Width < 100 || image.Height < 100 {
 				continue
 			}
-			
+
 			filename, err := cbe.downloadMediaFile(image.URL, "youtube", "photo", i)
 			if err != nil {
 				log.Printf("❌ Failed to download YouTube API image %d: %v", i+1, err)
 				continue
 			}
-			
+
 			mediaInfo := &MediaInfo{
 				Type:     "photo",
 				URL:      youtubePostURL,
@@ -1236,7 +1236,7 @@ func (cbe *CliBrowserExtractor) extractYouTubeCommunityPostFromAPI(youtubePostUR
 			mediaInfos = append(mediaInfos, mediaInfo)
 		}
 	}
-	
+
 	// If no images were downloaded but we have text, return text-only
 	if len(mediaInfos) == 0 && caption != "" {
 		log.Printf("📝 API: No images downloaded, returning text-only content")
@@ -1247,11 +1247,11 @@ func (cbe *CliBrowserExtractor) extractYouTubeCommunityPostFromAPI(youtubePostUR
 		}
 		mediaInfos = append(mediaInfos, textMediaInfo)
 	}
-	
+
 	if len(mediaInfos) == 0 {
 		return nil, fmt.Errorf("no content extracted from YouTube operational API")
 	}
-	
+
 	log.Printf("✅ YouTube operational API extracted %d media items", len(mediaInfos))
 	return mediaInfos, nil
 }

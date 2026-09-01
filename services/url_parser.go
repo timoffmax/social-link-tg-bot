@@ -16,7 +16,7 @@ func ExtractInstagramUsername(url string) string {
 		`instagram\.com/([^/]+)/(?:p|reel|tv)/`,
 		`instagram\.com/stories/([^/]+)/`,
 	}
-	
+
 	for _, pattern := range patterns {
 		re := regexp.MustCompile(pattern)
 		matches := re.FindStringSubmatch(url)
@@ -40,7 +40,7 @@ func ExtractTikTokUsername(url string) string {
 		`tiktok\.com/@([^/]+)`,
 		`tiktok\.com/([^/]+)/video/`,
 	}
-	
+
 	for _, pattern := range patterns {
 		re := regexp.MustCompile(pattern)
 		matches := re.FindStringSubmatch(url)
@@ -65,7 +65,7 @@ func ExtractYouTubeChannel(url string) string {
 		`youtube\.com/c/([^/]+)`,
 		`youtube\.com/user/([^/]+)`,
 	}
-	
+
 	for _, pattern := range patterns {
 		re := regexp.MustCompile(pattern)
 		matches := re.FindStringSubmatch(url)
@@ -82,11 +82,11 @@ func ExtractRedditUsername(url string) string {
 	// https://www.reddit.com/r/subreddit/comments/ID/title/
 	// https://www.reddit.com/user/username/comments/ID/title/
 	patterns := []string{
-		`reddit\.com/r/([^/]+)`,      // Subreddit
-		`reddit\.com/user/([^/]+)`,    // User post
-		`reddit\.com/u/([^/]+)`,       // User post (short)
+		`reddit\.com/r/([^/]+)`,    // Subreddit
+		`reddit\.com/user/([^/]+)`, // User post
+		`reddit\.com/u/([^/]+)`,    // User post (short)
 	}
-	
+
 	for _, pattern := range patterns {
 		re := regexp.MustCompile(pattern)
 		matches := re.FindStringSubmatch(url)
@@ -113,21 +113,21 @@ func ExtractFacebookUsername(url string) string {
 		`facebook\.com/([^/?]+)/?(?:posts|photos|videos)?`,
 		`facebook\.com/pages/([^/]+)`,
 	}
-	
+
 	for _, pattern := range patterns {
 		re := regexp.MustCompile(pattern)
 		matches := re.FindStringSubmatch(url)
 		if len(matches) > 1 {
 			username := matches[1]
 			// Skip special paths
-			if username != "pages" && username != "groups" && username != "watch" && 
-			   username != "profile.php" && username != "photo.php" && username != "video.php" && 
-			   username != "share" && username != "reel" && username != "stories" {
+			if username != "pages" && username != "groups" && username != "watch" &&
+				username != "profile.php" && username != "photo.php" && username != "video.php" &&
+				username != "share" && username != "reel" && username != "stories" {
 				return username
 			}
 		}
 	}
-	
+
 	// Handle numeric profiles
 	if strings.Contains(url, "profile.php?id=") {
 		re := regexp.MustCompile(`id=(\d+)`)
@@ -136,7 +136,6 @@ func ExtractFacebookUsername(url string) string {
 			return "profile:" + matches[1]
 		}
 	}
-	
+
 	return ""
 }
-

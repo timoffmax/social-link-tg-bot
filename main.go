@@ -2,9 +2,9 @@ package main
 
 import (
 	"flag"
-	"log"
 	"github.com/timoffmax/social-link-bot/app"
 	"github.com/timoffmax/social-link-bot/services"
+	"log"
 )
 
 func main() {

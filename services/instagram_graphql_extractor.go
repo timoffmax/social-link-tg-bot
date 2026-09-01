@@ -28,15 +28,15 @@ func NewInstagramGraphQLExtractor(tempDir string) *InstagramGraphQLExtractor {
 // ExtractViaGraphQL tries to extract Instagram media using GraphQL API
 func (e *InstagramGraphQLExtractor) ExtractViaGraphQL(instagramURL string) ([]*MediaInfo, error) {
 	log.Printf("🔍 Trying Instagram GraphQL approach for: %s", instagramURL)
-	
+
 	// Extract shortcode from URL
 	shortcode := e.extractShortcode(instagramURL)
 	if shortcode == "" {
 		return nil, fmt.Errorf("failed to extract shortcode from URL")
 	}
-	
+
 	log.Printf("📝 Extracted shortcode: %s", shortcode)
-	
+
 	// Try different API endpoints
 	endpoints := []struct {
 		name string
@@ -55,7 +55,7 @@ func (e *InstagramGraphQLExtractor) ExtractViaGraphQL(instagramURL string) ([]*M
 			url:  fmt.Sprintf("https://www.instagram.com/p/%s/?__a=1&__d=dis", shortcode),
 		},
 	}
-	
+
 	for _, endpoint := range endpoints {
 		log.Printf("🔄 Trying %s endpoint", endpoint.name)
 
@@ -73,23 +73,23 @@ func (e *InstagramGraphQLExtractor) ExtractViaGraphQL(instagramURL string) ([]*M
 			continue
 		}
 		defer resp.Body.Close()
-		
+
 		if resp.StatusCode == 200 {
 			body, err := io.ReadAll(resp.Body)
 			if err != nil {
 				continue
 			}
-			
+
 			// Check if response is JSON
 			if strings.HasPrefix(strings.TrimSpace(string(body)), "{") {
 				log.Printf("✅ Got JSON response from %s", endpoint.name)
 				return e.parseGraphQLResponse(body, instagramURL)
 			}
 		}
-		
+
 		log.Printf("❌ %s returned status %d", endpoint.name, resp.StatusCode)
 	}
-	
+
 	return nil, fmt.Errorf("all GraphQL endpoints failed")
 }
 
@@ -102,7 +102,7 @@ func (e *InstagramGraphQLExtractor) extractShortcode(url string) string {
 		`instagram\.com/tv/([A-Za-z0-9_-]+)`,
 		`instagram\.com/stories/[^/]+/([A-Za-z0-9_-]+)`,
 	}
-	
+
 	for _, pattern := range patterns {
 		re := regexp.MustCompile(pattern)
 		matches := re.FindStringSubmatch(url)
@@ -110,7 +110,7 @@ func (e *InstagramGraphQLExtractor) extractShortcode(url string) string {
 			return matches[1]
 		}
 	}
-	
+
 	return ""
 }
 
@@ -136,12 +136,12 @@ func (e *InstagramGraphQLExtractor) parseGraphQLResponse(body []byte, originalUR
 	if err := json.Unmarshal(body, &result); err != nil {
 		return nil, fmt.Errorf("failed to parse JSON: %v", err)
 	}
-	
+
 	// Try to extract media URLs from various response structures
 	var mediaURLs []string
 	var username string
 	var caption string
-	
+
 	// Try different paths in the JSON structure
 	if e.extractFromPath(result, &mediaURLs, &username, &caption, []string{"items", "0"}) {
 		log.Printf("✅ Extracted from items path")
@@ -150,62 +150,62 @@ func (e *InstagramGraphQLExtractor) parseGraphQLResponse(body []byte, originalUR
 	} else if e.extractFromPath(result, &mediaURLs, &username, &caption, []string{"graphql", "shortcode_media"}) {
 		log.Printf("✅ Extracted from graphql path")
 	}
-	
+
 	if len(mediaURLs) == 0 {
 		// Last resort: search for any URL patterns in the response
 		mediaURLs = e.findMediaURLsInJSON(string(body))
 	}
-	
+
 	if len(mediaURLs) == 0 {
 		return nil, fmt.Errorf("no media URLs found in response")
 	}
-	
+
 	log.Printf("📸 Found %d media URLs", len(mediaURLs))
-	
+
 	// Download the media files
 	var mediaInfos []*MediaInfo
 	for i, mediaURL := range mediaURLs {
 		if !strings.HasPrefix(mediaURL, "http") {
 			continue
 		}
-		
+
 		log.Printf("📥 Downloading media %d/%d", i+1, len(mediaURLs))
-		
+
 		// Create unique filename
 		ext := ".jpg"
 		if strings.Contains(mediaURL, ".mp4") || strings.Contains(mediaURL, "/v/") {
 			ext = ".mp4"
 		}
 		filename := filepath.Join(e.TempDir, fmt.Sprintf("instagram_graphql_%d_%d%s", time.Now().Unix(), i, ext))
-		
+
 		// Download the file
 		if err := e.downloadFile(mediaURL, filename); err != nil {
 			log.Printf("❌ Failed to download: %v", err)
 			continue
 		}
-		
+
 		// Create media info
 		mediaType := "photo"
 		if ext == ".mp4" {
 			mediaType = "video"
 		}
-		
+
 		formattedCaption := FormatAuthorCaption("instagram", "", username, caption)
-		
+
 		mediaInfo := &MediaInfo{
 			Type:     mediaType,
 			URL:      originalURL,
 			Caption:  formattedCaption,
 			Filename: filename,
 		}
-		
+
 		mediaInfos = append(mediaInfos, mediaInfo)
 	}
-	
+
 	if len(mediaInfos) == 0 {
 		return nil, fmt.Errorf("failed to download any media files")
 	}
-	
+
 	return mediaInfos, nil
 }
 
@@ -228,14 +228,14 @@ func (e *InstagramGraphQLExtractor) extractFromPath(data map[string]interface{},
 			return false
 		}
 	}
-	
+
 	// Extract username
 	if user, ok := current["user"].(map[string]interface{}); ok {
 		if uname, ok := user["username"].(string); ok {
 			*username = uname
 		}
 	}
-	
+
 	// Extract caption
 	if captionData, ok := current["caption"].(map[string]interface{}); ok {
 		if text, ok := captionData["text"].(string); ok {
@@ -244,20 +244,20 @@ func (e *InstagramGraphQLExtractor) extractFromPath(data map[string]interface{},
 	} else if captionText, ok := current["caption"].(string); ok {
 		*caption = captionText
 	}
-	
+
 	// Extract media URLs
 	// For videos
 	if videoURL, ok := current["video_url"].(string); ok {
 		*mediaURLs = append(*mediaURLs, videoURL)
 		return true
 	}
-	
+
 	// For single images
 	if imageURL, ok := current["display_url"].(string); ok {
 		*mediaURLs = append(*mediaURLs, imageURL)
 		return true
 	}
-	
+
 	// For carousel
 	if edges, ok := current["edge_sidecar_to_children"].(map[string]interface{}); ok {
 		if edgeList, ok := edges["edges"].([]interface{}); ok {
@@ -275,14 +275,14 @@ func (e *InstagramGraphQLExtractor) extractFromPath(data map[string]interface{},
 			return len(*mediaURLs) > 0
 		}
 	}
-	
+
 	return false
 }
 
 // findMediaURLsInJSON searches for media URLs in JSON string
 func (e *InstagramGraphQLExtractor) findMediaURLsInJSON(jsonStr string) []string {
 	var urls []string
-	
+
 	// Patterns to find Instagram CDN URLs
 	patterns := []string{
 		`"video_url"\s*:\s*"(https://[^"]+\.mp4[^"]*)"`,
@@ -290,9 +290,9 @@ func (e *InstagramGraphQLExtractor) findMediaURLsInJSON(jsonStr string) []string
 		`"src"\s*:\s*"(https://[^"]+\.cdninstagram\.com[^"]+)"`,
 		`"url"\s*:\s*"(https://[^"]+\.cdninstagram\.com[^"]+)"`,
 	}
-	
+
 	seen := make(map[string]bool)
-	
+
 	for _, pattern := range patterns {
 		re := regexp.MustCompile(pattern)
 		matches := re.FindAllStringSubmatch(jsonStr, -1)
@@ -302,7 +302,7 @@ func (e *InstagramGraphQLExtractor) findMediaURLsInJSON(jsonStr string) []string
 				// Unescape JSON
 				url = strings.ReplaceAll(url, `\/`, `/`)
 				url = strings.ReplaceAll(url, `\u0026`, `&`)
-				
+
 				if !seen[url] {
 					seen[url] = true
 					urls = append(urls, url)
@@ -310,7 +310,7 @@ func (e *InstagramGraphQLExtractor) findMediaURLsInJSON(jsonStr string) []string
 			}
 		}
 	}
-	
+
 	return urls
 }
 
@@ -321,17 +321,17 @@ func (e *InstagramGraphQLExtractor) downloadFile(url, filename string) error {
 		return err
 	}
 	defer resp.Body.Close()
-	
+
 	if resp.StatusCode != 200 {
 		return fmt.Errorf("download failed with status %d", resp.StatusCode)
 	}
-	
+
 	file, err := os.Create(filename)
 	if err != nil {
 		return err
 	}
 	defer file.Close()
-	
+
 	_, err = io.Copy(file, resp.Body)
 	return err
 }

@@ -20,7 +20,7 @@ func loadTimezoneWithFallback(timezoneStr string, chatID int64) *time.Location {
 	if err == nil {
 		return loc
 	}
-	
+
 	// Handle Europe/Kyiv -> Europe/Kiev fallback
 	if timezoneStr == "Europe/Kyiv" {
 		loc, err = time.LoadLocation("Europe/Kiev")
@@ -29,7 +29,7 @@ func loadTimezoneWithFallback(timezoneStr string, chatID int64) *time.Location {
 			return loc
 		}
 	}
-	
+
 	// Handle Europe/Kiev -> Europe/Kyiv fallback (for future compatibility)
 	if timezoneStr == "Europe/Kiev" {
 		loc, err = time.LoadLocation("Europe/Kyiv")
@@ -38,7 +38,7 @@ func loadTimezoneWithFallback(timezoneStr string, chatID int64) *time.Location {
 			return loc
 		}
 	}
-	
+
 	// Final fallback to UTC
 	log.Printf("Invalid timezone %s for chat %d, falling back to UTC", timezoneStr, chatID)
 	return time.UTC
@@ -372,11 +372,11 @@ func GetGroupMediaLimit(chatID int64) (int, error) {
 	var limit int
 	query := `SELECT default_daily_limit FROM group_media_limits WHERE chat_id = $1`
 	err := GetDB().QueryRow(query, chatID).Scan(&limit)
-	
+
 	if err == sql.ErrNoRows {
 		return 0, nil // No group limit set
 	}
-	
+
 	return limit, err
 }
 
@@ -409,11 +409,11 @@ func GetGroupTimezone(chatID int64) (string, error) {
 	var timezone string
 	query := `SELECT timezone FROM group_media_limits WHERE chat_id = $1`
 	err := GetDB().QueryRow(query, chatID).Scan(&timezone)
-	
+
 	if err == sql.ErrNoRows {
 		return "UTC", nil // Default to UTC if no timezone set
 	}
-	
+
 	return timezone, err
 }
 
@@ -432,7 +432,7 @@ func GetGroupLimitInfo(chatID int64) (*GroupLimitInfo, error) {
 	var info GroupLimitInfo
 	query := `SELECT chat_id, chat_title, default_daily_limit, timezone FROM group_media_limits WHERE chat_id = $1`
 	err := GetDB().QueryRow(query, chatID).Scan(&info.ChatID, &info.ChatTitle, &info.DefaultDailyLimit, &info.Timezone)
-	
+
 	if err == sql.ErrNoRows {
 		// Return default values if no group settings exist
 		return &GroupLimitInfo{
@@ -442,7 +442,7 @@ func GetGroupLimitInfo(chatID int64) (*GroupLimitInfo, error) {
 			Timezone:          "UTC",
 		}, nil
 	}
-	
+
 	return &info, err
 }
 
@@ -452,23 +452,23 @@ func GetEffectiveUserLimit(userID int64, chatID int64) (int, bool, error) {
 		// Return 0 (no limit) if database is not available
 		return 0, false, nil
 	}
-	
+
 	// First check if user has an individual limit
 	userLimit, err := GetUserMediaLimit(userID, chatID)
 	if err != nil {
 		return 0, false, err
 	}
-	
+
 	if userLimit > 0 {
 		return userLimit, false, nil // Individual limit found
 	}
-	
+
 	// No individual limit, check group default
 	groupLimit, err := GetGroupMediaLimit(chatID)
 	if err != nil {
 		return 0, false, err
 	}
-	
+
 	return groupLimit, true, nil // Group limit (or 0 if no limit)
 }
 
@@ -479,20 +479,20 @@ func GetTimezoneAwareResetTime(chatID int64) (time.Time, time.Duration, error) {
 	if err != nil {
 		return time.Time{}, 0, err
 	}
-	
+
 	// Load timezone with fallback support
 	loc := loadTimezoneWithFallback(timezoneStr, chatID)
-	
+
 	// Get current time in group's timezone
 	now := time.Now().In(loc)
-	
+
 	// Calculate next midnight in group's timezone
 	tomorrow := now.AddDate(0, 0, 1)
 	resetTime := time.Date(tomorrow.Year(), tomorrow.Month(), tomorrow.Day(), 0, 0, 0, 0, loc)
-	
+
 	// Calculate duration until reset
 	timeUntilReset := resetTime.Sub(now)
-	
+
 	return resetTime, timeUntilReset, nil
 }
 
@@ -636,13 +636,13 @@ func GetTopUsersMediaStats(chatID int64, period string, limit int) ([]UserStats,
 
 // AdminGlobalStats represents global bot statistics for admin
 type AdminGlobalStats struct {
-	TotalChats       int
-	TotalLinks       int
-	TotalPhotos      int
-	TotalVideos      int
-	TotalDocuments   int
-	PlatformStats    []PlatformStats
-	TopChats         []ChatStats
+	TotalChats     int
+	TotalLinks     int
+	TotalPhotos    int
+	TotalVideos    int
+	TotalDocuments int
+	PlatformStats  []PlatformStats
+	TopChats       []ChatStats
 }
 
 // ChatStats represents statistics for a single chat

@@ -1,10 +1,10 @@
 package message
 
 import (
-	"log"
 	"github.com/timoffmax/social-link-bot/model/api/request"
 	"github.com/timoffmax/social-link-bot/model/api/request/payload"
 	"github.com/timoffmax/social-link-bot/model/api/response"
+	"log"
 )
 
 const RouteSendPhoto = "sendPhoto"
@@ -33,7 +33,7 @@ func NewSendPhoto(payload payload.TgPlSendPhoto) *SendPhoto {
 
 func (service *SendPhoto) send() *response.TgMessage {
 	respInfo, err := service.Request.Send(service.ResponsePayload)
-	
+
 	if err != nil {
 		log.Printf("❌ SendPhoto API error: %v", err)
 		log.Printf("❌ Response info: %+v", respInfo)
