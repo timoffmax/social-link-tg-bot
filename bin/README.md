@@ -1,78 +1,68 @@
-# Deployment Scripts
+# Deployment & Server Tooling
 
-Simple deployment for the Social Link Telegram Bot.
+Scripts for deploying and operating the Social Link Telegram Bot.
 
-## Quick Start
+## Scripts
 
-### Deploy to Production
+| Script | Purpose |
+|---|---|
+| `deploy` | Build locally, upload, and restart the service on the server |
+| `deploy.conf.sample` | Template for deployment settings — copy to `deploy.conf` (gitignored) |
+| `manage-bot` | Server-side management: `status` / `logs` / `follow` / `restart` |
+| `extract-firefox-cookies` | Extract platform cookies from the server's Firefox profile |
+| `quick-vnc-setup` | Set up a VNC desktop on the server for cookie extraction |
+| `fix-vnc-fonts` | Fix font rendering in the VNC session |
+| `install-chrome` | Install Chrome/Chromium for headless-browser extraction |
+| `install-ffmpeg` | Install a static ffmpeg build without system dependencies |
+
+## Deploying
+
 ```bash
-./bin/deploy
+cp bin/deploy.conf.sample bin/deploy.conf
+# edit deploy.conf: SERVER_IP, SERVER_USER, SERVER_SSH_KEY, REMOTE_DIR, SERVICE_NAME
+
+./bin/deploy                 # full deploy: build, upload, restart
+./bin/deploy --restart-only  # restart without rebuilding
 ```
-
-### Restart Only (no build/upload)
-```bash
-./bin/deploy --restart-only
-```
-
-## Files
-
-- `deploy` - Main deployment script (builds, uploads, restarts)
-- `deploy.conf` - Configuration (server IP, SSH key, paths)
-- `manage-bot` - Server-side bot management script
-- `yt-dlp` - yt-dlp binary for media downloads
 
 ## Server Management
 
-SSH into the server and use the management script:
-
 ```bash
-ssh -i ~/.ssh/your_deploy_key botuser@YOUR_SERVER_IP
+ssh -i ~/.ssh/your_deploy_key deploy-user@your-server
 
 # On the server:
-cd /var/www/social-link-tg-bot
-./manage-bot status    # Check if bot is running
+cd /path/to/bot
+./manage-bot status    # Check if the bot is running
 ./manage-bot logs      # Show recent logs
 ./manage-bot follow    # Follow logs in real-time
 ./manage-bot restart   # Restart the bot
 ```
 
-## Configuration
+## One-time Server Setup
 
-The `deploy.conf` file contains the deployment settings:
-- `SERVER_IP` - Production server IP
-- `SERVER_USER` - SSH user (tgbot)
-- `SERVER_SSH_KEY` - Path to SSH private key
-- `REMOTE_DIR` - Bot directory on server
-- `SERVICE_NAME` - systemd service name
+1. **Create a dedicated service user** on the server and generate an SSH keypair **locally**; add the public key to that user's `~/.ssh/authorized_keys`. Never copy private keys off the server or into chats/repos.
 
-## Requirements
-
-- SSH key authentication configured for tgbot user
-- Go installed locally (for building)
-- systemd service configured on server
-- tgbot user has sudo access for systemctl commands
-
-## One-time Setup
-
-If you need to set up a new server:
-
-1. **Generate SSH key for tgbot user:**
+2. **Allow the service user to manage its service:**
    ```bash
-   ssh YOUR_USER@YOUR_SERVER_IP
-   sudo mkdir -p /home/botuser/.ssh
-   sudo -u tgbot ssh-keygen -t rsa -f /home/botuser/.ssh/id_rsa -N ""
-   # Generate an SSH keypair locally and add its public key to the deploy user
+   echo 'deploy-user ALL=(ALL) NOPASSWD: /usr/bin/systemctl * social-link-bot*' | sudo tee /etc/sudoers.d/social-link-bot
+   sudo chmod 440 /etc/sudoers.d/social-link-bot
    ```
 
-2. **Configure sudo for systemctl:**
-   ```bash
-   echo 'tgbot ALL=(ALL) NOPASSWD: /usr/bin/systemctl * social-link-bot*' | sudo tee /etc/sudoers.d/tgbot-social-link-bot
-   sudo chmod 440 /etc/sudoers.d/tgbot-social-link-bot
-   ```
-
-3. **Create system service:**
+3. **Enable the systemd service:**
    ```bash
    sudo systemctl enable social-link-bot
    ```
 
-That's it! Simple and clean deployment.
+## Cookie Extraction (server-IP authenticated)
+
+Many platforms bind cookies to the IP that created them, so extract cookies from the server itself:
+
+```bash
+./bin/quick-vnc-setup                      # 1. VNC desktop on the server
+ssh -L 5901:localhost:5901 user@server     # 2. Tunnel from your machine
+# 3. Connect a VNC client to localhost:5901, log in to platforms in Firefox
+./bin/extract-firefox-cookies              # 4. Extract all platforms
+./bin/extract-firefox-cookies youtube      #    ...or a single platform
+```
+
+Cookie files are written to `cookies/<platform>_cookies.txt` and are gitignored.

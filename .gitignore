@@ -48,3 +48,9 @@ cookies/*_cookies.txt
 /twitter_cookies.txt
 /cache/
 /reddit_cookies.txt
+
+# Cookie jars anywhere in repo root
+*_cookies.txt
+
+# Machine-specific local dev symlink (created by `make install-deps`)
+bin/yt-dlp

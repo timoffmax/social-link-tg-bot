@@ -58,17 +58,17 @@ setup: install-deps
 	fi
 	@echo "Setup complete!"
 
-## logs: Show recent logs (for production)
+## logs: Show recent logs (for production, reads bin/deploy.conf)
 logs:
-	ssh -i ~/.ssh/your_deploy_key botuser@YOUR_SERVER_IP 'tail -f /var/www/social-link-tg-bot/logs/bot.log'
+	@. ./bin/deploy.conf && ssh $${SERVER_SSH_KEY:+-i $$SERVER_SSH_KEY} $$SERVER_USER@$$SERVER_IP "tail -f $$REMOTE_DIR/logs/bot.log"
 
 ## deploy: Deploy to production
 deploy:
 	./bin/deploy
 
-## status: Check production status
+## status: Check production status (reads bin/deploy.conf)
 status:
-	ssh -i ~/.ssh/your_deploy_key botuser@YOUR_SERVER_IP 'systemctl --user status social-link-bot --no-pager'
+	@. ./bin/deploy.conf && ssh $${SERVER_SSH_KEY:+-i $$SERVER_SSH_KEY} $$SERVER_USER@$$SERVER_IP "systemctl status $$SERVICE_NAME --no-pager"
 
 ## help: Show this help
 help:
