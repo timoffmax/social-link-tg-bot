@@ -19,6 +19,13 @@ var (
 	serviceHealthState = make(map[string]*serviceHealthEntry)
 )
 
+// Notification hooks, indirected so tests can observe outage and recovery
+// alerts without sending Telegram messages.
+var (
+	notifyAdmin     = NotifyAdmin
+	resetAdminAlert = ResetAdminAlert
+)
+
 // ReportServiceFailure records a failure of an external service with the
 // default outage threshold.
 func ReportServiceFailure(service, detail string) {
@@ -51,7 +58,7 @@ func ReportServiceFailureWithThreshold(service, detail string, threshold int) {
 
 	if shouldAlert {
 		text := fmt.Sprintf("⚠️ %s looks DOWN: %d consecutive failures.\nLast error: %s", service, failures, detail)
-		NotifyAdmin("outage:"+service, text)
+		notifyAdmin("outage:"+service, text)
 	}
 }
 
@@ -73,7 +80,7 @@ func ReportServiceSuccess(service string) {
 	serviceHealthMu.Unlock()
 
 	if wasAlerted {
-		ResetAdminAlert("outage:" + service)
-		NotifyAdmin("recovery:"+service, fmt.Sprintf("✅ %s recovered and is resolving media again.", service))
+		resetAdminAlert("outage:" + service)
+		notifyAdmin("recovery:"+service, fmt.Sprintf("✅ %s recovered and is resolving media again.", service))
 	}
 }

@@ -109,3 +109,7 @@ Several platforms validate cookies against the IP that created them, so cookies 
 ## Development
 
 See [README-dev.md](README-dev.md) for local development, testing with a BotFather test bot, and the project structure.
+
+## License
+
+MIT — see [LICENSE](LICENSE).
