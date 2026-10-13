@@ -737,8 +737,11 @@ func (te *TikTokExtractor) parseHTMLForMedia(html string, postID string, usernam
 		log.Printf("📷 Detected photo slideshow - using image URLs")
 		prioritizedURLs = append(prioritizedURLs, imageURLs...)
 	} else {
-		log.Printf("❓ No clear video or image content found, trying all URLs")
-		prioritizedURLs = allMediaURLs
+		// Only avatars, covers and placeholders were left (e.g. the login wall served for
+		// "audience controls" posts). Sending those would look like a success and block
+		// the next methods (tikwm, kktiktok) that can actually serve the post.
+		log.Printf("❓ No video or content images found (only avatars/placeholders), letting next method try")
+		return nil, fmt.Errorf("no content media in TikTok HTML (login wall or restricted post)")
 	}
 
 	// Download each media item with the prioritized order
