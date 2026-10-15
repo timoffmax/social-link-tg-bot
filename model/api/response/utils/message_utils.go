@@ -46,6 +46,11 @@ func GetAllLinks(message *response.TgMessage) []string {
 		result = append(result, ninegagLinks...)
 	}
 
+	if config.IsThreadsEnabled() {
+		threadsLinks := GetThreadsLinks(message)
+		result = append(result, threadsLinks...)
+	}
+
 	return result
 }
 
@@ -85,6 +90,13 @@ func GetAllSocialLinks(message *response.TgMessage, chatID int64) []string {
 	if config.Is9GAGEnabled() && services.IsPlatformEnabledForChat(chatID, "9gag") {
 		ninegagLinks := GetOriginal9GAGLinks(message)
 		result = append(result, ninegagLinks...)
+	}
+
+	isThreadsOn := (config.IsThreadsEnabled() == true) && (services.IsPlatformEnabledForChat(chatID, services.ThreadsPlatform) == true)
+
+	if isThreadsOn == true {
+		threadsLinks := GetOriginalThreadsLinks(message)
+		result = append(result, threadsLinks...)
 	}
 
 	return result
@@ -246,4 +258,23 @@ func Get9GAGLinks(message *response.TgMessage) []string {
 func GetOriginal9GAGLinks(message *response.TgMessage) []string {
 	regex := regexp.MustCompile(`https?:\/\/(www\.)?9gag\.com\/gag\/[^\s]+`)
 	return regex.FindAllString(message.Text, -1)
+}
+
+// threadsLinkPattern matches Threads post links (threads.com / threads.net,
+// "/@user/post/<code>" and short "/t/<code>").
+var threadsLinkPattern = regexp.MustCompile(`https?:\/\/(www\.)?threads\.(com|net)\/(@[A-Za-z0-9._]+\/post|t)\/[A-Za-z0-9_-]+[^\s]*`)
+
+// GetThreadsLinks returns the Threads post links of a message.
+func GetThreadsLinks(message *response.TgMessage) []string {
+	result := threadsLinkPattern.FindAllString(message.Text, -1)
+
+	return result
+}
+
+// GetOriginalThreadsLinks returns the Threads post links of a message (the
+// same as GetThreadsLinks: Threads has no fixer-domain rewriting).
+func GetOriginalThreadsLinks(message *response.TgMessage) []string {
+	result := GetThreadsLinks(message)
+
+	return result
 }

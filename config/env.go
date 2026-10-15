@@ -145,6 +145,13 @@ func Is9GAGEnabled() bool {
 	return getBoolEnv("ENABLE_9GAG", true)
 }
 
+// IsThreadsEnabled reports whether Threads links are processed.
+func IsThreadsEnabled() bool {
+	result := getBoolEnv("ENABLE_THREADS", true)
+
+	return result
+}
+
 // Cookie usage configuration per platform
 func IsCookiesEnabledForPlatform(platform string) bool {
 	switch platform {

@@ -1,23 +1,26 @@
 # Social Link Telegram Bot
 
-A Telegram bot that downloads and sends actual media files from social media links instead of leaving broken previews. Drop an Instagram, TikTok, Twitter/X, YouTube, Reddit, Facebook, or 9GAG link into any chat — the bot fetches the real photos/videos and replies with them directly.
+A Telegram bot that downloads and sends actual media files from social media links instead of leaving broken previews. Drop an Instagram, TikTok, Twitter/X, YouTube, Reddit, Facebook, 9GAG, or Threads link into any chat — the bot fetches the real photos/videos and replies with them directly.
 
 ## Features
 
-- **Real media, not links** — downloads photos, videos, galleries, slideshows, and stories (Instagram carousels: first item only), and sends them as native Telegram media
+- **Real media, not links** — downloads photos, videos, galleries, slideshows, carousels and stories, and sends them as native Telegram media; a post's photos and videos arrive as one album in post order (split evenly when over Telegram's 10-item limit). Free Instagram extraction gets the first carousel item; the paid fallback gets them all
 - **Layered extraction chains with automatic fallbacks** — every platform has multiple extraction methods tried in order, so a single dead third-party service never silently kills a platform:
-  - **Instagram**: kkinstagram redirector → OG-preview fallback; posts gated by their author (e.g. age limits) are fetched through a paid Apify actor within monthly quotas (20 per chat by default; age-limited posts are blurred), and otherwise explained (with the reason, e.g. a used-up quota)
+  - **Instagram**: kkinstagram redirector → OG-preview fallback; posts gated by their author (e.g. age limits) are fetched through a paid Apify actor within monthly quotas (20 per chat by default; the caption shows how many are left; age-limited posts are blurred), and otherwise explained (with the reason, e.g. a used-up quota)
   - **Reddit**: vxreddit (works from datacenter IPs, resolves `/s/` share links) → direct JSON API (with inline JS-challenge solving; text posts) → yt-dlp
   - **TikTok**: direct scraping → slideshow API → tikwm.com → kktiktok redirector → headless browser; handles both videos and photo slideshows
   - **Twitter/X**: hybrid extraction — full tweet text (with author display name and recursive quote resolution) via FxTwitter + media via yt-dlp
   - **YouTube**: Shorts and community posts only (regular videos are ignored). Shorts: yt-dlp (HLS merging via ffmpeg, EJS challenge solver) → a paid Apify downloader when YouTube walls the server IP. Posts: text and images read from the post page
   - **Facebook**: yt-dlp (videos and reels; photo posts unsupported)
   - **Instagram stories**: a paid Apify stories scraper (stories need a login)
+  - **Threads**: Meta's server-rendered post embed (text, photos, videos and mixed carousels in order) → vxthreads mirror → vxthreads fixed link
+- **Paid fallbacks with a hard budget** — where free methods are blocked from datacenter IPs (author-gated Instagram posts, Instagram stories, YouTube Shorts), Apify actors take over. Every run is capped, and before each run the bot reads the account's real monthly spend and refuses runs that could exceed `APIFY_MONTHLY_BUDGET_USD`; runs in flight are counted too. Gated posts also have monthly quotas per chat/user, reserved atomically in PostgreSQL
 - **Concurrent processing** — every Telegram update and every link within a message is processed in its own goroutine
-- **Health monitoring** — hourly probes of third-party redirectors and proxies; consecutive failures trigger Telegram alerts to the admin, with recovery notices
+- **Health monitoring** — hourly probes of third-party redirectors and proxies, plus failure tracking of the paid and page-reading extractors; consecutive failures trigger Telegram alerts to the admin, with recovery notices
 - **Response validation** — third-party redirector responses are verified as real CDN media (content type, size, redirect target) so a broken service fails loudly instead of sending garbage
 - **Media conversion** — automatic WebM→MP4 conversion for Telegram compatibility
-- **Fixed-link fallback** — if every extraction method fails, the bot falls back to fixed-link services (fixupx, vxreddit, etc.) so the user still gets a working preview
+- **Fixed-link fallback** — if every extraction method fails, the bot falls back to fixed-link services (fixupx, vxreddit, vxthreads, etc.) so the user still gets a working preview
+- **Correct author links** — Instagram, TikTok and Threads usernames link to the author's profile (Telegram would otherwise turn `@name.with.dots` into a link to an unrelated Telegram user)
 
 ## Bot Commands
 
@@ -44,6 +47,7 @@ A Telegram bot that downloads and sends actual media files from social media lin
 | `/owner` | Owner panel |
 | `/adminstats [period]` | Global stats: chats, media counts, platform breakdown, top chats |
 | `/broadcast` | Announcements with test/preview targeting (users vs groups) |
+| `/gated` | Paid fetch of author-gated Instagram posts: status, `on`/`off` per group, monthly `cap` per group and per-`user` allowance (`N`, `unlimited`, `default`) |
 | Blog system | Publish/edit/toggle posts shown to users |
 | Report inbox | Review `/report` submissions and `/reply` to reporters |
 
@@ -58,10 +62,16 @@ services/            → one extractor per platform + shared infrastructure:
                        smart_downloader (strategy pattern, method fallbacks),
                        ytdlp_downloader, tiktok_extractor, twitter_extractor,
                        reddit_extractor + reddit_vxreddit_extractor + reddit_challenge,
-                       instagram_* chain, redirector_health, outage_tracker,
-                       notify_admin, video_converter, database, ...
+                       instagram_* chain + instagram_gate (oEmbed gate check),
+                       threads_extractor, youtube_post_extractor,
+                       apify_client (shared budget) + gated_post_provider,
+                       youtube_apify_extractor, instagram_stories_apify_extractor,
+                       gated_fetch + gated_fetch_store (quotas),
+                       redirector_health, outage_tracker, notify_admin,
+                       video_converter, database, ...
+app/media_album.go   → mixed photo/video albums
 migrations/          → PostgreSQL migrations (stats, limits, chat settings,
-                       blog posts, reports)
+                       blog posts, reports, gated-fetch quotas)
 bin/                 → deployment and server tooling
 ```
 

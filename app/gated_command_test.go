@@ -140,3 +140,17 @@ func TestInstagramGateReplyExplainsTheReason(t *testing.T) {
 		}
 	}
 }
+
+func TestThreadsLinkWithAFacebookUsernameIsNotQuiet(t *testing.T) {
+	if isQuietFailurePlatform("https://www.threads.com/@news.facebook.com/post/ABC123") == true {
+		t.Fatalf("a Threads link must not be treated as Facebook")
+	}
+
+	if isQuietFailurePlatform("https://www.facebook.com/reel/1") == false {
+		t.Fatalf("Facebook links stay quiet")
+	}
+
+	if detectPlatformFromUrl("https://www.threads.com/@fox.com/post/ABC123") != services.ThreadsPlatform {
+		t.Fatalf("expected threads")
+	}
+}

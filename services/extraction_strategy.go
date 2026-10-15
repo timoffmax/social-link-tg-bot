@@ -18,6 +18,23 @@ func instagramExtractionMethods() []ExtractionMethod {
 	return []ExtractionMethod{MethodKKInstagram, MethodInstagramOG}
 }
 
+// threadsExtractionStrategy reads the post from Meta's embed (every item, in
+// order), then from the vxthreads mirror (datacenter-robust, but only one
+// video and image of a mixed carousel). Disabled Threads gets no methods.
+func threadsExtractionStrategy() *ExtractionStrategy {
+	result := &ExtractionStrategy{
+		Platform:   ThreadsPlatform,
+		Methods:    []ExtractionMethod{MethodThreadsEmbed, MethodThreadsVxthreads},
+		Sequential: true,
+	}
+
+	if config.IsThreadsEnabled() == false {
+		result = &ExtractionStrategy{Platform: ThreadsPlatform, Methods: []ExtractionMethod{}}
+	}
+
+	return result
+}
+
 // ExtractionMethod represents a method for extracting media
 type ExtractionMethod int
 
@@ -34,6 +51,8 @@ const (
 	MethodYouTubeApify
 	MethodStoriesApify
 	MethodYouTubePost
+	MethodThreadsEmbed
+	MethodThreadsVxthreads
 	MethodNone
 )
 
@@ -48,8 +67,22 @@ type ExtractionStrategy struct {
 	Sequential bool
 }
 
-// GetExtractionStrategy returns the optimal extraction strategy for a given URL
+// GetExtractionStrategy returns the optimal extraction strategy for a given
+// URL. Threads is checked first, by host: a username such as "@fox.com" must
+// not route a Threads post to another platform.
 func GetExtractionStrategy(url string) *ExtractionStrategy {
+	result := threadsExtractionStrategy()
+	isThreads := IsThreadsURL(url)
+
+	if isThreads == false {
+		result = getPlatformExtractionStrategy(url)
+	}
+
+	return result
+}
+
+// getPlatformExtractionStrategy returns the strategy of the other platforms.
+func getPlatformExtractionStrategy(url string) *ExtractionStrategy {
 	// Instagram: RapidAPI for videos, InstaFix for photos, fixed link fallback.
 	// Also accept InstaFix-service URLs so forwarded preview links are still processed.
 	if IsInstagramLikeURL(url) {
@@ -325,6 +358,10 @@ func (es *ExtractionStrategy) LogStrategy() {
 			methodNames[i] = "stories-apify"
 		case MethodYouTubePost:
 			methodNames[i] = "youtube-post"
+		case MethodThreadsEmbed:
+			methodNames[i] = "threads-embed"
+		case MethodThreadsVxthreads:
+			methodNames[i] = "threads-vxthreads"
 		default:
 			methodNames[i] = "unknown"
 		}

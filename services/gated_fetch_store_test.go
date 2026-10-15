@@ -8,6 +8,7 @@ import (
 	"database/sql"
 	"errors"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 
@@ -70,7 +71,7 @@ func reserveOnce(t *testing.T, chatID, userID int64, isPrivate bool) GatedFetchD
 	}
 
 	if denial == GatedFetchAllowed {
-		denial, err = ReserveGatedFetch(quotas)
+		denial, _, err = ReserveGatedFetch(quotas)
 	}
 
 	if err != nil {
@@ -193,7 +194,7 @@ func TestGatedFetchConcurrentReservationsNeverExceedCap(t *testing.T) {
 			defer wg.Done()
 
 			quotas, _, _ := ResolveGatedFetchQuotas(77, 77, true)
-			denial, err := ReserveGatedFetch(quotas)
+			denial, _, err := ReserveGatedFetch(quotas)
 
 			if (err == nil) && (denial == GatedFetchAllowed) {
 				mu.Lock()
@@ -286,5 +287,51 @@ func TestGatedFetchUnlimitedUserAndChatSkipTheirOwnLimitAndTheGlobalCap(t *testi
 
 	if denial := reserveOnce(t, 60, 60, true); denial != GatedFetchAllowed {
 		t.Fatalf("expected a regular user under the global cap, got %q", denial)
+	}
+}
+
+func TestGatedFetchReservationReportsRemainingQuota(t *testing.T) {
+	setupGatedFetchTestDB(t)
+	t.Setenv("GATED_FETCH_USER_MONTHLY_ALLOWANCE", "20")
+
+	quotas, _, _ := ResolveGatedFetchQuotas(70, 70, true)
+	ReserveGatedFetch(quotas)
+	denial, usage, err := ReserveGatedFetch(quotas)
+
+	if (err != nil) || (denial != GatedFetchAllowed) || (usage.IsLimited == false) || (usage.Remaining() != 18) || (usage.Limit != 20) {
+		t.Fatalf("expected 18 of 20 left, got %+v %q %v", usage, denial, err)
+	}
+
+	unlimited := sql.NullInt64{Int64: GatedFetchUnlimited, Valid: true}
+	SetGatedFetchMonthlyLimit(GatedFetchScopeUser, 71, unlimited)
+	unlimitedQuotas, _, _ := ResolveGatedFetchQuotas(71, 71, true)
+	_, unlimitedUsage, _ := ReserveGatedFetch(unlimitedQuotas)
+
+	if unlimitedUsage.IsLimited == true {
+		t.Fatalf("an unlimited user must get no note: %+v", unlimitedUsage)
+	}
+}
+
+// succeedingGatedProvider returns one photo with a caption.
+type succeedingGatedProvider struct{}
+
+func (succeedingGatedProvider) Name() string {
+	return "succeeding"
+}
+
+func (succeedingGatedProvider) FetchPost(string, bool) ([]*MediaInfo, error) {
+	return []*MediaInfo{{Type: MediaTypePhoto, Caption: "📷 author\n\n🔗 link"}}, nil
+}
+
+func TestGatedFetchCaptionEndsWithTheRemainingQuota(t *testing.T) {
+	setupGatedFetchTestDB(t)
+	t.Setenv("GATED_FETCH_CHAT_MONTHLY_CAP", "20")
+	sd := &SmartDownloader{gated: succeedingGatedProvider{}}
+	gatedErr := &InstagramGatedError{Gate: InstagramGate{Restricted: true}}
+
+	media, err := sd.FetchGatedPost("https://www.instagram.com/p/DeYsKEDjbGB/", gatedErr, -500, 5, false)
+
+	if (err != nil) || (strings.HasSuffix(media[0].Caption, "📊 Restricted posts left this month: 19 of 20") == false) {
+		t.Fatalf("expected the quota note, got %q %v", media[0].Caption, err)
 	}
 }

@@ -22,6 +22,7 @@ func EscapeForTelegramHTML(text string) string {
 var profileURLTemplates = map[string]string{
 	"instagram": "https://www.instagram.com/%s/",
 	"tiktok":    "https://www.tiktok.com/@%s",
+	"threads":   "https://www.threads.com/@%s",
 }
 
 // profileUsernamePattern accepts usernames that are safe inside a URL and an
@@ -81,6 +82,8 @@ func FormatAuthorCaption(platform, displayName, username, originalCaption string
 		emoji = "📘"
 	case "twitter", "x":
 		emoji = "🐦"
+	case "threads":
+		emoji = "🧵"
 	}
 
 	// Special handling for Reddit where displayName = subreddit, username = author

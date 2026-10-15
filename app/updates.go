@@ -420,7 +420,7 @@ func processMediaDownload(url string, origChat *response.TgChat, origMessage *re
 		log.Printf("Failed to download media from %s: %v", url, err)
 
 		// Skip error notifications for platforms that commonly fail (silently fail)
-		if strings.Contains(url, "reddit.com") || strings.Contains(url, "facebook.com") || strings.Contains(url, "9gag.com") {
+		if isQuietFailurePlatform(url) == true {
 			platformName := "Reddit"
 			if strings.Contains(url, "reddit.com") {
 				platformName = "Reddit"
@@ -645,8 +645,31 @@ func processMediaDownload(url string, origChat *response.TgChat, origMessage *re
 	}
 }
 
+// isQuietFailurePlatform reports links whose failures get no error reply
+// (Reddit, Facebook, 9GAG). Threads is excluded first: its usernames may
+// contain these domains (e.g. "@news.facebook.com").
+func isQuietFailurePlatform(url string) bool {
+	isThreads := services.IsThreadsURL(url)
+	isQuiet := strings.Contains(url, "reddit.com") || strings.Contains(url, "facebook.com") || strings.Contains(url, "9gag.com")
+	result := (isThreads == false) && (isQuiet == true)
+
+	return result
+}
+
 // detectPlatformFromUrl detects the social media platform from URL
 func detectPlatformFromUrl(url string) string {
+	result := services.ThreadsPlatform
+	isThreads := services.IsThreadsURL(url)
+
+	if isThreads == false {
+		result = detectOtherPlatformFromUrl(url)
+	}
+
+	return result
+}
+
+// detectOtherPlatformFromUrl detects the platforms other than Threads.
+func detectOtherPlatformFromUrl(url string) string {
 	if services.IsInstagramLikeURL(url) {
 		return "instagram"
 	} else if strings.Contains(url, "tiktok.com") || strings.Contains(url, "tiktxk.com") {
@@ -667,6 +690,42 @@ func detectPlatformFromUrl(url string) string {
 
 // extractAuthorInfo extracts only author information from caption, removing main content
 func extractAuthorInfo(fullCaption, platform string) string {
+	result := ""
+	isThreads := (services.ThreadsPlatform == platform)
+
+	if isThreads == true {
+		result = threadsAuthorInfo(fullCaption)
+	}
+
+	if isThreads == false {
+		result = extractOtherAuthorInfo(fullCaption, platform)
+	}
+
+	return result
+}
+
+// threadsAuthorFallback is the author line when a Threads caption has none.
+const threadsAuthorFallback = "🧵 Threads"
+
+// threadsAuthorInfo returns the author line (a profile link) of a Threads
+// caption.
+func threadsAuthorInfo(fullCaption string) string {
+	result := threadsAuthorFallback
+	lines := strings.Split(fullCaption, "\n")
+	isFound := false
+
+	for _, line := range lines {
+		if (isFound == false) && (isAuthorLine(line) == true) {
+			result = strings.TrimSpace(line)
+			isFound = true
+		}
+	}
+
+	return result
+}
+
+// extractOtherAuthorInfo extracts the author line of the other platforms.
+func extractOtherAuthorInfo(fullCaption, platform string) string {
 	if fullCaption == "" {
 		return ""
 	}
@@ -962,6 +1021,23 @@ func sendFixedLinkFallback(originalUrl string, origChat *response.TgChat) {
 }
 
 func getFixedUrl(url string) string {
+	result := ""
+	isThreads := services.IsThreadsURL(url)
+
+	// Threads first, by host: the vxthreads mirror.
+	if isThreads == true {
+		result = services.BuildThreadsFixedURL(url)
+	}
+
+	if isThreads == false {
+		result = getOtherFixedUrl(url)
+	}
+
+	return result
+}
+
+// getOtherFixedUrl returns the fixed link of the platforms other than Threads.
+func getOtherFixedUrl(url string) string {
 	// Instagram
 	if strings.Contains(url, "instagram.com") {
 		domain := config.GetInstagramService() + ".com"
@@ -1937,7 +2013,8 @@ func handleStartCommand(origMessage *response.TgMessage, origChat *response.TgCh
 	menuText.WriteString("📺 <b>YouTube</b> — Videos, Shorts\n")
 	menuText.WriteString("🔴 <b>Reddit</b> — Videos, Images, Galleries, Text Posts\n")
 	menuText.WriteString("👥 <b>Facebook</b> — Videos, Photos\n")
-	menuText.WriteString("😂 <b>9GAG</b> — Videos, Images\n\n")
+	menuText.WriteString("😂 <b>9GAG</b> — Videos, Images\n")
+	menuText.WriteString("🧵 <b>Threads</b> — Text, Photos, Videos, Carousels\n\n")
 
 	// How to use — context-dependent
 	if isGroupChat {
@@ -2109,12 +2186,13 @@ func handleStatsCommand(origMessage *response.TgMessage, origChat *response.TgCh
 			statsText.WriteString("🌐 <b>By Platform:</b>\n")
 			for _, platform := range stats.Platforms {
 				platformEmoji := map[string]string{
-					"instagram": "📷",
-					"tiktok":    "🎵",
-					"twitter":   "🐦",
-					"youtube":   "📺",
-					"reddit":    "🔴",
-					"facebook":  "👥",
+					"instagram":              "📷",
+					"tiktok":                 "🎵",
+					"twitter":                "🐦",
+					"youtube":                "📺",
+					"reddit":                 "🔴",
+					"facebook":               "👥",
+					services.ThreadsPlatform: "🧵",
 				}
 				emoji := platformEmoji[strings.ToLower(platform.Platform)]
 				if emoji == "" {
@@ -2857,12 +2935,13 @@ func handleAdminStatsCommand(origMessage *response.TgMessage, origChat *response
 	if len(stats.PlatformStats) > 0 {
 		statsText.WriteString("\n<b>🌐 By Platform</b>\n")
 		platformEmoji := map[string]string{
-			"instagram": "📷",
-			"twitter":   "🐦",
-			"tiktok":    "🎵",
-			"youtube":   "📺",
-			"reddit":    "🔴",
-			"facebook":  "👥",
+			"instagram":              "📷",
+			"twitter":                "🐦",
+			"tiktok":                 "🎵",
+			"youtube":                "📺",
+			"reddit":                 "🔴",
+			"facebook":               "👥",
+			services.ThreadsPlatform: "🧵",
 		}
 		for _, ps := range stats.PlatformStats {
 			emoji := platformEmoji[strings.ToLower(ps.Platform)]
@@ -3610,6 +3689,18 @@ func trackMediaSent(userID int64, username string, chatID int64, chatTitle strin
 
 // getPlatformFromURL determines the platform from a URL
 func getPlatformFromURL(url string) string {
+	result := services.ThreadsPlatform
+	isThreads := services.IsThreadsURL(url)
+
+	if isThreads == false {
+		result = getOtherPlatformFromURL(url)
+	}
+
+	return result
+}
+
+// getOtherPlatformFromURL maps the platforms other than Threads for stats.
+func getOtherPlatformFromURL(url string) string {
 	if strings.Contains(url, "instagram.com") {
 		return "instagram"
 	} else if strings.Contains(url, "tiktok.com") {
@@ -3648,6 +3739,7 @@ func createPlatformSettingsKeyboard(chatID int64) (*api.TgInlineKeyboardMarkup, 
 		{"youtube", "YouTube", "📺"},
 		{"reddit", "Reddit", "🤖"},
 		{"facebook", "Facebook", "📘"},
+		{services.ThreadsPlatform, "Threads", "🧵"},
 	}
 
 	var buttons [][]api.TgInlineKeyboardButton
@@ -3770,7 +3862,7 @@ func handlePlatformEnableAllCallback(callbackQuery response.TgCallbackQuery) {
 
 	log.Printf("📱 User %d enabling all platforms in chat %d", userID, chatID)
 
-	platforms := []string{"instagram", "tiktok", "twitter", "youtube", "reddit", "facebook"}
+	platforms := []string{"instagram", "tiktok", "twitter", "youtube", "reddit", "facebook", services.ThreadsPlatform}
 
 	for _, platform := range platforms {
 		err := services.SetChatPlatformEnabled(chatID, platform, true)
@@ -3790,7 +3882,7 @@ func handlePlatformDisableAllCallback(callbackQuery response.TgCallbackQuery) {
 
 	log.Printf("📱 User %d disabling all platforms in chat %d", userID, chatID)
 
-	platforms := []string{"instagram", "tiktok", "twitter", "youtube", "reddit", "facebook"}
+	platforms := []string{"instagram", "tiktok", "twitter", "youtube", "reddit", "facebook", services.ThreadsPlatform}
 
 	for _, platform := range platforms {
 		err := services.SetChatPlatformEnabled(chatID, platform, false)
@@ -3826,7 +3918,7 @@ func handleDescriptionSettingsCallback(origChat *response.TgChat, origUser *resp
 	// Count enabled/disabled descriptions
 	enabled := 0
 	disabled := 0
-	platforms := []string{"instagram", "tiktok", "twitter", "youtube", "reddit", "facebook"}
+	platforms := []string{"instagram", "tiktok", "twitter", "youtube", "reddit", "facebook", services.ThreadsPlatform}
 
 	for _, platform := range platforms {
 		if isEnabled, exists := descriptionSettings[platform]; !exists || isEnabled {
@@ -3880,6 +3972,7 @@ func createDescriptionSettingsKeyboard(chatID int64) (*api.TgInlineKeyboardMarku
 		{"youtube", "YouTube", "📺"},
 		{"reddit", "Reddit", "🤖"},
 		{"facebook", "Facebook", "📘"},
+		{services.ThreadsPlatform, "Threads", "🧵"},
 	}
 
 	var rows [][]api.TgInlineKeyboardButton
@@ -3978,7 +4071,7 @@ func handleDescriptionEnableAllCallback(callbackQuery response.TgCallbackQuery) 
 
 	log.Printf("📝 User %d enabling descriptions for all platforms in chat %d", userID, chatID)
 
-	platforms := []string{"instagram", "tiktok", "twitter", "youtube", "reddit", "facebook"}
+	platforms := []string{"instagram", "tiktok", "twitter", "youtube", "reddit", "facebook", services.ThreadsPlatform}
 
 	for _, platform := range platforms {
 		err := services.SetChatDescriptionEnabled(chatID, platform, true)
@@ -3998,7 +4091,7 @@ func handleDescriptionDisableAllCallback(callbackQuery response.TgCallbackQuery)
 
 	log.Printf("📝 User %d disabling descriptions for all platforms in chat %d", userID, chatID)
 
-	platforms := []string{"instagram", "tiktok", "twitter", "youtube", "reddit", "facebook"}
+	platforms := []string{"instagram", "tiktok", "twitter", "youtube", "reddit", "facebook", services.ThreadsPlatform}
 
 	for _, platform := range platforms {
 		err := services.SetChatDescriptionEnabled(chatID, platform, false)
@@ -4013,6 +4106,19 @@ func handleDescriptionDisableAllCallback(callbackQuery response.TgCallbackQuery)
 
 // guessChatAction picks the appropriate Telegram chat action based on the URL
 func guessChatAction(url string) string {
+	// Threads: could be text, photos or video
+	result := payload.ChatActionTyping
+	isThreads := services.IsThreadsURL(url)
+
+	if isThreads == false {
+		result = guessOtherChatAction(url)
+	}
+
+	return result
+}
+
+// guessOtherChatAction picks the chat action of the platforms other than Threads.
+func guessOtherChatAction(url string) string {
 	// Photo URLs
 	if strings.Contains(url, "/p/") || strings.Contains(url, "/photo/") {
 		return payload.ChatActionUploadPhoto

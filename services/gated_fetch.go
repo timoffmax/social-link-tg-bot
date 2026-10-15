@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strings"
 )
 
 // GatedFetchDeniedError wraps the InstagramGatedError of a post the bot was not
@@ -58,6 +59,7 @@ func (sd *SmartDownloader) fetchGatedWithQuota(instagramURL string, downloadErr 
 	var result []*MediaInfo
 	var quotas []GatedFetchQuota
 	var fetchErr error
+	var usage GatedFetchUsage
 	denial := GatedFetchDeniedOff
 	var err error
 
@@ -66,7 +68,7 @@ func (sd *SmartDownloader) fetchGatedWithQuota(instagramURL string, downloadErr 
 	}
 
 	if (denial == GatedFetchAllowed) && (err == nil) {
-		denial, err = ReserveGatedFetch(quotas)
+		denial, usage, err = ReserveGatedFetch(quotas)
 	}
 
 	if (denial == GatedFetchAllowed) && (err == nil) {
@@ -101,7 +103,27 @@ func (sd *SmartDownloader) fetchGatedWithQuota(instagramURL string, downloadErr 
 		err = &GatedFetchDeniedError{Denial: denial, Cause: downloadErr}
 	}
 
+	if (err == nil) && (len(result) > 0) && (usage.IsLimited == true) {
+		result[0].Caption = appendGatedQuotaNote(result[0].Caption, usage)
+	}
+
 	return result, err
+}
+
+// gatedQuotaNoteTemplate tells a limited chat or user how many restricted
+// posts are left this month; it ends the post's caption.
+const gatedQuotaNoteTemplate = "\n\n📊 Restricted posts left this month: %d of %d"
+
+// gatedQuotaNoteReserve is the caption space kept free for the note.
+const gatedQuotaNoteReserve = 80
+
+// appendGatedQuotaNote adds the remaining-quota line to a caption.
+func appendGatedQuotaNote(caption string, usage GatedFetchUsage) string {
+	remaining := usage.Remaining()
+	note := fmt.Sprintf(gatedQuotaNoteTemplate, remaining, usage.Limit)
+	result := strings.TrimSpace(caption + note)
+
+	return result
 }
 
 // gatedPreviewFallback returns the OG preview of a post, or keeps fetchErr

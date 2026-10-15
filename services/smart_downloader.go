@@ -26,6 +26,7 @@ type SmartDownloader struct {
 	youtubeApify *YouTubeApifyExtractor
 	storiesApify *InstagramStoriesApifyExtractor
 	youtubePost  *YouTubePostExtractor
+	threads      *ThreadsExtractor
 	tempDir      string
 	workingDir   string
 }
@@ -54,6 +55,7 @@ func NewSmartDownloader() *SmartDownloader {
 		youtubeApify: NewYouTubeApifyExtractor(tempDir),
 		storiesApify: NewInstagramStoriesApifyExtractor(tempDir),
 		youtubePost:  NewYouTubePostExtractor(tempDir),
+		threads:      NewThreadsExtractor(tempDir),
 		tempDir:      tempDir,
 		workingDir:   workingDir,
 	}
@@ -368,6 +370,16 @@ func (sd *SmartDownloader) executeStrategy(
 
 		return mediaInfos, err
 
+	case MethodThreadsEmbed:
+		mediaInfos, err := sd.runExtractorMethod(ctx, strategy, mediaURL, "threads-embed", sd.threads.ExtractEmbed, overallStart, methodStartTime)
+
+		return mediaInfos, err
+
+	case MethodThreadsVxthreads:
+		mediaInfos, err := sd.runExtractorMethod(ctx, strategy, mediaURL, "threads-vxthreads", sd.threads.ExtractVxthreads, overallStart, methodStartTime)
+
+		return mediaInfos, err
+
 	case MethodInstagramOG:
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
@@ -502,6 +514,21 @@ func (sd *SmartDownloader) GetTempDir() string {
 
 // platformDisplayName returns the human-readable platform name for a URL
 func platformDisplayName(originalURL string) string {
+	result := threadsDisplayName
+	isThreads := IsThreadsURL(originalURL)
+
+	if isThreads == false {
+		result = otherPlatformDisplayName(originalURL)
+	}
+
+	return result
+}
+
+// threadsDisplayName is the display name of Threads in "View the original".
+const threadsDisplayName = "Threads"
+
+// otherPlatformDisplayName returns the display name of the other platforms.
+func otherPlatformDisplayName(originalURL string) string {
 	urlLower := strings.ToLower(originalURL)
 
 	switch {

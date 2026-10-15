@@ -5,8 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"net/http"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -133,36 +131,12 @@ func parseYouTubePostID(postURL string) (string, error) {
 
 // fetchPage downloads the post page.
 func (e *YouTubePostExtractor) fetchPage(ctx context.Context, postURL string) (string, error) {
-	result := ""
-	var body []byte
-	var resp *http.Response
-	pageCtx, cancel := context.WithTimeout(ctx, youtubePostTimeout)
-
-	defer cancel()
-
-	req, err := http.NewRequestWithContext(pageCtx, http.MethodGet, postURL, nil)
-
-	if err == nil {
-		req.Header.Set("User-Agent", youtubePostUserAgent)
-		req.Header.Set("Accept-Language", "en")
-		req.Header.Set("Cookie", youtubeConsentCookie)
-		resp, err = SharedHTTPClient.Do(req)
+	headers := map[string]string{
+		"User-Agent":      youtubePostUserAgent,
+		"Accept-Language": "en",
+		"Cookie":          youtubeConsentCookie,
 	}
-
-	if err == nil {
-		defer resp.Body.Close()
-
-		limited := io.LimitReader(resp.Body, youtubePostMaxPage)
-		body, err = io.ReadAll(limited)
-	}
-
-	if (err == nil) && (resp.StatusCode != http.StatusOK) {
-		err = fmt.Errorf("youtube post page status %d", resp.StatusCode)
-	}
-
-	if err == nil {
-		result = string(body)
-	}
+	result, err := fetchCappedPage(ctx, postURL, headers, youtubePostMaxPage, youtubePostTimeout)
 
 	return result, err
 }

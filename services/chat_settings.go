@@ -50,7 +50,7 @@ func GetChatSettings(chatID int64) (*ChatSettings, error) {
 	// Initialize platform settings with defaults if no settings exist
 	if _, exists := settings.Settings["platform"]; !exists {
 		settings.Settings["platform"] = make(map[string]interface{})
-		defaultPlatforms := []string{"instagram", "tiktok", "twitter", "youtube", "reddit", "facebook"}
+		defaultPlatforms := []string{"instagram", "tiktok", "twitter", "youtube", "reddit", "facebook", ThreadsPlatform}
 		for _, platform := range defaultPlatforms {
 			settings.Settings["platform"][platform] = true // Default to enabled
 		}
@@ -254,7 +254,7 @@ func InitializeChatSettings(chatID int64) error {
 		return fmt.Errorf("database not available")
 	}
 
-	defaultPlatforms := []string{"instagram", "tiktok", "twitter", "youtube", "reddit", "facebook"}
+	defaultPlatforms := []string{"instagram", "tiktok", "twitter", "youtube", "reddit", "facebook", ThreadsPlatform}
 
 	// Start transaction
 	tx, err := db.Begin()

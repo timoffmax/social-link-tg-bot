@@ -248,7 +248,8 @@ func gatedPostCaption(item apifyPostItem, instagramURL string, spoiler bool) str
 	escapedName := EscapeForTelegramHTML(item.FullName)
 	authorLine := FormatAuthorCaption(gatedPlatform, escapedName, item.Username, "")
 	linkSuffix := FormatOriginalLink(instagramURL)
-	budget := TelegramCaptionLimitBytes - len(authorLine) - len(gatedCaptionSeparator) - len(linkSuffix)
+	// Room is kept for the remaining-quota note appended after the fetch.
+	budget := TelegramCaptionLimitBytes - len(authorLine) - len(gatedCaptionSeparator) - len(linkSuffix) - gatedQuotaNoteReserve
 	spoilerText := fitSpoilerCaption(item.Caption, budget, spoiler)
 	result := FormatAuthorCaption(gatedPlatform, escapedName, item.Username, spoilerText)
 

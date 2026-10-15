@@ -57,6 +57,25 @@ type GatedFetchQuota struct {
 	Period  string
 }
 
+// GatedFetchUsage is a chat's or user's monthly usage right after a
+// reservation; IsLimited is false for unlimited scopes.
+type GatedFetchUsage struct {
+	Used      int
+	Limit     int
+	IsLimited bool
+}
+
+// Remaining returns how many fetches are left this month.
+func (u GatedFetchUsage) Remaining() int {
+	result := u.Limit - u.Used
+
+	if result < 0 {
+		result = 0
+	}
+
+	return result
+}
+
 // GatedFetchPolicy is the stored policy of a chat or user.
 type GatedFetchPolicy struct {
 	Enabled      bool
@@ -155,8 +174,9 @@ func effectiveGatedFetchLimit(policy GatedFetchPolicy, defaultLimit int) int {
 
 // ReserveGatedFetch atomically takes one unit from every quota for the current
 // month. It returns the denial of the first full quota (nothing is taken then).
-func ReserveGatedFetch(quotas []GatedFetchQuota) (GatedFetchDenial, error) {
+func ReserveGatedFetch(quotas []GatedFetchQuota) (GatedFetchDenial, GatedFetchUsage, error) {
 	result := GatedFetchAllowed
+	usage := GatedFetchUsage{}
 	db := GetDB()
 	err := errGatedFetchNoDatabase
 	var tx *sql.Tx
@@ -170,7 +190,7 @@ func ReserveGatedFetch(quotas []GatedFetchQuota) (GatedFetchDenial, error) {
 	}
 
 	if err == nil {
-		result, err = reserveGatedFetchQuotas(ctx, tx, quotas)
+		result, usage, err = reserveGatedFetchQuotas(ctx, tx, quotas)
 	}
 
 	if (tx != nil) && ((err != nil) || (result != GatedFetchAllowed)) {
@@ -181,31 +201,41 @@ func ReserveGatedFetch(quotas []GatedFetchQuota) (GatedFetchDenial, error) {
 		err = tx.Commit()
 	}
 
-	return result, err
+	return result, usage, err
 }
 
-// reserveGatedFetchQuotas increments each counter inside tx unless it is full.
-func reserveGatedFetchQuotas(ctx context.Context, tx *sql.Tx, quotas []GatedFetchQuota) (GatedFetchDenial, error) {
+// reserveGatedFetchQuotas increments each counter inside tx unless it is full,
+// and reports the chat's or user's usage after the reservation.
+func reserveGatedFetchQuotas(ctx context.Context, tx *sql.Tx, quotas []GatedFetchQuota) (GatedFetchDenial, GatedFetchUsage, error) {
 	result := GatedFetchAllowed
+	usage := GatedFetchUsage{}
 	var err error
 
 	for _, quota := range quotas {
 		isTaken := false
+		used := 0
 
 		if (result == GatedFetchAllowed) && (err == nil) {
-			isTaken, err = takeGatedFetchUnit(ctx, tx, quota)
+			isTaken, used, err = takeGatedFetchUnit(ctx, tx, quota)
 		}
 
 		if (result == GatedFetchAllowed) && (err == nil) && (isTaken == false) {
 			result = quota.Denial
 		}
+
+		isScopedLimit := (quota.Scope != GatedFetchScopeGlobal) && (quota.Limit != GatedFetchUnlimited)
+
+		if (isTaken == true) && (isScopedLimit == true) {
+			usage = GatedFetchUsage{Used: used, Limit: quota.Limit, IsLimited: true}
+		}
 	}
 
-	return result, err
+	return result, usage, err
 }
 
-// takeGatedFetchUnit adds one to a counter if it is below its limit.
-func takeGatedFetchUnit(ctx context.Context, tx *sql.Tx, quota GatedFetchQuota) (bool, error) {
+// takeGatedFetchUnit adds one to a counter if it is below its limit and
+// returns the counter's new value.
+func takeGatedFetchUnit(ctx context.Context, tx *sql.Tx, quota GatedFetchQuota) (bool, int, error) {
 	result := false
 	used := 0
 	query := `
@@ -226,7 +256,7 @@ func takeGatedFetchUnit(ctx context.Context, tx *sql.Tx, quota GatedFetchQuota) 
 		result = true
 	}
 
-	return result, err
+	return result, used, err
 }
 
 // RefundGatedFetch gives back one unit to every given quota, in the month it
