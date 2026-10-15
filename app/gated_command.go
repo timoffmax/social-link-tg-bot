@@ -38,7 +38,7 @@ const (
 // gatedUsageText documents the /gated subcommands.
 const gatedUsageText = `<b>Usage</b> (owner only):
 • <code>/gated</code> or <code>/gated status [chat_id]</code>
-• <code>/gated on|off [chat_id]</code>: allow paid fetches in a group
+• <code>/gated on|off [chat_id]</code>: allow or stop paid fetches in a group (on by default)
 • <code>/gated cap N|unlimited|default [chat_id]</code>: group monthly cap
 • reply to a user + <code>/gated user N|unlimited|default</code>, or <code>/gated user USER_ID N|unlimited|default</code>: private monthly allowance
 The global monthly cap (GATED_FETCH_GLOBAL_MONTHLY_CAP) always applies.`

@@ -113,3 +113,30 @@ func TestParseGatedLimitAcceptsUnlimited(t *testing.T) {
 		t.Fatalf("unexpected rendering: %q", formatGatedLimit(limit.Int64))
 	}
 }
+
+func TestExtractAuthorInfoFindsTheProfileLinkLine(t *testing.T) {
+	caption := services.FormatAuthorCaption("instagram", "Insight Gastrobar Kyiv Official", "insight.gastrobar", "caption text")
+	line := extractAuthorInfo(caption, "instagram")
+
+	if strings.Contains(line, `href="https://www.instagram.com/insight.gastrobar/"`) == false {
+		t.Fatalf("expected the author line, got %q", line)
+	}
+}
+
+func TestInstagramGateReplyExplainsTheReason(t *testing.T) {
+	gate := services.InstagramGate{Restricted: true, Title: "x"}
+	cases := map[services.GatedFetchDenial]string{
+		services.GatedFetchDeniedUserCap: gatedAllowanceUsedHint,
+		services.GatedFetchDeniedChatCap: gatedChatCapReachedHint,
+		services.GatedFetchDeniedGlobal:  gatedGlobalCapReachedHint,
+		services.GatedFetchDeniedChatOff: gatedChatOffHint,
+	}
+
+	for denial, hint := range cases {
+		err := &services.GatedFetchDeniedError{Denial: denial, Cause: &services.InstagramGatedError{Gate: gate}}
+
+		if strings.Contains(instagramGateReplyText(err, gate), hint) == false {
+			t.Fatalf("%s: missing hint %q", denial, hint)
+		}
+	}
+}

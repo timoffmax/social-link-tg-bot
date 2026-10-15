@@ -3,8 +3,10 @@ package app
 import (
 	"errors"
 	"fmt"
+	"html"
 	"log"
 	"os"
+	"regexp"
 	"strings"
 
 	"github.com/timoffmax/social-link-bot/model/api/request/message"
@@ -29,6 +31,9 @@ const albumAttachTemplate = "attach://photo%d"
 
 // albumCaptionCut is where an over-long album caption is cut before "...".
 const albumCaptionCut = services.TelegramCaptionLimitBytes - 3
+
+// htmlTagPattern matches HTML tags, removed from captions sent as plain text.
+var htmlTagPattern = regexp.MustCompile(`<[^>]*>`)
 
 // errAlbumRejected marks an album Telegram answered with an error. Any other
 // failure (a timeout, a dropped connection) may still have been delivered, so
@@ -236,7 +241,10 @@ func albumCaption(caption string, chatID int64, url string) (string, string) {
 			cut--
 		}
 
-		result = fmt.Sprintf("%s...", result[:cut])
+		// Plain text: drop tags (profile and original links) and entities.
+		withoutTags := htmlTagPattern.ReplaceAllString(result[:cut], "")
+		plain := html.UnescapeString(withoutTags)
+		result = fmt.Sprintf("%s...", plain)
 		parseMode = ""
 	}
 

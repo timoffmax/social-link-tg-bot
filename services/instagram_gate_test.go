@@ -122,3 +122,47 @@ func TestInstagramGateMessageFallsBackToDefaultTitle(t *testing.T) {
 		t.Fatalf("unexpected message: %q", text)
 	}
 }
+
+func TestParseInstagramGateDetectsAudienceLimit(t *testing.T) {
+	body := `{"message":"geoblock_required","gating_type":"unappealable","title":"This content isn't available to everyone","blocks_logging_data":"","gating_type_thrift":3}`
+	gate, err := parseInstagramGate(http.StatusBadRequest, []byte(body))
+
+	if (err != nil) || (gate.AudienceLimited == false) || (gate.AgeLimited == true) || (gate.NeedsSpoiler() == true) {
+		t.Fatalf("expected an unblurred audience gate, got %+v %v", gate, err)
+	}
+}
+
+func TestUnknownGatesAreBlurredByDefault(t *testing.T) {
+	body := `{"gating_type":"sensitive","title":"Sensitive content","blocks_logging_data":"OTHER","gating_type_thrift":7}`
+	gate, _ := parseInstagramGate(http.StatusBadRequest, []byte(body))
+	ageGate, _ := parseInstagramGate(http.StatusBadRequest, []byte(gateAgeLimitedBody))
+
+	if (gate.NeedsSpoiler() == false) || (ageGate.NeedsSpoiler() == false) {
+		t.Fatalf("unknown and age gates must be blurred: %+v %+v", gate, ageGate)
+	}
+}
+
+func TestInstagramMediaCDNCheck(t *testing.T) {
+	media := "https://instagram.fsjc1-4.fna.fbcdn.net/v/t51.82787-15/x.jpg"
+	cdn := "https://scontent-waw2-1.cdninstagram.com/v/t51/x.jpg"
+	logo := "https://static.cdninstagram.com/rsrc.php/v4/yG/r/logo.png"
+
+	if (isInstagramMediaCDNURL(media) == false) || (isInstagramMediaCDNURL(cdn) == false) {
+		t.Fatalf("CDN media must pass")
+	}
+
+	lookalike := isInstagramMediaCDNURL("https://evilfbcdn.net/v/x.jpg") || isInstagramMediaCDNURL("https://notcdninstagram.com/o1/x")
+
+	if (isInstagramMediaCDNURL("https://www.instagram.com/static/images/ico.png") == true) || (isInstagramMediaCDNURL(logo) == true) || (lookalike == true) {
+		t.Fatalf("non-media images must fail")
+	}
+}
+
+func TestAudienceGateAcceptsThriftAsString(t *testing.T) {
+	body := `{"gating_type":"unappealable","title":"x","blocks_logging_data":"","gating_type_thrift":"3"}`
+	gate, err := parseInstagramGate(http.StatusBadRequest, []byte(body))
+
+	if (err != nil) || (gate.AudienceLimited == false) {
+		t.Fatalf("expected an audience gate from a string thrift, got %+v %v", gate, err)
+	}
+}

@@ -80,7 +80,7 @@ func gatedFetchPeriod() string {
 
 // ResolveGatedFetchQuotas returns the counters a fetch in this chat by this
 // user must fit into: the global cap, plus the user's allowance in a private
-// chat or the chat's cap in a group (only when the owner enabled the group).
+// chat or the chat's cap in a group (unless the owner turned the group off).
 func ResolveGatedFetchQuotas(chatID, userID int64, isPrivate bool) ([]GatedFetchQuota, GatedFetchDenial, error) {
 	var result []GatedFetchQuota
 	denial := GatedFetchAllowed
@@ -106,6 +106,12 @@ func ResolveGatedFetchQuotas(chatID, userID int64, isPrivate bool) ([]GatedFetch
 	if (denial == GatedFetchAllowed) && (err == nil) {
 		global := GatedFetchQuota{Scope: GatedFetchScopeGlobal, ScopeID: gatedFetchGlobalScopeID, Limit: globalCap, Denial: GatedFetchDeniedGlobal, Period: period}
 		result = []GatedFetchQuota{global, scoped}
+	}
+
+	// Chats and users the owner made unlimited skip the shared fetch cap, so
+	// strangers using it up can't block them; the dollar budget still applies.
+	if (denial == GatedFetchAllowed) && (err == nil) && (scoped.Limit == GatedFetchUnlimited) {
+		result = []GatedFetchQuota{scoped}
 	}
 
 	return result, denial, err
@@ -264,10 +270,10 @@ func GetGatedFetchUsage(scope GatedFetchScope, scopeID int64) (int, error) {
 	return result, err
 }
 
-// GetGatedFetchPolicy returns the stored policy; a missing row is the zero
-// policy (disabled, default limit).
+// GetGatedFetchPolicy returns the stored policy; a missing row is the default
+// policy (enabled, default limit). Only an explicit /gated off disables it.
 func GetGatedFetchPolicy(scope GatedFetchScope, scopeID int64) (GatedFetchPolicy, error) {
-	result := GatedFetchPolicy{}
+	result := GatedFetchPolicy{Enabled: true}
 	db := GetDB()
 	err := errGatedFetchNoDatabase
 	query := `SELECT enabled, monthly_limit FROM gated_fetch_policies WHERE scope = $1 AND scope_id = $2`
@@ -298,8 +304,8 @@ func SetGatedFetchEnabled(scope GatedFetchScope, scopeID int64, enabled bool) er
 // invalid (NULL) limit resets it to the env default.
 func SetGatedFetchMonthlyLimit(scope GatedFetchScope, scopeID int64, limit sql.NullInt64) error {
 	query := `
-		INSERT INTO gated_fetch_policies (scope, scope_id, monthly_limit)
-		VALUES ($1, $2, $3)
+		INSERT INTO gated_fetch_policies (scope, scope_id, enabled, monthly_limit)
+		VALUES ($1, $2, true, $3)
 		ON CONFLICT (scope, scope_id) DO UPDATE SET monthly_limit = EXCLUDED.monthly_limit`
 	err := execGatedFetchPolicy(query, string(scope), scopeID, limit)
 

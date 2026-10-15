@@ -81,7 +81,7 @@ func TestApifyFetchPostDownloadsEverySlideAsSpoiler(t *testing.T) {
 	server := newApifyTestServer(t, http.StatusCreated, "DeYsKEDjbGB", &input)
 	defer server.Close()
 
-	media, err := newApifyTestProvider(t, server).FetchPost("https://www.instagram.com/p/DeYsKEDjbGB/?obrf=abc")
+	media, err := newApifyTestProvider(t, server).FetchPost("https://www.instagram.com/p/DeYsKEDjbGB/?obrf=abc", true)
 
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -109,7 +109,7 @@ func TestApifyFetchPostDownloadsEverySlideAsSpoiler(t *testing.T) {
 		}
 	}
 
-	expectedCaption := "Averona &amp; Co (@averona.space)\n\n<tg-spoiler>Hello &lt;world&gt;</tg-spoiler>"
+	expectedCaption := "Averona &amp; Co (<a href=\"https://www.instagram.com/averona.space/\">@averona.space</a>)\n\n<tg-spoiler>Hello &lt;world&gt;</tg-spoiler>"
 
 	if strings.Contains(media[0].Caption, expectedCaption) == false {
 		t.Fatalf("unexpected first caption: %q", media[0].Caption)
@@ -125,7 +125,7 @@ func TestApifyFetchPostFailsOnErrorStatus(t *testing.T) {
 	server := newApifyTestServer(t, http.StatusPaymentRequired, "DeYsKEDjbGB", &input)
 	defer server.Close()
 
-	_, err := newApifyTestProvider(t, server).FetchPost("https://www.instagram.com/p/DeYsKEDjbGB/")
+	_, err := newApifyTestProvider(t, server).FetchPost("https://www.instagram.com/p/DeYsKEDjbGB/", true)
 
 	if (err == nil) || (strings.Contains(err.Error(), "apify status 402") == false) {
 		t.Fatalf("expected a 402 error, got %v", err)
@@ -137,7 +137,7 @@ func TestApifyFetchPostFailsWhenPostIsMissing(t *testing.T) {
 	server := newApifyTestServer(t, http.StatusCreated, "SomeOtherPost", &input)
 	defer server.Close()
 
-	_, err := newApifyTestProvider(t, server).FetchPost("https://www.instagram.com/p/DeYsKEDjbGB/")
+	_, err := newApifyTestProvider(t, server).FetchPost("https://www.instagram.com/p/DeYsKEDjbGB/", true)
 
 	if (err == nil) || (strings.Contains(err.Error(), "no media") == false) {
 		t.Fatalf("expected a no-media error, got %v", err)
@@ -184,7 +184,7 @@ func TestGatedPostCaptionSurvivesEscapingAndLinkSuffix(t *testing.T) {
 
 	for _, raw := range captions {
 		item := apifyPostItem{Username: "averona.space", FullName: "МАНІКЮР|ПЕДИКЮР|Виноградар🇺🇦|Варшавський +", Caption: raw}
-		media := []*MediaInfo{{Type: "photo", Filename: "x.jpg", Caption: gatedPostCaption(item, url)}}
+		media := []*MediaInfo{{Type: "photo", Filename: "x.jpg", Caption: gatedPostCaption(item, url, true)}}
 		appendOriginalURL(media, url)
 		caption := media[0].Caption
 
@@ -210,7 +210,7 @@ func TestGatedPostCaptionSurvivesEscapingAndLinkSuffix(t *testing.T) {
 
 func TestGatedPostCaptionWithoutTextIsAuthorOnly(t *testing.T) {
 	item := apifyPostItem{Username: "someone"}
-	caption := gatedPostCaption(item, "https://www.instagram.com/p/X/")
+	caption := gatedPostCaption(item, "https://www.instagram.com/p/X/", true)
 
 	if (strings.Contains(caption, "tg-spoiler") == true) || (strings.Contains(caption, "@someone") == false) {
 		t.Fatalf("unexpected caption: %q", caption)
@@ -225,7 +225,7 @@ func TestApifyRunIsRefusedOverBudget(t *testing.T) {
 	provider := newApifyTestProvider(t, server)
 	t.Setenv("APIFY_MONTHLY_BUDGET_USD", "0.12")
 
-	_, err := provider.FetchPost("https://www.instagram.com/p/DeYsKEDjbGB/")
+	_, err := provider.FetchPost("https://www.instagram.com/p/DeYsKEDjbGB/", true)
 
 	if errors.Is(err, errApifyBudget) == false {
 		t.Fatalf("expected the budget error, got %v", err)
@@ -233,5 +233,48 @@ func TestApifyRunIsRefusedOverBudget(t *testing.T) {
 
 	if len(input.PostURLs) != 0 {
 		t.Fatalf("the actor must not run over budget")
+	}
+}
+
+func TestApifyFetchPostWithoutSpoilerSendsPlainMedia(t *testing.T) {
+	var input apifyRunInput
+	server := newApifyTestServer(t, http.StatusCreated, "DeYsKEDjbGB", &input)
+	defer server.Close()
+
+	media, err := newApifyTestProvider(t, server).FetchPost("https://www.instagram.com/p/DeYsKEDjbGB/", false)
+
+	if (err != nil) || (len(media) != 2) {
+		t.Fatalf("unexpected result: %d %v", len(media), err)
+	}
+
+	if (media[0].Spoiler == true) || (strings.Contains(media[0].Caption, "tg-spoiler") == true) || (strings.Contains(media[0].Caption, "Hello &lt;world&gt;") == false) {
+		t.Fatalf("expected plain media and caption, got spoiler=%v caption=%q", media[0].Spoiler, media[0].Caption)
+	}
+}
+
+func TestApifyFetchPostRetriesAnEmptyAnswerOnce(t *testing.T) {
+	runs := 0
+	input := ""
+	server := newFakeApify(t, `[]`, &runs, &input)
+	provider := &ApifyInstagramProvider{tempDir: t.TempDir(), actor: "a~b", api: fakeApifyClient(server)}
+	apifyEmptyRetryDelay = 0
+
+	_, err := provider.FetchPost("https://www.instagram.com/p/DeYsKEDjbGB/", false)
+
+	if (errors.Is(err, errApifyNoMedia) == false) || (runs != 2) {
+		t.Fatalf("expected one retry, got runs=%d err=%v", runs, err)
+	}
+}
+
+func TestApifyFetchPostDoesNotRetryANonEmptyAnswer(t *testing.T) {
+	runs := 0
+	input := ""
+	server := newFakeApify(t, `[{"shortcode":"Other","media":[{"media_type":"image","media_url":"x"}]}]`, &runs, &input)
+	provider := &ApifyInstagramProvider{tempDir: t.TempDir(), actor: "a~b", api: fakeApifyClient(server)}
+
+	_, err := provider.FetchPost("https://www.instagram.com/p/DeYsKEDjbGB/", false)
+
+	if (errors.Is(err, errApifyNoMedia) == false) || (runs != 1) {
+		t.Fatalf("expected no retry for a non-empty answer, got runs=%d err=%v", runs, err)
 	}
 }

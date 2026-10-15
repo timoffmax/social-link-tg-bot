@@ -6,7 +6,7 @@ A Telegram bot that downloads and sends actual media files from social media lin
 
 - **Real media, not links** — downloads photos, videos, galleries, slideshows, and stories (Instagram carousels: first item only), and sends them as native Telegram media
 - **Layered extraction chains with automatic fallbacks** — every platform has multiple extraction methods tried in order, so a single dead third-party service never silently kills a platform:
-  - **Instagram**: kkinstagram redirector → OG-preview fallback; posts gated by their author (e.g. age limits) are fetched blurred through a paid Apify actor within monthly quotas (groups need the owner's `/gated on`), otherwise explained
+  - **Instagram**: kkinstagram redirector → OG-preview fallback; posts gated by their author (e.g. age limits) are fetched through a paid Apify actor within monthly quotas (20 per chat by default; age-limited posts are blurred), and otherwise explained (with the reason, e.g. a used-up quota)
   - **Reddit**: vxreddit (works from datacenter IPs, resolves `/s/` share links) → direct JSON API (with inline JS-challenge solving; text posts) → yt-dlp
   - **TikTok**: direct scraping → slideshow API → tikwm.com → kktiktok redirector → headless browser; handles both videos and photo slideshows
   - **Twitter/X**: hybrid extraction — full tweet text (with author display name and recursive quote resolution) via FxTwitter + media via yt-dlp

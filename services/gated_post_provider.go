@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -13,12 +14,19 @@ import (
 	"github.com/timoffmax/social-link-bot/config"
 )
 
+// apifyEmptyRetryDelay is the pause before retrying an empty answer (a
+// variable so tests can skip it).
+var apifyEmptyRetryDelay = 3 * time.Second
+
+// errApifyNoMedia marks a run that delivered no item for the post.
+var errApifyNoMedia = errors.New("apify returned no media")
+
 // GatedPostProvider fetches an Instagram post its author gated (e.g. an age
 // limit) through a service with its own logged-in sessions. It is an interface
 // so the provider can be swapped (Apify today, HikerAPI if Apify blocks us).
 type GatedPostProvider interface {
 	Name() string
-	FetchPost(instagramURL string) ([]*MediaInfo, error)
+	FetchPost(instagramURL string, spoiler bool) ([]*MediaInfo, error)
 }
 
 // NewGatedPostProvider returns the configured provider, or nil when none is.
@@ -102,9 +110,9 @@ func (p *ApifyInstagramProvider) Name() string {
 	return apifyServiceName
 }
 
-// FetchPost runs the actor for one post and downloads every slide, marked as
-// spoiler media.
-func (p *ApifyInstagramProvider) FetchPost(instagramURL string) ([]*MediaInfo, error) {
+// FetchPost runs the actor for one post and downloads every slide; with
+// spoiler (age-limited posts) the media and caption are sent blurred.
+func (p *ApifyInstagramProvider) FetchPost(instagramURL string, spoiler bool) ([]*MediaInfo, error) {
 	var result []*MediaInfo
 	var item apifyPostItem
 	postURL, err := canonicalInstagramPostURL(instagramURL)
@@ -114,7 +122,7 @@ func (p *ApifyInstagramProvider) FetchPost(instagramURL string) ([]*MediaInfo, e
 	}
 
 	if err == nil {
-		result, err = p.downloadSlides(item, instagramURL)
+		result, err = p.downloadSlides(item, instagramURL, spoiler)
 	}
 
 	if (err != nil) && (isApifyBudgetError(err) == false) {
@@ -130,9 +138,39 @@ func (p *ApifyInstagramProvider) FetchPost(instagramURL string) ([]*MediaInfo, e
 	return result, err
 }
 
-// runActor runs the actor for one post and returns the post's item.
+// runActor runs the actor for one post and returns the post's item. An empty
+// dataset is retried once after a short pause: on the free plan a run is
+// turned away (with an empty dataset) while the shared free capacity is busy.
+// A non-empty answer without the post is final. If the retry is refused (e.g.
+// budget), the first run's result stands, since that run may be billed.
 func (p *ApifyInstagramProvider) runActor(postURL string) (apifyPostItem, error) {
+	result, isEmpty, err := p.runActorOnce(postURL)
+
+	if isEmpty == true {
+		log.Printf("🔁 [apify] empty answer for %s, retrying once", postURL)
+		time.Sleep(apifyEmptyRetryDelay)
+		result, err = p.retryActor(postURL, err)
+	}
+
+	return result, err
+}
+
+// retryActor runs the second attempt, keeping firstErr when it is refused.
+func (p *ApifyInstagramProvider) retryActor(postURL string, firstErr error) (apifyPostItem, error) {
+	result, _, err := p.runActorOnce(postURL)
+
+	if isApifyBudgetError(err) == true {
+		err = firstErr
+	}
+
+	return result, err
+}
+
+// runActorOnce runs the actor once for one post; isEmpty reports an empty
+// dataset.
+func (p *ApifyInstagramProvider) runActorOnce(postURL string) (apifyPostItem, bool, error) {
 	result := apifyPostItem{}
+	isEmpty := false
 	var items []apifyPostItem
 	input := apifyRunInput{PostURLs: []string{postURL}, IncludeViews: false}
 	// The gated fetch runs after the chain's 90s deadline, so it has its own.
@@ -144,16 +182,17 @@ func (p *ApifyInstagramProvider) runActor(postURL string) (apifyPostItem, error)
 	}
 
 	if err == nil {
+		isEmpty = (len(items) == 0)
 		result, err = pickApifyPostItem(items, postURL)
 	}
 
-	return result, err
+	return result, isEmpty, err
 }
 
 // pickApifyPostItem returns the item for the requested post.
 func pickApifyPostItem(items []apifyPostItem, postURL string) (apifyPostItem, error) {
 	result := apifyPostItem{}
-	err := fmt.Errorf("apify returned no media for %s", postURL)
+	err := fmt.Errorf("%w for %s", errApifyNoMedia, postURL)
 	_, shortcode := instagramPostPath(postURL)
 
 	for _, item := range items {
@@ -169,14 +208,14 @@ func pickApifyPostItem(items []apifyPostItem, postURL string) (apifyPostItem, er
 }
 
 // downloadSlides downloads every slide that fits Telegram's upload limit.
-func (p *ApifyInstagramProvider) downloadSlides(item apifyPostItem, instagramURL string) ([]*MediaInfo, error) {
+func (p *ApifyInstagramProvider) downloadSlides(item apifyPostItem, instagramURL string, spoiler bool) ([]*MediaInfo, error) {
 	var result []*MediaInfo
 	var err error
 	timestamp := time.Now().UnixNano()
-	caption := gatedPostCaption(item, instagramURL)
+	caption := gatedPostCaption(item, instagramURL, spoiler)
 
 	for i, slide := range item.Media {
-		mediaInfo, slideErr := p.downloadSlide(slide, item.Shortcode, timestamp, i)
+		mediaInfo, slideErr := p.downloadSlide(slide, item.Shortcode, timestamp, i, spoiler)
 
 		if slideErr != nil {
 			log.Printf("⚠️ [apify] skipping slide %d of %s: %v", (i + 1), item.Shortcode, slideErr)
@@ -202,15 +241,15 @@ func (p *ApifyInstagramProvider) downloadSlides(item apifyPostItem, instagramURL
 }
 
 // gatedPostCaption builds the author line plus the post caption, hidden
-// behind spoilers like the media. The caption is fitted (after HTML escaping)
+// behind spoilers like the media when spoiler is set. The caption is fitted (after HTML escaping)
 // into what Telegram's caption limit leaves next to the author line and the
 // original link, so no later truncation can cut a tag or an entity.
-func gatedPostCaption(item apifyPostItem, instagramURL string) string {
+func gatedPostCaption(item apifyPostItem, instagramURL string, spoiler bool) string {
 	escapedName := EscapeForTelegramHTML(item.FullName)
 	authorLine := FormatAuthorCaption(gatedPlatform, escapedName, item.Username, "")
 	linkSuffix := FormatOriginalLink(instagramURL)
 	budget := TelegramCaptionLimitBytes - len(authorLine) - len(gatedCaptionSeparator) - len(linkSuffix)
-	spoilerText := fitSpoilerCaption(item.Caption, budget)
+	spoilerText := fitSpoilerCaption(item.Caption, budget, spoiler)
 	result := FormatAuthorCaption(gatedPlatform, escapedName, item.Username, spoilerText)
 
 	return result
@@ -220,9 +259,9 @@ func gatedPostCaption(item apifyPostItem, instagramURL string) string {
 // (at rune boundaries of the raw text) until it fits budget bytes. Escaping
 // only ever grows text, so cutting the overshoot from the raw text shrinks the
 // result by at least as much; the loop ends at the latest with an empty text.
-func fitSpoilerCaption(raw string, budget int) string {
+func fitSpoilerCaption(raw string, budget int, spoiler bool) string {
 	remaining := raw
-	result := wrapSpoilerLines(remaining)
+	result := wrapSpoilerLines(remaining, spoiler)
 
 	for (len(result) > budget) && (remaining != "") {
 		overshoot := len(result) - budget
@@ -233,16 +272,16 @@ func fitSpoilerCaption(raw string, budget int) string {
 		}
 
 		remaining = truncateAtRuneBoundary(remaining, keep)
-		result = wrapSpoilerLines(remaining)
+		result = wrapSpoilerLines(remaining, spoiler)
 	}
 
 	return result
 }
 
-// wrapSpoilerLines escapes each caption line and wraps it in its own spoiler,
-// so any single line taken out of the caption (e.g. the author-only caption
-// when descriptions are off) is still balanced HTML.
-func wrapSpoilerLines(raw string) string {
+// wrapSpoilerLines escapes each caption line and, with spoiler, wraps it in
+// its own spoiler, so any single line taken out of the caption (e.g. the
+// author-only caption when descriptions are off) is still balanced HTML.
+func wrapSpoilerLines(raw string, spoiler bool) string {
 	lines := strings.Split(raw, "\n")
 	wrapped := make([]string, 0, len(lines))
 
@@ -251,8 +290,12 @@ func wrapSpoilerLines(raw string) string {
 		isBlank := (strings.TrimSpace(line) == "")
 		wrappedLine := ""
 
-		if isBlank == false {
+		if (isBlank == false) && (spoiler == true) {
 			wrappedLine = fmt.Sprintf(gatedSpoilerCaptionTemplate, escaped)
+		}
+
+		if (isBlank == false) && (spoiler == false) {
+			wrappedLine = escaped
 		}
 
 		wrapped = append(wrapped, wrappedLine)
@@ -265,7 +308,7 @@ func wrapSpoilerLines(raw string) string {
 }
 
 // downloadSlide downloads one slide to a temp file.
-func (p *ApifyInstagramProvider) downloadSlide(slide apifyPostMedia, shortcode string, timestamp int64, index int) (*MediaInfo, error) {
+func (p *ApifyInstagramProvider) downloadSlide(slide apifyPostMedia, shortcode string, timestamp int64, index int, spoiler bool) (*MediaInfo, error) {
 	var result *MediaInfo
 	mediaType := MediaTypePhoto
 	ext := gatedExtPhoto
@@ -288,7 +331,7 @@ func (p *ApifyInstagramProvider) downloadSlide(slide apifyPostMedia, shortcode s
 	}
 
 	if err == nil {
-		result = &MediaInfo{Type: mediaType, Filename: filePath, Spoiler: true}
+		result = &MediaInfo{Type: mediaType, Filename: filePath, Spoiler: spoiler}
 	}
 
 	return result, err

@@ -104,27 +104,46 @@ func TestGatedFetchPrivateAllowanceRunsOutAndRefunds(t *testing.T) {
 	}
 }
 
-func TestGatedFetchGroupIsDeniedUntilEnabledAndHonoursCap(t *testing.T) {
+func TestGatedFetchGroupIsOnByDefaultAndHonoursCap(t *testing.T) {
+	setupGatedFetchTestDB(t)
+	t.Setenv("GATED_FETCH_CHAT_MONTHLY_CAP", "2")
+
+	for i := 0; i < 2; i++ {
+		if denial := reserveOnce(t, -100, int64(7+i), false); denial != GatedFetchAllowed {
+			t.Fatalf("expected groups on by default, fetch %d got %q", i+1, denial)
+		}
+	}
+
+	if denial := reserveOnce(t, -100, 9, false); denial != GatedFetchDeniedChatCap {
+		t.Fatalf("expected the default group cap, got %q", denial)
+	}
+}
+
+func TestGatedFetchSettingACapKeepsAGroupOn(t *testing.T) {
 	setupGatedFetchTestDB(t)
 
-	if denial := reserveOnce(t, -100, 7, false); denial != GatedFetchDeniedChatOff {
-		t.Fatalf("expected groups off by default, got %q", denial)
-	}
-
-	if err := SetGatedFetchEnabled(GatedFetchScopeChat, -100, true); err != nil {
-		t.Fatalf("enable: %v", err)
-	}
-
-	if err := SetGatedFetchMonthlyLimit(GatedFetchScopeChat, -100, sql.NullInt64{Int64: 1, Valid: true}); err != nil {
+	if err := SetGatedFetchMonthlyLimit(GatedFetchScopeChat, -200, sql.NullInt64{Int64: 1, Valid: true}); err != nil {
 		t.Fatalf("cap: %v", err)
 	}
 
-	if denial := reserveOnce(t, -100, 7, false); denial != GatedFetchAllowed {
-		t.Fatalf("expected the first group fetch, got %q", denial)
+	if denial := reserveOnce(t, -200, 7, false); denial != GatedFetchAllowed {
+		t.Fatalf("a capped group must stay on, got %q", denial)
 	}
 
-	if denial := reserveOnce(t, -100, 8, false); denial != GatedFetchDeniedChatCap {
-		t.Fatalf("expected the group cap, got %q", denial)
+	if denial := reserveOnce(t, -200, 8, false); denial != GatedFetchDeniedChatCap {
+		t.Fatalf("expected the custom cap, got %q", denial)
+	}
+}
+
+func TestGatedFetchGroupTurnedOffIsDenied(t *testing.T) {
+	setupGatedFetchTestDB(t)
+
+	if err := SetGatedFetchEnabled(GatedFetchScopeChat, -300, false); err != nil {
+		t.Fatalf("off: %v", err)
+	}
+
+	if denial := reserveOnce(t, -300, 7, false); denial != GatedFetchDeniedChatOff {
+		t.Fatalf("expected an explicit off to deny, got %q", denial)
 	}
 }
 
@@ -207,7 +226,7 @@ func (failingGatedProvider) Name() string {
 	return "failing"
 }
 
-func (failingGatedProvider) FetchPost(string) ([]*MediaInfo, error) {
+func (failingGatedProvider) FetchPost(string, bool) ([]*MediaInfo, error) {
 	return nil, errGatedTestFetch
 }
 
@@ -232,7 +251,7 @@ func TestGatedFetchFailureRefundsUserButKeepsGlobalSpend(t *testing.T) {
 	}
 }
 
-func TestGatedFetchUnlimitedUserAndChatSkipTheirOwnLimit(t *testing.T) {
+func TestGatedFetchUnlimitedUserAndChatSkipTheirOwnLimitAndTheGlobalCap(t *testing.T) {
 	setupGatedFetchTestDB(t)
 	t.Setenv("GATED_FETCH_USER_MONTHLY_ALLOWANCE", "1")
 	t.Setenv("GATED_FETCH_CHAT_MONTHLY_CAP", "1")
@@ -261,7 +280,11 @@ func TestGatedFetchUnlimitedUserAndChatSkipTheirOwnLimit(t *testing.T) {
 		}
 	}
 
-	if denial := reserveOnce(t, 50, 50, true); denial != GatedFetchDeniedGlobal {
-		t.Fatalf("expected the global cap to still apply, got %q", denial)
+	if denial := reserveOnce(t, 50, 50, true); denial != GatedFetchAllowed {
+		t.Fatalf("unlimited scopes must skip the global fetch cap, got %q", denial)
+	}
+
+	if denial := reserveOnce(t, 60, 60, true); denial != GatedFetchAllowed {
+		t.Fatalf("expected a regular user under the global cap, got %q", denial)
 	}
 }

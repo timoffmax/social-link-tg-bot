@@ -46,51 +46,72 @@ func (e *InstagramOGExtractor) ExtractMedia(instagramURL string) ([]*MediaInfo, 
 	}
 
 	if gate.Restricted == false {
-		result, err = e.extractPreview(instagramURL)
+		result, err = e.extractPreview(instagramURL, false)
 	}
 
 	return result, err
 }
 
 // extractPreview scrapes the og:image thumbnail and caption and downloads the
-// thumbnail as a photo.
-func (e *InstagramOGExtractor) extractPreview(instagramURL string) ([]*MediaInfo, error) {
+// thumbnail as a photo. With requireMediaCDN, an og:image that is not on
+// Instagram's media CDN (a login wall or logo) is rejected.
+func (e *InstagramOGExtractor) extractPreview(instagramURL string, requireMediaCDN bool) ([]*MediaInfo, error) {
+	var result []*MediaInfo
+	imageURL := ""
 	htmlBody, err := e.fetchHTML(instagramURL)
 
-	if err != nil {
-		return nil, err
+	if err == nil {
+		rawImageURL := firstSubmatch(ogImagePattern, htmlBody)
+		imageURL = html.UnescapeString(rawImageURL)
 	}
 
-	imageURL := firstSubmatch(ogImagePattern, htmlBody)
-
-	if imageURL == "" {
-		return nil, fmt.Errorf("no og:image found")
+	if (err == nil) && (imageURL == "") {
+		err = fmt.Errorf("no og:image found")
 	}
 
-	imageURL = html.UnescapeString(imageURL)
-	caption := html.UnescapeString(firstSubmatch(ogTitlePattern, htmlBody))
+	if (err == nil) && (requireMediaCDN == true) && (isInstagramMediaCDNURL(imageURL) == false) {
+		err = fmt.Errorf("og:image is not post media: %s", imageURL)
+	}
 
+	if err == nil {
+		result, err = e.downloadPreview(instagramURL, imageURL, htmlBody)
+	}
+
+	return result, err
+}
+
+// downloadPreview downloads the og:image and builds the photo with the
+// og:title as caption.
+func (e *InstagramOGExtractor) downloadPreview(instagramURL, imageURL, htmlBody string) ([]*MediaInfo, error) {
+	var result []*MediaInfo
+	rawTitle := firstSubmatch(ogTitlePattern, htmlBody)
+	caption := html.UnescapeString(rawTitle)
+	// Captions are sent with HTML parse mode: the unescaped title must be
+	// escaped again, or a bare & or < gets the message rejected.
+	escapedCaption := EscapeForTelegramHTML(caption)
 	_, shortcode := instagramPostPath(instagramURL)
-
-	filename := fmt.Sprintf("instagram_og_%s_%d.jpg", shortcode, time.Now().Unix())
+	timestamp := time.Now().Unix()
+	filename := fmt.Sprintf("instagram_og_%s_%d.jpg", shortcode, timestamp)
 	filePath := filepath.Join(e.tempDir, filename)
-
-	err = downloadToFile(imageURL, filePath)
+	err := downloadToFile(imageURL, filePath)
 
 	if err != nil {
-		return nil, fmt.Errorf("failed to download og:image: %v", err)
+		err = fmt.Errorf("failed to download og:image: %w", err)
 	}
 
-	log.Printf("✅ [OG] Downloaded preview thumbnail for %s", instagramURL)
+	if err == nil {
+		log.Printf("✅ [OG] Downloaded preview thumbnail for %s", instagramURL)
 
-	result := []*MediaInfo{{
-		Type:     "photo",
-		URL:      instagramURL,
-		Caption:  FormatAuthorCaption("instagram", "", "", caption),
-		Filename: filePath,
-	}}
+		authorCaption := FormatAuthorCaption("instagram", "", "", escapedCaption)
+		result = []*MediaInfo{{
+			Type:     MediaTypePhoto,
+			URL:      instagramURL,
+			Caption:  authorCaption,
+			Filename: filePath,
+		}}
+	}
 
-	return result, nil
+	return result, err
 }
 
 // fetchHTML retrieves the Instagram page HTML with a crawler User-Agent.
@@ -122,6 +143,18 @@ func (e *InstagramOGExtractor) fetchHTML(instagramURL string) (string, error) {
 	}
 
 	return string(body), nil
+}
+
+// instagramMediaCDNPattern matches post media on Instagram's CDN
+// (scontent*.cdninstagram.com, instagram.*.fbcdn.net) under the /v/ and /o1/
+// media paths; static.cdninstagram.com logos and icons don't match.
+var instagramMediaCDNPattern = regexp.MustCompile(`^https://([a-z0-9-]+\.)*(cdninstagram\.com|fbcdn\.net)/(v|o1)/`)
+
+// isInstagramMediaCDNURL reports whether imageURL is post media on the CDN.
+func isInstagramMediaCDNURL(imageURL string) bool {
+	result := instagramMediaCDNPattern.MatchString(imageURL)
+
+	return result
 }
 
 // firstSubmatch returns the first capture group of pattern in s, or "".

@@ -27,8 +27,9 @@ func (e *GatedFetchDeniedError) Unwrap() error {
 
 // FetchGatedPost retries a failed Instagram download through the paid provider
 // when the failure is an author-gated post and the chat/user quota allows it.
-// It returns the downloadErr unchanged when the post isn't gated, wrapped in a
-// GatedFetchDeniedError when the fetch isn't allowed or fails.
+// It returns the downloadErr unchanged when the post isn't gated. When the
+// fetch isn't allowed or fails, a region/audience-limited post falls back to
+// its OG preview; otherwise the error is wrapped in a GatedFetchDeniedError.
 func (sd *SmartDownloader) FetchGatedPost(instagramURL string, downloadErr error, chatID, userID int64, isPrivate bool) ([]*MediaInfo, error) {
 	var result []*MediaInfo
 	err := downloadErr
@@ -36,7 +37,16 @@ func (sd *SmartDownloader) FetchGatedPost(instagramURL string, downloadErr error
 	isGated := errors.As(downloadErr, &gatedErr)
 
 	if isGated == true {
-		result, err = sd.fetchGatedWithQuota(instagramURL, downloadErr, chatID, userID, isPrivate)
+		result, err = sd.fetchGatedWithQuota(instagramURL, downloadErr, gatedErr, chatID, userID, isPrivate)
+	}
+
+	// A post limited by region or audience still has a public preview: when
+	// the full post can't be fetched, send the thumbnail and caption rather
+	// than an explanation. Other gates keep the explanation.
+	isPreviewable := (isGated == true) && (err != nil) && (gatedErr.Gate.AudienceLimited == true) && (sd.instagramOG != nil)
+
+	if isPreviewable == true {
+		result, err = sd.gatedPreviewFallback(instagramURL, err)
 	}
 
 	return result, err
@@ -44,7 +54,7 @@ func (sd *SmartDownloader) FetchGatedPost(instagramURL string, downloadErr error
 
 // fetchGatedWithQuota reserves the quota, calls the provider and refunds the
 // quota when the provider fails.
-func (sd *SmartDownloader) fetchGatedWithQuota(instagramURL string, downloadErr error, chatID, userID int64, isPrivate bool) ([]*MediaInfo, error) {
+func (sd *SmartDownloader) fetchGatedWithQuota(instagramURL string, downloadErr error, gatedErr *InstagramGatedError, chatID, userID int64, isPrivate bool) ([]*MediaInfo, error) {
 	var result []*MediaInfo
 	var quotas []GatedFetchQuota
 	var fetchErr error
@@ -62,7 +72,8 @@ func (sd *SmartDownloader) fetchGatedWithQuota(instagramURL string, downloadErr 
 	if (denial == GatedFetchAllowed) && (err == nil) {
 		providerName := sd.gated.Name()
 		log.Printf("🔞 [%s] fetching gated post %s (chat %d, user %d)", providerName, instagramURL, chatID, userID)
-		result, fetchErr = sd.gated.FetchPost(instagramURL)
+		spoiler := gatedErr.Gate.NeedsSpoiler()
+		result, fetchErr = sd.gated.FetchPost(instagramURL, spoiler)
 	}
 
 	isBudgetRefusal := isApifyBudgetError(fetchErr)
@@ -88,6 +99,29 @@ func (sd *SmartDownloader) fetchGatedWithQuota(instagramURL string, downloadErr 
 	if (denial != GatedFetchAllowed) || (err != nil) || (fetchErr != nil) {
 		result = nil
 		err = &GatedFetchDeniedError{Denial: denial, Cause: downloadErr}
+	}
+
+	return result, err
+}
+
+// gatedPreviewFallback returns the OG preview of a post, or keeps fetchErr
+// when there is none.
+func (sd *SmartDownloader) gatedPreviewFallback(instagramURL string, fetchErr error) ([]*MediaInfo, error) {
+	var result []*MediaInfo
+	err := fetchErr
+	// The preview must be the post's own image (Instagram's media CDN), not
+	// a login wall or logo.
+	preview, previewErr := sd.instagramOG.extractPreview(instagramURL, true)
+
+	if (previewErr == nil) && (len(preview) > 0) {
+		log.Printf("🖼️ [gated-fetch] sending the preview of %s", instagramURL)
+		appendOriginalURL(preview, instagramURL)
+		result = preview
+		err = nil
+	}
+
+	if previewErr != nil {
+		log.Printf("⚠️ [gated-fetch] no preview for %s: %v", instagramURL, previewErr)
 	}
 
 	return result, err

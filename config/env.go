@@ -302,7 +302,7 @@ const (
 	gatedFetchChatMonthlyCapKey       = "GATED_FETCH_CHAT_MONTHLY_CAP"
 	defaultApifyInstagramActor        = "intropix~instagram-posts-reels-scraper"
 	defaultGatedFetchGlobalMonthlyCap = 100
-	defaultGatedFetchUserMonthlyAllow = 3
+	defaultGatedFetchUserMonthlyAllow = 20
 	defaultGatedFetchChatMonthlyCap   = 20
 )
 

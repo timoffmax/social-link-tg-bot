@@ -689,7 +689,7 @@ func extractAuthorInfo(fullCaption, platform string) string {
 		// For Instagram, try to extract username (usually has @username)
 		lines := strings.Split(fullCaption, "\n")
 		for _, line := range lines {
-			if strings.Contains(line, "@") && len(line) < 50 {
+			if isAuthorLine(line) == true {
 				return strings.TrimSpace(line)
 			}
 		}
@@ -700,7 +700,7 @@ func extractAuthorInfo(fullCaption, platform string) string {
 		// For TikTok, extract author/creator info
 		lines := strings.Split(fullCaption, "\n")
 		for _, line := range lines {
-			if strings.Contains(line, "@") && len(line) < 50 {
+			if isAuthorLine(line) == true {
 				return strings.TrimSpace(line)
 			}
 		}
@@ -1018,6 +1018,16 @@ const instagramGatedLogType = "instagram-gated"
 // paid gated-post fetches is used up.
 const gatedAllowanceUsedHint = "You've used all your free downloads of restricted posts for this month."
 
+// gatedChatCapReachedHint is appended when a group's monthly cap of paid
+// gated-post fetches is used up.
+const gatedChatCapReachedHint = "This chat has used all its downloads of restricted posts for this month."
+
+// gatedGlobalCapReachedHint is appended when the bot-wide monthly cap is used up.
+const gatedGlobalCapReachedHint = "The bot has used all its downloads of restricted posts for this month."
+
+// gatedChatOffHint is appended when the owner turned the paid fetch off here.
+const gatedChatOffHint = "Downloads of restricted posts are turned off in this chat."
+
 // replyInstagramGate replies to an Instagram link whose author limited its
 // audience (e.g. "People under 15 can't see this content") with an explanation.
 // It reports whether that reply was sent, so a failed send keeps the fallbacks.
@@ -1043,6 +1053,17 @@ func replyInstagramGate(downloadErr error, origMessage *response.TgMessage, orig
 	return result
 }
 
+// isAuthorLine reports whether a caption line is the author line: a short
+// line with an @mention, or a profile link of any length.
+func isAuthorLine(line string) bool {
+	hasMention := strings.Contains(line, "@")
+	isShort := (len(line) < 50)
+	isProfileLink := services.IsProfileMentionLine(line)
+	result := (hasMention == true) && ((isShort == true) || (isProfileLink == true))
+
+	return result
+}
+
 // instagramGateReplyText explains a gated post, adding a hint when the user's
 // private allowance of paid fetches is what stopped the download.
 func instagramGateReplyText(downloadErr error, gate services.InstagramGate) string {
@@ -1052,6 +1073,18 @@ func instagramGateReplyText(downloadErr error, gate services.InstagramGate) stri
 
 	if (isDenied == true) && (deniedErr.Denial == services.GatedFetchDeniedUserCap) {
 		result = fmt.Sprintf("%s\n\n%s", result, gatedAllowanceUsedHint)
+	}
+
+	if (isDenied == true) && (deniedErr.Denial == services.GatedFetchDeniedChatCap) {
+		result = fmt.Sprintf("%s\n\n%s", result, gatedChatCapReachedHint)
+	}
+
+	if (isDenied == true) && (deniedErr.Denial == services.GatedFetchDeniedGlobal) {
+		result = fmt.Sprintf("%s\n\n%s", result, gatedGlobalCapReachedHint)
+	}
+
+	if (isDenied == true) && (deniedErr.Denial == services.GatedFetchDeniedChatOff) {
+		result = fmt.Sprintf("%s\n\n%s", result, gatedChatOffHint)
 	}
 
 	return result

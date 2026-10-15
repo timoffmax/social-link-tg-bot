@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"strconv"
 	"time"
 )
 
@@ -43,16 +44,32 @@ const (
 
 // instagramGateNotice is the gating part of an oEmbed error answer.
 type instagramGateNotice struct {
-	GatingType        string `json:"gating_type"`
-	Title             string `json:"title"`
-	BlocksLoggingData string `json:"blocks_logging_data"`
+	GatingType        string      `json:"gating_type"`
+	Title             string      `json:"title"`
+	BlocksLoggingData string      `json:"blocks_logging_data"`
+	GatingTypeThrift  interface{} `json:"gating_type_thrift"`
 }
+
+// instagramAudienceGateThrift is the gating_type_thrift of an account's
+// region/audience limit ("It can't be seen by certain audiences"), which
+// comes with an empty blocks_logging_data. Only this known non-age gate is
+// sent unblurred; any other gate is treated as possibly age-related.
+const instagramAudienceGateThrift = 3
 
 // InstagramGate describes a viewer restriction the author put on a post.
 type InstagramGate struct {
-	Restricted bool
-	AgeLimited bool
-	Title      string
+	Restricted      bool
+	AgeLimited      bool
+	AudienceLimited bool
+	Title           string
+}
+
+// NeedsSpoiler reports whether fetched media of the post is sent blurred:
+// every gate except the known region/audience limit.
+func (g InstagramGate) NeedsSpoiler() bool {
+	result := (g.AudienceLimited == false)
+
+	return result
 }
 
 // InstagramGatedError is returned by the Instagram chain for a post its author
@@ -182,10 +199,35 @@ func parseInstagramGate(status int, body []byte) (InstagramGate, error) {
 
 // newInstagramGate maps a gating notice to an InstagramGate.
 func newInstagramGate(notice instagramGateNotice) InstagramGate {
+	thrift := gatingThriftValue(notice.GatingTypeThrift)
+	isAudience := (notice.BlocksLoggingData == "") && (thrift == instagramAudienceGateThrift)
 	result := InstagramGate{
-		Restricted: true,
-		AgeLimited: (instagramAgeGateMarker == notice.BlocksLoggingData),
-		Title:      notice.Title,
+		Restricted:      true,
+		AgeLimited:      (instagramAgeGateMarker == notice.BlocksLoggingData),
+		AudienceLimited: isAudience,
+		Title:           notice.Title,
+	}
+
+	return result
+}
+
+// gatingThriftValue reads gating_type_thrift whether it comes as a number or
+// a string; anything else is -1 (unknown, so the post stays blurred).
+func gatingThriftValue(raw interface{}) int {
+	result := -1
+	number, isNumber := raw.(float64)
+	text, isText := raw.(string)
+
+	if isNumber == true {
+		result = int(number)
+	}
+
+	if isText == true {
+		parsed, err := strconv.ParseFloat(text, 64)
+
+		if err == nil {
+			result = int(parsed)
+		}
 	}
 
 	return result
