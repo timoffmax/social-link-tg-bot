@@ -261,8 +261,8 @@ func GetOriginal9GAGLinks(message *response.TgMessage) []string {
 }
 
 // threadsLinkPattern matches Threads post links (threads.com / threads.net,
-// "/@user/post/<code>" and short "/t/<code>").
-var threadsLinkPattern = regexp.MustCompile(`https?:\/\/(www\.)?threads\.(com|net)\/(@[A-Za-z0-9._]+\/post|t)\/[A-Za-z0-9_-]+[^\s]*`)
+// "/@user/post/<code>", short "/t/<code>" and app "/share/<id>" links).
+var threadsLinkPattern = regexp.MustCompile(`https?:\/\/(www\.)?threads\.(com|net)\/(@[A-Za-z0-9._]+\/post|t|share)\/[A-Za-z0-9_-]+[^\s]*`)
 
 // GetThreadsLinks returns the Threads post links of a message.
 func GetThreadsLinks(message *response.TgMessage) []string {

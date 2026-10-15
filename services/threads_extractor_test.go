@@ -35,7 +35,7 @@ func serveThreads(t *testing.T, embed string, requested *[]string) *httptest.Ser
 	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		*requested = append(*requested, r.URL.Path)
 		isEmbed := strings.HasSuffix(r.URL.Path, "/embed")
-		isShort := strings.HasPrefix(r.URL.Path, "/t/")
+		isShort := strings.HasPrefix(r.URL.Path, "/t/") || strings.HasPrefix(r.URL.Path, "/share/")
 		isVx := strings.HasPrefix(r.URL.Path, "/vx/")
 
 		if isEmbed == true {
@@ -224,5 +224,31 @@ func TestThreadsVxthreadsUsesTheShortLinkWhenThreadsCantResolveIt(t *testing.T) 
 
 	if (err != nil) || (len(media) != 1) || (strings.Contains(strings.Join(requested, " "), "/vx/t/CODE123") == false) {
 		t.Fatalf("expected the mirror to get the short link, got %v %v", requested, err)
+	}
+}
+
+func TestThreadsEmbedResolvesShareLinks(t *testing.T) {
+	var requested []string
+	server := serveThreads(t, threadsEmbedFixture, &requested)
+
+	media, err := newTestThreadsExtractor(t, server).ExtractEmbed(context.Background(), "https://www.threads.com/share/BAV_IiebyI/")
+
+	if (err != nil) || (len(media) != 3) || (strings.Contains(strings.Join(requested, " "), "/@fox.com/post/CODE123/embed") == false) {
+		t.Fatalf("expected the share link resolved to the post, got %v %v", requested, err)
+	}
+}
+
+func TestThreadsRedirectPostPathReadsOnlyThePath(t *testing.T) {
+	cases := map[string]string{
+		"/@a.b/post/CODE1?xmt=1":                     "@a.b/post/CODE1",
+		"https://www.threads.com/@a.b/post/CODE1":    "@a.b/post/CODE1",
+		"/login?next=/@a.b/post/CODE1":               "",
+		"https://www.threads.com/login?next=%2F@a.b": "",
+	}
+
+	for location, expected := range cases {
+		if threadsRedirectPostPath(location) != expected {
+			t.Fatalf("%s: expected %q, got %q", location, expected, threadsRedirectPostPath(location))
+		}
 	}
 }

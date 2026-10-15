@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"html"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -63,8 +64,9 @@ var (
 	// threadsURLPattern matches post links on threads.com / threads.net.
 	threadsURLPattern = regexp.MustCompile(`^https?://(www\.)?threads\.(com|net)/`)
 
-	// threadsPostPathPattern captures "@user/post/<code>" or "t/<code>".
-	threadsPostPathPattern = regexp.MustCompile(`threads\.(?:com|net)/((?:@[A-Za-z0-9._]+/post|t)/[A-Za-z0-9_-]+)`)
+	// threadsPostPathPattern captures "@user/post/<code>", "t/<code>" or
+	// "share/<id>".
+	threadsPostPathPattern = regexp.MustCompile(`threads\.(?:com|net)/((?:@[A-Za-z0-9._]+/post|t|share)/[A-Za-z0-9_-]+)`)
 
 	// threadsMainPostPattern finds the post's own block in the embed.
 	threadsMainPostPattern = regexp.MustCompile(`class="OuterContainer OuterContainerFull(?: OuterContainerFollowButton)?"`)
@@ -127,7 +129,8 @@ func BuildThreadsFixedURL(rawURL string) string {
 	return result
 }
 
-// threadsPostPath returns "@user/post/<code>" or "t/<code>" of a post URL.
+// threadsPostPath returns "@user/post/<code>", "t/<code>" or "share/<id>" of
+// a post URL.
 func threadsPostPath(rawURL string) string {
 	result := ""
 	matches := threadsPostPathPattern.FindStringSubmatch(rawURL)
@@ -168,13 +171,13 @@ func (e *ThreadsExtractor) ExtractVxthreads(ctx context.Context, postURL string)
 	var result []*MediaInfo
 	var post threadsPost
 	var page string
-	// Short /t/ links are resolved first (the mirror shows only one item of
-	// a carousel for them); if threads.com can't resolve it, the mirror gets
-	// the short link as is.
+	// Short /t/ and /share/ links are resolved first (the mirror shows only
+	// one item of a carousel for them); if threads.com can't resolve one, the
+	// mirror gets the link as is (it serves both forms).
 	postPath, err := e.resolvePostPath(ctx, postURL)
 	shortPath := threadsPostPath(postURL)
 
-	if (err != nil) && (strings.HasPrefix(shortPath, "t/") == true) {
+	if (err != nil) && (isThreadsShortPath(shortPath) == true) {
 		postPath = shortPath
 		err = nil
 	}
@@ -196,11 +199,11 @@ func (e *ThreadsExtractor) ExtractVxthreads(ctx context.Context, postURL string)
 }
 
 // resolvePostPath returns the "@user/post/<code>" path; a short "/t/<code>"
-// link is resolved through its redirect.
+// or "/share/<id>" link is resolved through its redirect.
 func (e *ThreadsExtractor) resolvePostPath(ctx context.Context, postURL string) (string, error) {
 	result := threadsPostPath(postURL)
 	err := fmt.Errorf("not a Threads post URL: %s", postURL)
-	isShort := strings.HasPrefix(result, "t/")
+	isShort := isThreadsShortPath(result)
 
 	if (result != "") && (isShort == false) {
 		err = nil
@@ -213,7 +216,8 @@ func (e *ThreadsExtractor) resolvePostPath(ctx context.Context, postURL string) 
 	return result, err
 }
 
-// resolveShortPath follows the redirect of a "/t/<code>" link once.
+// resolveShortPath follows the redirect of a "/t/<code>" or "/share/<id>"
+// link once (Threads redirects both straight to the post).
 func (e *ThreadsExtractor) resolveShortPath(ctx context.Context, shortPath string) (string, error) {
 	result := ""
 	var resp *http.Response
@@ -234,15 +238,39 @@ func (e *ThreadsExtractor) resolveShortPath(ctx context.Context, shortPath strin
 		defer resp.Body.Close()
 
 		location := resp.Header.Get("Location")
-		resolvedURL := fmt.Sprintf("threads.com%s", location)
-		result = threadsPostPath(resolvedURL)
+		result = threadsRedirectPostPath(location)
 	}
 
-	if (err == nil) && ((result == "") || (strings.HasPrefix(result, "t/") == true)) {
+	if (err == nil) && ((result == "") || (isThreadsShortPath(result) == true)) {
 		err = fmt.Errorf("short Threads link did not resolve: %s", shortPath)
 	}
 
 	return result, err
+}
+
+// threadsRedirectPostPath turns a redirect Location (absolute or relative)
+// into the post path, matched on the URL path only (not a query such as a
+// login page's next= parameter).
+func threadsRedirectPostPath(location string) string {
+	result := ""
+	parsed, err := url.Parse(location)
+
+	if err == nil {
+		pathURL := fmt.Sprintf("threads.com%s", parsed.Path)
+		result = threadsPostPath(pathURL)
+	}
+
+	return result
+}
+
+// isThreadsShortPath reports a link that redirects to the post: the short
+// "/t/<code>" and the app's "/share/<id>" links.
+func isThreadsShortPath(postPath string) bool {
+	isShortLink := strings.HasPrefix(postPath, "t/")
+	isShareLink := strings.HasPrefix(postPath, "share/")
+	result := (isShortLink == true) || (isShareLink == true)
+
+	return result
 }
 
 // stopAtFirstRedirect keeps the redirect response so its Location is read.

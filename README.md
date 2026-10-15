@@ -120,4 +120,8 @@ See [README-dev.md](README-dev.md) for local development, testing with a BotFath
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+Copyright (C) 2024-2026 Tymofii Maksymenko.
+
+Licensed under the [GNU Affero General Public License v3.0](LICENSE), version 3 only (`SPDX-License-Identifier: AGPL-3.0-only`); the "any later version" option in the license's how-to-apply appendix is not used. You may use, modify and self-host the bot; if you run a modified version as a service for others, you must make your modified source available to its users under the same license.
+
+Versions up to and including commit `6586ac6` were released under the MIT License and remain available under it.
