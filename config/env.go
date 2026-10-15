@@ -293,6 +293,79 @@ func GetVxredditHost() string {
 	return host
 }
 
+// Gated-post fetch (paid fallback for Instagram posts gated by their author).
+const (
+	apifyTokenKey                     = "APIFY_TOKEN"
+	apifyInstagramActorKey            = "APIFY_INSTAGRAM_ACTOR"
+	gatedFetchGlobalMonthlyCapKey     = "GATED_FETCH_GLOBAL_MONTHLY_CAP"
+	gatedFetchUserMonthlyAllowKey     = "GATED_FETCH_USER_MONTHLY_ALLOWANCE"
+	gatedFetchChatMonthlyCapKey       = "GATED_FETCH_CHAT_MONTHLY_CAP"
+	defaultApifyInstagramActor        = "intropix~instagram-posts-reels-scraper"
+	defaultGatedFetchGlobalMonthlyCap = 100
+	defaultGatedFetchUserMonthlyAllow = 3
+	defaultGatedFetchChatMonthlyCap   = 20
+)
+
+// GetApifyToken returns the Apify API token; empty disables the gated-post fetch.
+func GetApifyToken() string {
+	raw := os.Getenv(apifyTokenKey)
+	result := strings.TrimSpace(raw)
+
+	return result
+}
+
+// GetApifyInstagramActor returns the Apify actor id ("user~name") that fetches
+// a single Instagram post by URL.
+func GetApifyInstagramActor() string {
+	raw := os.Getenv(apifyInstagramActorKey)
+	result := strings.TrimSpace(raw)
+
+	if result == "" {
+		result = defaultApifyInstagramActor
+	}
+
+	return result
+}
+
+// GetGatedFetchGlobalMonthlyCap returns the bot-wide monthly cap of paid
+// gated-post fetches; 0 disables the feature.
+func GetGatedFetchGlobalMonthlyCap() int {
+	result := getIntEnv(gatedFetchGlobalMonthlyCapKey, defaultGatedFetchGlobalMonthlyCap)
+
+	return result
+}
+
+// GetGatedFetchUserMonthlyAllowance returns the default monthly allowance of
+// gated-post fetches per user in private chats; 0 disables private use.
+func GetGatedFetchUserMonthlyAllowance() int {
+	result := getIntEnv(gatedFetchUserMonthlyAllowKey, defaultGatedFetchUserMonthlyAllow)
+
+	return result
+}
+
+// GetGatedFetchChatMonthlyCap returns the default monthly cap of gated-post
+// fetches for a group chat the owner enabled.
+func GetGatedFetchChatMonthlyCap() int {
+	result := getIntEnv(gatedFetchChatMonthlyCapKey, defaultGatedFetchChatMonthlyCap)
+
+	return result
+}
+
+// getIntEnv parses a non-negative integer env variable, falling back to
+// defaultValue when it is unset or invalid.
+func getIntEnv(key string, defaultValue int) int {
+	result := defaultValue
+	value := os.Getenv(key)
+	raw := strings.TrimSpace(value)
+	parsed, err := strconv.Atoi(raw)
+
+	if (raw != "") && (err == nil) && (parsed >= 0) {
+		result = parsed
+	}
+
+	return result
+}
+
 // Helper function to parse boolean environment variables
 func getBoolEnv(key string, defaultValue bool) bool {
 	value := strings.ToLower(strings.TrimSpace(os.Getenv(key)))

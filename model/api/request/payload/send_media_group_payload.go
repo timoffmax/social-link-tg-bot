@@ -17,10 +17,11 @@ type TgPlSendMediaGroup struct {
 }
 
 type InputMediaPhoto struct {
-	Type      string `json:"type"`
-	Media     string `json:"media"`
-	Caption   string `json:"caption,omitempty"`
-	ParseMode string `json:"parse_mode,omitempty"`
+	Type       string `json:"type"`
+	Media      string `json:"media"`
+	Caption    string `json:"caption,omitempty"`
+	ParseMode  string `json:"parse_mode,omitempty"`
+	HasSpoiler bool   `json:"has_spoiler,omitempty"`
 }
 
 func (m *TgPlSendMediaGroup) GetFilePaths() []string {

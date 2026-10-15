@@ -17,6 +17,7 @@ type MediaInfo struct {
 	Caption     string
 	Filename    string
 	ContentType string
+	Spoiler     bool // send blurred (Telegram has_spoiler), e.g. age-gated posts
 }
 
 type MediaDownloader struct {

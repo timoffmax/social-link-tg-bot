@@ -408,6 +408,14 @@ func processMediaDownload(url string, origChat *response.TgChat, origMessage *re
 
 	// Try to download media using smart downloader
 	mediaInfos, err := downloader.DownloadMedia(url)
+
+	// An Instagram post gated by its author may still be fetched through the
+	// paid provider, within the chat's or user's monthly quota.
+	if err != nil {
+		isPrivate := (chatTypePrivate == origChat.Type)
+		mediaInfos, err = downloader.FetchGatedPost(url, err, origChat.Id, int64(origMessage.From.Id), isPrivate)
+	}
+
 	if err != nil {
 		log.Printf("Failed to download media from %s: %v", url, err)
 
@@ -790,6 +798,7 @@ func sendMediaFile(mediaInfo *services.MediaInfo, origChat *response.TgChat, ori
 			Caption:             caption,
 			ParseMode:           payload.ParseModeHTML,
 			FilePath:            mediaInfo.Filename,
+			HasSpoiler:          mediaInfo.Spoiler,
 			ReplyToMessageId:    origMessage.MessageId,
 			DisableNotification: true,
 		}
@@ -885,6 +894,7 @@ func sendMediaFile(mediaInfo *services.MediaInfo, origChat *response.TgChat, ori
 			Caption:             caption,
 			ParseMode:           payload.ParseModeHTML,
 			FilePath:            finalVideoPath,
+			HasSpoiler:          mediaInfo.Spoiler,
 			ReplyToMessageId:    origMessage.MessageId,
 			DisableNotification: true,
 		}
@@ -936,8 +946,9 @@ func sendPhotosAsMediaGroup(photos []*services.MediaInfo, origChat *response.TgC
 	for i, photoInfo := range photos {
 		// Use attach:// prefix for file uploads in media groups
 		mediaItem := payload.InputMediaPhoto{
-			Type:  "photo",
-			Media: fmt.Sprintf("attach://photo%d", i),
+			Type:       "photo",
+			Media:      fmt.Sprintf("attach://photo%d", i),
+			HasSpoiler: photoInfo.Spoiler,
 		}
 
 		// Only add caption to the first photo to avoid clutter
@@ -1066,6 +1077,10 @@ func buildVxRedditURL(originalURL string) string {
 // instagramGatedLogType is the Telegram message log key of a gated-post reply.
 const instagramGatedLogType = "instagram-gated"
 
+// gatedAllowanceUsedHint is appended when a private user's monthly allowance of
+// paid gated-post fetches is used up.
+const gatedAllowanceUsedHint = "You've used all your free downloads of restricted posts for this month."
+
 // replyInstagramGate replies to an Instagram link whose author limited its
 // audience (e.g. "People under 15 can't see this content") with an explanation.
 // It reports whether that reply was sent, so a failed send keeps the fallbacks.
@@ -1079,13 +1094,27 @@ func replyInstagramGate(downloadErr error, origMessage *response.TgMessage, orig
 
 		gateMsg := payload.TgPlSendMessage{
 			ChatId:              origChat.Id,
-			Text:                services.InstagramGateMessage(gatedErr.Gate),
+			Text:                instagramGateReplyText(downloadErr, gatedErr.Gate),
 			ReplyToMessageId:    origMessage.MessageId,
 			DisableNotification: true,
 		}
 		sent := message.NewSendMessage(gateMsg)
 		result = (sent != nil)
 		services.LogTelegramMessage(origChat.Id, instagramGatedLogType, result, "")
+	}
+
+	return result
+}
+
+// instagramGateReplyText explains a gated post, adding a hint when the user's
+// private allowance of paid fetches is what stopped the download.
+func instagramGateReplyText(downloadErr error, gate services.InstagramGate) string {
+	result := services.InstagramGateMessage(gate)
+	var deniedErr *services.GatedFetchDeniedError
+	isDenied := errors.As(downloadErr, &deniedErr)
+
+	if (isDenied == true) && (deniedErr.Denial == services.GatedFetchDeniedUserCap) {
+		result = fmt.Sprintf("%s\n\n%s", result, gatedAllowanceUsedHint)
 	}
 
 	return result
@@ -1906,6 +1935,8 @@ func handleBotCommand(origMessage *response.TgMessage, origChat *response.TgChat
 		handleOwnerCommand(origMessage, origChat, origUser)
 	case "/adminstats":
 		handleAdminStatsCommand(origMessage, origChat, origUser)
+	case "/gated":
+		handleGatedCommand(origMessage, origChat, origUser)
 	case "/broadcast":
 		handleBroadcastCommand(origMessage, origChat, origUser)
 	case "/donate":

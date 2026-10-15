@@ -13,6 +13,7 @@ type TgPlSendPhoto struct {
 	Caption             string                        `json:"caption,omitempty"`
 	ParseMode           string                        `json:"parse_mode,omitempty"`
 	CaptionEntities     tg_api.TgPlaceholder          `json:"caption_entities,omitempty"`
+	HasSpoiler          bool                          `json:"has_spoiler,omitempty"`
 	DisableNotification bool                          `json:"disable_notification,omitempty"`
 	ReplyToMessageId    int                           `json:"reply_to_message_id,omitempty"`
 	ReplyMarkup         tg_api.TgReplyMarkupInterface `json:"reply_markup,omitempty"`

@@ -23,6 +23,7 @@ type SmartDownloader struct {
 	instagramOG *InstagramOGExtractor
 	reddit      *RedditExtractor
 	redditVx    *RedditVxredditExtractor
+	gated       GatedPostProvider
 	tempDir     string
 	workingDir  string
 }
@@ -48,6 +49,7 @@ func NewSmartDownloader() *SmartDownloader {
 		instagramOG: NewInstagramOGExtractor(tempDir),
 		reddit:      NewRedditExtractor(tempDir),
 		redditVx:    NewRedditVxredditExtractor(tempDir),
+		gated:       NewGatedPostProvider(tempDir),
 		tempDir:     tempDir,
 		workingDir:  workingDir,
 	}
