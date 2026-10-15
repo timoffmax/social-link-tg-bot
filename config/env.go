@@ -351,6 +351,57 @@ func GetGatedFetchChatMonthlyCap() int {
 	return result
 }
 
+// Apify budget and per-platform actors.
+const (
+	apifyMonthlyBudgetUsdKey     = "APIFY_MONTHLY_BUDGET_USD"
+	apifyYouTubeActorKey         = "APIFY_YOUTUBE_ACTOR"
+	apifyStoriesActorKey         = "APIFY_STORIES_ACTOR"
+	defaultApifyMonthlyBudgetUsd = 4.0
+	defaultApifyYouTubeActor     = "marielise.dev~youtube-video-downloader"
+	defaultApifyStoriesActor     = "goat255~instagram-stories-highlights-scraper"
+)
+
+// GetApifyMonthlyBudgetUsd returns the monthly Apify spend limit; a run that
+// could exceed it is refused (the free plan has $5 of credit).
+func GetApifyMonthlyBudgetUsd() float64 {
+	result := defaultApifyMonthlyBudgetUsd
+	value := os.Getenv(apifyMonthlyBudgetUsdKey)
+	raw := strings.TrimSpace(value)
+	parsed, err := strconv.ParseFloat(raw, 64)
+
+	if (raw != "") && (err == nil) && (parsed >= 0) {
+		result = parsed
+	}
+
+	return result
+}
+
+// GetApifyYouTubeActor returns the Apify actor that downloads YouTube videos.
+func GetApifyYouTubeActor() string {
+	result := getStringEnv(apifyYouTubeActorKey, defaultApifyYouTubeActor)
+
+	return result
+}
+
+// GetApifyStoriesActor returns the Apify actor that scrapes Instagram stories.
+func GetApifyStoriesActor() string {
+	result := getStringEnv(apifyStoriesActorKey, defaultApifyStoriesActor)
+
+	return result
+}
+
+// getStringEnv returns a trimmed env variable, or defaultValue when unset.
+func getStringEnv(key, defaultValue string) string {
+	value := os.Getenv(key)
+	result := strings.TrimSpace(value)
+
+	if result == "" {
+		result = defaultValue
+	}
+
+	return result
+}
+
 // getIntEnv parses a non-negative integer env variable, falling back to
 // defaultValue when it is unset or invalid.
 func getIntEnv(key string, defaultValue int) int {

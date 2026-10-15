@@ -14,6 +14,9 @@ import (
 
 const apifyTestToken = "test-token"
 
+// apifyTestUsageUsd is the monthly usage the fake limits endpoint reports.
+var apifyTestUsageUsd = 0.10
+
 // newApifyTestServer fakes the actor endpoint and the CDN it points to. The
 // handler records the decoded run input in *gotInput.
 func newApifyTestServer(t *testing.T, status int, shortcode string, gotInput *apifyRunInput) *httptest.Server {
@@ -21,12 +24,17 @@ func newApifyTestServer(t *testing.T, status int, shortcode string, gotInput *ap
 
 	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		isMedia := strings.HasPrefix(r.URL.Path, "/media/")
+		isLimits := (r.URL.Path == "/users/me/limits")
 
 		if isMedia == true {
 			w.Write([]byte("media-bytes"))
 		}
 
-		if isMedia == false {
+		if isLimits == true {
+			fmt.Fprintf(w, `{"data":{"current":{"monthlyUsageUsd":%.2f}}}`, apifyTestUsageUsd)
+		}
+
+		if (isMedia == false) && (isLimits == false) {
 			serveApifyRun(t, w, r, server.URL, status, shortcode, gotInput)
 		}
 	}))
@@ -59,12 +67,12 @@ func serveApifyRun(t *testing.T, w http.ResponseWriter, r *http.Request, baseURL
 }
 
 func newApifyTestProvider(t *testing.T, server *httptest.Server) *ApifyInstagramProvider {
+	t.Setenv("APIFY_MONTHLY_BUDGET_USD", "4")
+
 	return &ApifyInstagramProvider{
 		tempDir: t.TempDir(),
-		token:   apifyTestToken,
 		actor:   "intropix~instagram-posts-reels-scraper",
-		apiBase: server.URL,
-		client:  server.Client(),
+		api:     &apifyClient{token: apifyTestToken, apiBase: server.URL, client: server.Client()},
 	}
 }
 
@@ -206,5 +214,24 @@ func TestGatedPostCaptionWithoutTextIsAuthorOnly(t *testing.T) {
 
 	if (strings.Contains(caption, "tg-spoiler") == true) || (strings.Contains(caption, "@someone") == false) {
 		t.Fatalf("unexpected caption: %q", caption)
+	}
+}
+
+func TestApifyRunIsRefusedOverBudget(t *testing.T) {
+	var input apifyRunInput
+	server := newApifyTestServer(t, http.StatusCreated, "DeYsKEDjbGB", &input)
+	defer server.Close()
+
+	provider := newApifyTestProvider(t, server)
+	t.Setenv("APIFY_MONTHLY_BUDGET_USD", "0.12")
+
+	_, err := provider.FetchPost("https://www.instagram.com/p/DeYsKEDjbGB/")
+
+	if errors.Is(err, errApifyBudget) == false {
+		t.Fatalf("expected the budget error, got %v", err)
+	}
+
+	if len(input.PostURLs) != 0 {
+		t.Fatalf("the actor must not run over budget")
 	}
 }

@@ -14,18 +14,19 @@ import (
 
 // SmartDownloader handles media downloads with platform-specific strategies
 type SmartDownloader struct {
-	ytdlp       *YtDlpDownloader
-	browser     *UniversalBrowserExtractor
-	stories     *InstagramStoriesExtractor
-	rapidAPI    *InstagramRapidAPIExtractor
-	instafix    *InstagramInstafixExtractor
-	kk          *InstagramKKInstagramExtractor
-	instagramOG *InstagramOGExtractor
-	reddit      *RedditExtractor
-	redditVx    *RedditVxredditExtractor
-	gated       GatedPostProvider
-	tempDir     string
-	workingDir  string
+	ytdlp        *YtDlpDownloader
+	browser      *UniversalBrowserExtractor
+	rapidAPI     *InstagramRapidAPIExtractor
+	instafix     *InstagramInstafixExtractor
+	kk           *InstagramKKInstagramExtractor
+	instagramOG  *InstagramOGExtractor
+	reddit       *RedditExtractor
+	redditVx     *RedditVxredditExtractor
+	gated        GatedPostProvider
+	youtubeApify *YouTubeApifyExtractor
+	storiesApify *InstagramStoriesApifyExtractor
+	tempDir      string
+	workingDir   string
 }
 
 // NewSmartDownloader creates a new smart downloader instance
@@ -40,18 +41,19 @@ func NewSmartDownloader() *SmartDownloader {
 	os.MkdirAll(tempDir, 0755)
 
 	return &SmartDownloader{
-		ytdlp:       NewYtDlpDownloader(),
-		browser:     NewUniversalBrowserExtractor(workingDir, tempDir),
-		stories:     NewInstagramStoriesExtractor(tempDir),
-		rapidAPI:    NewInstagramRapidAPIExtractor(tempDir),
-		instafix:    NewInstagramInstafixExtractor(tempDir),
-		kk:          NewInstagramKKInstagramExtractor(tempDir),
-		instagramOG: NewInstagramOGExtractor(tempDir),
-		reddit:      NewRedditExtractor(tempDir),
-		redditVx:    NewRedditVxredditExtractor(tempDir),
-		gated:       NewGatedPostProvider(tempDir),
-		tempDir:     tempDir,
-		workingDir:  workingDir,
+		ytdlp:        NewYtDlpDownloader(),
+		browser:      NewUniversalBrowserExtractor(workingDir, tempDir),
+		rapidAPI:     NewInstagramRapidAPIExtractor(tempDir),
+		instafix:     NewInstagramInstafixExtractor(tempDir),
+		kk:           NewInstagramKKInstagramExtractor(tempDir),
+		instagramOG:  NewInstagramOGExtractor(tempDir),
+		reddit:       NewRedditExtractor(tempDir),
+		redditVx:     NewRedditVxredditExtractor(tempDir),
+		gated:        NewGatedPostProvider(tempDir),
+		youtubeApify: NewYouTubeApifyExtractor(tempDir),
+		storiesApify: NewInstagramStoriesApifyExtractor(tempDir),
+		tempDir:      tempDir,
+		workingDir:   workingDir,
 	}
 }
 
@@ -249,26 +251,6 @@ func (sd *SmartDownloader) executeStrategy(
 		LogExtraction(strategy.Platform, mediaURL, "browser", false, 0, methodDuration)
 		return nil, err
 
-	case MethodStoriesAPI:
-		if ctx.Err() != nil {
-			return nil, ctx.Err()
-		}
-
-		log.Printf("📖 Trying Instagram Stories API extraction")
-		mediaInfos, err := sd.stories.ExtractStory(mediaURL)
-		methodDuration := time.Since(methodStartTime)
-
-		if err == nil && len(mediaInfos) > 0 {
-			log.Printf("✅ Stories API extraction succeeded with %d items", len(mediaInfos))
-			LogExtraction(strategy.Platform, mediaURL, "stories-api", true, len(mediaInfos), time.Since(overallStart))
-			appendOriginalURL(mediaInfos, mediaURL)
-			return mediaInfos, nil
-		}
-
-		log.Printf("❌ Stories API extraction failed: %v", err)
-		LogExtraction(strategy.Platform, mediaURL, "stories-api", false, 0, methodDuration)
-		return nil, err
-
 	case MethodRedditAPI:
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
@@ -368,6 +350,16 @@ func (sd *SmartDownloader) executeStrategy(
 		log.Printf("❌ kkinstagram extraction failed: %v", err)
 		LogExtraction(strategy.Platform, mediaURL, "kkinstagram", false, 0, methodDuration)
 		return nil, err
+
+	case MethodYouTubeApify:
+		mediaInfos, err := sd.runApifyMethod(ctx, strategy, mediaURL, "youtube-apify", sd.youtubeApifyExtract, overallStart, methodStartTime)
+
+		return mediaInfos, err
+
+	case MethodStoriesApify:
+		mediaInfos, err := sd.runApifyMethod(ctx, strategy, mediaURL, "stories-apify", sd.storiesApifyExtract, overallStart, methodStartTime)
+
+		return mediaInfos, err
 
 	case MethodInstagramOG:
 		if ctx.Err() != nil {
@@ -641,4 +633,64 @@ func cleanURLParams(originalURL string) string {
 	parsedURL.RawQuery = values.Encode()
 
 	return parsedURL.String()
+}
+
+// runApifyMethod runs one Apify-backed method with the chain's usual logging.
+// appendOriginalURL is applied by the extractors themselves.
+func (sd *SmartDownloader) runApifyMethod(
+	ctx context.Context,
+	strategy *ExtractionStrategy,
+	mediaURL string,
+	methodName string,
+	extract func(context.Context, string) ([]*MediaInfo, error),
+	overallStart time.Time,
+	methodStartTime time.Time,
+) ([]*MediaInfo, error) {
+	var result []*MediaInfo
+	err := ctx.Err()
+
+	if err == nil {
+		log.Printf("💳 Trying %s extraction", methodName)
+		result, err = extract(ctx, mediaURL)
+	}
+
+	isSuccess := ((err == nil) && (len(result) > 0))
+
+	if isSuccess == true {
+		total := time.Since(overallStart)
+		LogExtraction(strategy.Platform, mediaURL, methodName, true, len(result), total)
+	}
+
+	if isSuccess == false {
+		methodDuration := time.Since(methodStartTime)
+		log.Printf("❌ %s extraction failed: %v", methodName, err)
+		LogExtraction(strategy.Platform, mediaURL, methodName, false, 0, methodDuration)
+		result = nil
+	}
+
+	return result, err
+}
+
+// youtubeApifyExtract runs the YouTube actor when Apify is configured.
+func (sd *SmartDownloader) youtubeApifyExtract(ctx context.Context, mediaURL string) ([]*MediaInfo, error) {
+	var result []*MediaInfo
+	err := errApifyNotConfigured
+
+	if sd.youtubeApify != nil {
+		result, err = sd.youtubeApify.ExtractMedia(ctx, mediaURL)
+	}
+
+	return result, err
+}
+
+// storiesApifyExtract runs the stories actor when Apify is configured.
+func (sd *SmartDownloader) storiesApifyExtract(ctx context.Context, mediaURL string) ([]*MediaInfo, error) {
+	var result []*MediaInfo
+	err := errApifyNotConfigured
+
+	if sd.storiesApify != nil {
+		result, err = sd.storiesApify.ExtractMedia(ctx, mediaURL)
+	}
+
+	return result, err
 }

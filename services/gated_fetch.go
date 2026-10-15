@@ -65,9 +65,20 @@ func (sd *SmartDownloader) fetchGatedWithQuota(instagramURL string, downloadErr 
 		result, fetchErr = sd.gated.FetchPost(instagramURL)
 	}
 
+	isBudgetRefusal := isApifyBudgetError(fetchErr)
+
 	if fetchErr != nil {
 		log.Printf("❌ [gated-fetch] fetch failed for %s: %v", instagramURL, fetchErr)
+	}
+
+	if (fetchErr != nil) && (isBudgetRefusal == false) {
 		sd.refundScopedGatedFetch(quotas)
+	}
+
+	// A budget refusal happens before any run, so nothing was billed: the
+	// global unit goes back too.
+	if isBudgetRefusal == true {
+		sd.refundGatedQuotas(quotas)
 	}
 
 	if err != nil {
@@ -80,6 +91,15 @@ func (sd *SmartDownloader) fetchGatedWithQuota(instagramURL string, downloadErr 
 	}
 
 	return result, err
+}
+
+// refundGatedQuotas gives every reserved unit back, logging a failed refund.
+func (sd *SmartDownloader) refundGatedQuotas(quotas []GatedFetchQuota) {
+	err := RefundGatedFetch(quotas)
+
+	if err != nil {
+		log.Printf("⚠️ [gated-fetch] quota refund failed: %v", err)
+	}
 }
 
 // refundScopedGatedFetch gives the user's or chat's unit back after a failed

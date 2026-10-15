@@ -208,6 +208,13 @@ func (yd *YtDlpDownloader) HasInstagramCookies() bool {
 	return true
 }
 
+// ytdlpOutputTemplate names downloaded files "<unix ts>_<url hash>_<title>_<id>".
+// findDownloadedFiles relies on the "<ts>_" prefix. The title is capped at 100
+// bytes: Facebook titles are whole captions and overflowed the 255-byte file
+// name limit ("Cannot write video metadata to JSON file"); the id keeps
+// entries of one post apart.
+const ytdlpOutputTemplate = "%d_%s_%%(title).100B_%%(id)s.%%(ext)s"
+
 func (yd *YtDlpDownloader) DownloadMedia(url string) ([]*MediaInfo, error) {
 	log.Printf("Starting media download from: %s", url)
 
@@ -225,7 +232,7 @@ func (yd *YtDlpDownloader) DownloadMedia(url string) ([]*MediaInfo, error) {
 	// Create unique filename with timestamp + URL hash to prevent collisions between concurrent downloads
 	timestamp := time.Now().Unix()
 	urlHash := strings.ToUpper(fmt.Sprintf("%x", md5.Sum([]byte(url))))[:8]
-	outputTemplate := filepath.Join(yd.TempDir, fmt.Sprintf("%d_%s_%%(title)s.%%(ext)s", timestamp, urlHash))
+	outputTemplate := filepath.Join(yd.TempDir, fmt.Sprintf(ytdlpOutputTemplate, timestamp, urlHash))
 
 	log.Printf("Using output template: %s", outputTemplate)
 
@@ -983,18 +990,10 @@ func (yd *YtDlpDownloader) DownloadYouTubeMedia(url string) ([]*MediaInfo, error
 		return cliBrowser.ExtractYouTubeCommunityPost(url)
 	}
 
-	// For regular YouTube videos, try yt-dlp first then fallback to headless browser for thumbnails
-
-	// Strategy 1: Try normal yt-dlp download first
-	mediaInfos, err := yd.DownloadMedia(url)
-	if err == nil && len(mediaInfos) > 0 {
-		return mediaInfos, nil
-	}
-
-	// Strategy 2: Universal headless browser fallback (mainly for thumbnails and metadata)
-	log.Printf("yt-dlp failed, trying universal headless browser for YouTube")
-	browserExtractor := NewUniversalBrowserExtractor(yd.WorkingDir, yd.TempDir)
-	return browserExtractor.ExtractMedia(url)
+	// Regular videos: yt-dlp only. The headless browser fallback never
+	// succeeded (YouTube walls the datacenter IP) and cost 30s per link; the
+	// strategy's next method (Apify) takes over instead.
+	return yd.DownloadMedia(url)
 }
 
 func (yd *YtDlpDownloader) DownloadRedditMedia(url string) ([]*MediaInfo, error) {
@@ -1013,25 +1012,18 @@ func (yd *YtDlpDownloader) DownloadRedditMedia(url string) ([]*MediaInfo, error)
 		return mediaInfos, nil
 	}
 
-	// Strategy 3: Universal headless browser fallback for images and galleries
-	log.Printf("yt-dlp failed completely, trying universal headless browser for Reddit")
-	browserExtractor := NewUniversalBrowserExtractor(yd.WorkingDir, yd.TempDir)
-	return browserExtractor.ExtractMedia(url)
+	// The headless browser fallback that used to follow never succeeded and
+	// cost 30-60s per link.
+	return mediaInfos, err
 }
 
+// DownloadFacebookMedia downloads Facebook videos with yt-dlp. The headless
+// browser fallback that used to follow never succeeded (60s per failure) and
+// hid yt-dlp's real error, so the yt-dlp error is returned as is.
 func (yd *YtDlpDownloader) DownloadFacebookMedia(url string) ([]*MediaInfo, error) {
-	// For Facebook, try yt-dlp first (works for some video posts) then browser fallback
+	result, err := yd.DownloadMedia(url)
 
-	// Strategy 1: Try normal yt-dlp download first
-	mediaInfos, err := yd.DownloadMedia(url)
-	if err == nil && len(mediaInfos) > 0 {
-		return mediaInfos, nil
-	}
-
-	// Strategy 2: Universal headless browser fallback for photos and other content
-	log.Printf("yt-dlp failed, trying universal headless browser for Facebook")
-	browserExtractor := NewUniversalBrowserExtractor(yd.WorkingDir, yd.TempDir)
-	return browserExtractor.ExtractMedia(url)
+	return result, err
 }
 
 func (yd *YtDlpDownloader) Download9GAGMedia(url string) ([]*MediaInfo, error) {
@@ -1052,7 +1044,7 @@ func (yd *YtDlpDownloader) Download9GAGMedia(url string) ([]*MediaInfo, error) {
 
 	timestamp := time.Now().Unix()
 	urlHash := strings.ToUpper(fmt.Sprintf("%x", md5.Sum([]byte(url))))[:8]
-	outputTemplate := filepath.Join(yd.TempDir, fmt.Sprintf("%d_%s_%%(title)s.%%(ext)s", timestamp, urlHash))
+	outputTemplate := filepath.Join(yd.TempDir, fmt.Sprintf(ytdlpOutputTemplate, timestamp, urlHash))
 
 	result, err := yd.attemptDownload(url, outputTemplate, "")
 	if err == nil {
@@ -1073,10 +1065,9 @@ func (yd *YtDlpDownloader) Download9GAGMedia(url string) ([]*MediaInfo, error) {
 		log.Printf("9GAG API fetch failed: %v", apiErr)
 	}
 
-	// Step 3: Fall back to CLI browser extraction
-	log.Printf("🔄 Falling back to CLI browser for 9GAG")
-	cliBrowser := NewCliBrowserExtractor(yd.WorkingDir, yd.TempDir)
-	return cliBrowser.Extract9GAGContent(url)
+	// The CLI browser fallback that used to follow never succeeded and cost
+	// 90s per link.
+	return nil, fmt.Errorf("9GAG download failed: yt-dlp: %s", ytdlpErr)
 }
 
 // fetch9GAGPostViaAPI uses a Python helper with curl_cffi to fetch 9GAG post data
@@ -1275,7 +1266,7 @@ func (yd *YtDlpDownloader) downloadThumbnailsOnly(url string, platform string) (
 	// Create unique filename with timestamp + URL hash to prevent collisions between concurrent downloads
 	timestamp := time.Now().Unix()
 	urlHash := strings.ToUpper(fmt.Sprintf("%x", md5.Sum([]byte(url))))[:8]
-	outputTemplate := filepath.Join(yd.TempDir, fmt.Sprintf("%d_%s_%%(title)s.%%(ext)s", timestamp, urlHash))
+	outputTemplate := filepath.Join(yd.TempDir, fmt.Sprintf(ytdlpOutputTemplate, timestamp, urlHash))
 
 	log.Printf("Trying thumbnails-only download for %s with template: %s", platform, outputTemplate)
 

@@ -1,13 +1,10 @@
 package services
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log"
-	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -32,10 +29,8 @@ func NewGatedPostProvider(tempDir string) GatedPostProvider {
 	if token != "" {
 		result = &ApifyInstagramProvider{
 			tempDir: tempDir,
-			token:   token,
 			actor:   config.GetApifyInstagramActor(),
-			apiBase: apifyAPIBase,
-			client:  &http.Client{Timeout: apifyRunTimeout + apifyRunTimeoutMargin},
+			api:     newApifyClient(),
 		}
 	}
 
@@ -47,14 +42,11 @@ const (
 	// blocked account, an exhausted plan, a dead actor) alert the owner.
 	apifyServiceName = "apify"
 
-	apifyAPIBase = "https://api.apify.com/v2"
-
 	// apifyRunTimeout bounds the synchronous actor run (a post takes ~11s).
-	apifyRunTimeout       = 90 * time.Second
-	apifyRunTimeoutMargin = 10 * time.Second
+	apifyRunTimeout = 90 * time.Second
 
-	// apifyMaxErrorBody caps how much of an error answer goes into a log.
-	apifyMaxErrorBody = 300
+	// apifyPostMaxChargeUsd caps one post run (~$0.009 observed).
+	apifyPostMaxChargeUsd = 0.05
 
 	// telegramBotUploadLimit is the Bot API upload limit per file.
 	telegramBotUploadLimit = 50 * 1024 * 1024
@@ -80,10 +72,8 @@ const (
 // Instagram post with every slide's direct CDN URL.
 type ApifyInstagramProvider struct {
 	tempDir string
-	token   string
 	actor   string
-	apiBase string
-	client  *http.Client
+	api     *apifyClient
 }
 
 // apifyRunInput is the actor input for fetching specific posts.
@@ -127,7 +117,7 @@ func (p *ApifyInstagramProvider) FetchPost(instagramURL string) ([]*MediaInfo, e
 		result, err = p.downloadSlides(item, instagramURL)
 	}
 
-	if err != nil {
+	if (err != nil) && (isApifyBudgetError(err) == false) {
 		detail := err.Error()
 		ReportServiceFailure(apifyServiceName, detail)
 	}
@@ -140,23 +130,14 @@ func (p *ApifyInstagramProvider) FetchPost(instagramURL string) ([]*MediaInfo, e
 	return result, err
 }
 
-// runActor calls run-sync-get-dataset-items and returns the post's item.
+// runActor runs the actor for one post and returns the post's item.
 func (p *ApifyInstagramProvider) runActor(postURL string) (apifyPostItem, error) {
 	result := apifyPostItem{}
 	var items []apifyPostItem
-	var body []byte
 	input := apifyRunInput{PostURLs: []string{postURL}, IncludeViews: false}
-	payload, err := json.Marshal(input)
-	timeoutSeconds := apifyRunTimeout / time.Second
-	requestURL := fmt.Sprintf("%s/acts/%s/run-sync-get-dataset-items?timeout=%d", p.apiBase, p.actor, timeoutSeconds)
+	// The gated fetch runs after the chain's 90s deadline, so it has its own.
 	background := context.Background()
-	ctx, cancel := context.WithTimeout(background, (apifyRunTimeout + apifyRunTimeoutMargin))
-
-	defer cancel()
-
-	if err == nil {
-		body, err = p.post(ctx, requestURL, payload)
-	}
+	body, err := p.api.runSync(background, p.actor, input, apifyRunTimeout, apifyPostMaxChargeUsd)
 
 	if err == nil {
 		err = json.Unmarshal(body, &items)
@@ -164,34 +145,6 @@ func (p *ApifyInstagramProvider) runActor(postURL string) (apifyPostItem, error)
 
 	if err == nil {
 		result, err = pickApifyPostItem(items, postURL)
-	}
-
-	return result, err
-}
-
-// post sends an authorized JSON POST and returns the body of a 2xx answer.
-func (p *ApifyInstagramProvider) post(ctx context.Context, requestURL string, payload []byte) ([]byte, error) {
-	var result []byte
-	var resp *http.Response
-	reader := bytes.NewReader(payload)
-	authorization := fmt.Sprintf("Bearer %s", p.token)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, requestURL, reader)
-
-	if err == nil {
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("Authorization", authorization)
-		resp, err = p.client.Do(req)
-	}
-
-	if err == nil {
-		defer resp.Body.Close()
-
-		result, err = io.ReadAll(resp.Body)
-	}
-
-	if (err == nil) && ((resp.StatusCode < http.StatusOK) || (resp.StatusCode >= http.StatusMultipleChoices)) {
-		detail := truncateAtRuneBoundary(string(result), apifyMaxErrorBody)
-		err = fmt.Errorf("apify status %d: %s", resp.StatusCode, detail)
 	}
 
 	return result, err

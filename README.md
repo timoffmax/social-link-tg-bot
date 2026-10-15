@@ -7,10 +7,12 @@ A Telegram bot that downloads and sends actual media files from social media lin
 - **Real media, not links** — downloads photos, videos, galleries, slideshows, and stories (Instagram carousels: first item only), and sends them as native Telegram media
 - **Layered extraction chains with automatic fallbacks** — every platform has multiple extraction methods tried in order, so a single dead third-party service never silently kills a platform:
   - **Instagram**: kkinstagram redirector → OG-preview fallback; posts gated by their author (e.g. age limits) are fetched blurred through a paid Apify actor within monthly quotas (groups need the owner's `/gated on`), otherwise explained
-  - **Reddit**: direct JSON API (with inline JS-challenge solving) → vxreddit → yt-dlp → headless browser; `/s/` share links resolved; text posts sent as formatted messages
+  - **Reddit**: vxreddit (works from datacenter IPs, resolves `/s/` share links) → direct JSON API (with inline JS-challenge solving; text posts) → yt-dlp
   - **TikTok**: direct scraping → slideshow API → tikwm.com → kktiktok redirector → headless browser; handles both videos and photo slideshows
   - **Twitter/X**: hybrid extraction — full tweet text (with author display name and recursive quote resolution) via FxTwitter + media via yt-dlp
-  - **YouTube**: HLS stream merging (separate audio+video) via ffmpeg, with an EJS challenge solver for nsig decryption
+  - **YouTube**: yt-dlp (HLS merging via ffmpeg, EJS challenge solver) → a paid Apify downloader when YouTube walls the server IP
+  - **Facebook**: yt-dlp (videos and reels; photo posts unsupported)
+  - **Instagram stories**: a paid Apify stories scraper (stories need a login)
 - **Concurrent processing** — every Telegram update and every link within a message is processed in its own goroutine
 - **Health monitoring** — hourly probes of third-party redirectors and proxies; consecutive failures trigger Telegram alerts to the admin, with recovery notices
 - **Response validation** — third-party redirector responses are verified as real CDN media (content type, size, redirect target) so a broken service fails loudly instead of sending garbage
@@ -87,6 +89,7 @@ go build -o social-link-bot .
 | `ENABLE_<PLATFORM>_COOKIES` | Per-platform cookie usage toggles |
 | `ENABLE_PROXIES` / `YTDLP_PROXIES` | Global proxy kill switch + comma-separated proxy list (fallback only) |
 | `APIFY_TOKEN`, `GATED_FETCH_*` | Paid fetch of author-gated Instagram posts and its monthly quotas (see `.env.example`, owner command `/gated`) |
+| `APIFY_MONTHLY_BUDGET_USD`, `APIFY_YOUTUBE_ACTOR`, `APIFY_STORIES_ACTOR` | Shared monthly Apify spend limit and the YouTube / Instagram stories actors |
 | `KKINSTAGRAM_HOST`, `KKTIKTOK_HOST`, `VXREDDIT_HOST` | Override third-party fallback hosts |
 | `DEFAULT_DAILY_MEDIA_LIMIT` | Default per-user daily limit (0 = unlimited) |
 

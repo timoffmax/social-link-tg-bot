@@ -85,8 +85,9 @@ func (e *RedditVxredditExtractor) ExtractMedia(redditURL string) ([]*MediaInfo, 
 	}
 
 	if mediaURL == "" {
+		// A text post has no media: that's the post, not an outage (the hourly
+		// health probe catches a broken vxreddit), so it doesn't feed the tracker.
 		err = fmt.Errorf("no downloadable media in vxreddit page for %s", redditURL)
-		ReportServiceFailure(redditVxredditServiceName, err.Error())
 
 		return nil, err
 	}

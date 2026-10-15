@@ -25,13 +25,14 @@ const (
 	MethodYtDlp ExtractionMethod = iota
 	MethodBrowser
 	MethodFixedLink
-	MethodStoriesAPI
 	MethodRedditAPI
 	MethodRedditVxreddit
 	MethodRapidAPILinks
 	MethodInstaFix
 	MethodKKInstagram
 	MethodInstagramOG
+	MethodYouTubeApify
+	MethodStoriesApify
 	MethodNone
 )
 
@@ -59,15 +60,14 @@ func GetExtractionStrategy(url string) *ExtractionStrategy {
 			}
 		}
 
-		// Instagram stories: use RapidAPI stories endpoint first
+		// Instagram stories: the paid Apify stories scraper (the RapidAPI
+		// endpoint, browser and yt-dlp all fail: stories need a login).
 		if strings.Contains(url, "/stories/") {
-			log.Printf("📖 Instagram story - will use Stories API with fallback")
+			log.Printf("📖 Instagram story - Apify stories scraper")
 			return &ExtractionStrategy{
 				Platform: "instagram",
 				Methods: []ExtractionMethod{
-					MethodStoriesAPI,
-					MethodBrowser,
-					MethodYtDlp,
+					MethodStoriesApify,
 				},
 				HasFixedLink: false,
 			}
@@ -155,18 +155,22 @@ func GetExtractionStrategy(url string) *ExtractionStrategy {
 				HasFixedLink: false,
 			}
 		}
-		// Regular videos: yt-dlp first, then browser fallback
+		// Regular videos: yt-dlp, which YouTube blocks from datacenter IPs
+		// since 2026-08, then the paid Apify downloader within its budget.
 		return &ExtractionStrategy{
 			Platform: "youtube",
 			Methods: []ExtractionMethod{
 				MethodYtDlp,
-				MethodBrowser,
+				MethodYouTubeApify,
 			},
 			HasFixedLink: false,
+			Sequential:   true,
 		}
 	}
 
-	// Reddit: JSON API via proxy first, then yt-dlp and browser fallback
+	// Reddit: vxreddit first (works from the datacenter IP, resolves /s/ share
+	// links), then the JSON API (text posts; Reddit returns 403 to datacenter
+	// IPs), then yt-dlp.
 	if strings.Contains(url, "reddit.com") {
 		if !config.IsRedditEnabled() {
 			return &ExtractionStrategy{
@@ -178,19 +182,16 @@ func GetExtractionStrategy(url string) *ExtractionStrategy {
 		return &ExtractionStrategy{
 			Platform: "reddit",
 			Methods: []ExtractionMethod{
-				MethodRedditAPI,
 				MethodRedditVxreddit,
+				MethodRedditAPI,
 				MethodYtDlp,
-				MethodBrowser,
 			},
 			HasFixedLink: false,
-			// Try the rich JSON API fully first (higher quality, galleries,
-			// text) before the datacenter-robust vxreddit fallback.
-			Sequential: true,
+			Sequential:   true,
 		}
 	}
 
-	// Facebook: yt-dlp first (works for some video posts), then browser fallback
+	// Facebook: yt-dlp (videos and reels; photo posts are unsupported)
 	if strings.Contains(url, "facebook.com") {
 		if !config.IsFacebookEnabled() {
 			return &ExtractionStrategy{
@@ -203,13 +204,12 @@ func GetExtractionStrategy(url string) *ExtractionStrategy {
 			Platform: "facebook",
 			Methods: []ExtractionMethod{
 				MethodYtDlp,
-				MethodBrowser,
 			},
 			HasFixedLink: false,
 		}
 	}
 
-	// 9GAG: yt-dlp routes to CLI browser extraction, then universal browser fallback
+	// 9GAG: yt-dlp, then the 9GAG API helper for photo posts
 	if strings.Contains(url, "9gag.com") {
 		if !config.Is9GAGEnabled() {
 			return &ExtractionStrategy{
@@ -222,7 +222,6 @@ func GetExtractionStrategy(url string) *ExtractionStrategy {
 			Platform: "9gag",
 			Methods: []ExtractionMethod{
 				MethodYtDlp,
-				MethodBrowser,
 			},
 			HasFixedLink: false,
 		}
@@ -306,8 +305,6 @@ func (es *ExtractionStrategy) LogStrategy() {
 			methodNames[i] = "browser"
 		case MethodFixedLink:
 			methodNames[i] = "fixed-link"
-		case MethodStoriesAPI:
-			methodNames[i] = "stories-api"
 		case MethodRedditAPI:
 			methodNames[i] = "reddit-api"
 		case MethodRedditVxreddit:
@@ -320,6 +317,10 @@ func (es *ExtractionStrategy) LogStrategy() {
 			methodNames[i] = "kkinstagram"
 		case MethodInstagramOG:
 			methodNames[i] = "instagram-og"
+		case MethodYouTubeApify:
+			methodNames[i] = "youtube-apify"
+		case MethodStoriesApify:
+			methodNames[i] = "stories-apify"
 		default:
 			methodNames[i] = "unknown"
 		}
