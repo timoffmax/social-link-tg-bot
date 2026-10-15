@@ -29,14 +29,19 @@ const (
 
 	// gatedLimitDefault resets a cap or allowance to the env default.
 	gatedLimitDefault = "default"
+
+	// gatedLimitUnlimited removes the chat's or user's own limit (the global
+	// monthly cap still applies).
+	gatedLimitUnlimited = "unlimited"
 )
 
 // gatedUsageText documents the /gated subcommands.
 const gatedUsageText = `<b>Usage</b> (owner only):
 • <code>/gated</code> or <code>/gated status [chat_id]</code>
 • <code>/gated on|off [chat_id]</code>: allow paid fetches in a group
-• <code>/gated cap N|default [chat_id]</code>: group monthly cap
-• reply to a user + <code>/gated user N|default</code>, or <code>/gated user USER_ID N|default</code>: private monthly allowance`
+• <code>/gated cap N|unlimited|default [chat_id]</code>: group monthly cap
+• reply to a user + <code>/gated user N|unlimited|default</code>, or <code>/gated user USER_ID N|unlimited|default</code>: private monthly allowance
+The global monthly cap (GATED_FETCH_GLOBAL_MONTHLY_CAP) always applies.`
 
 // telegramServiceUserID is the sender of auto-forwarded channel posts in a
 // linked discussion group; it is not a real user.
@@ -158,7 +163,7 @@ func gatedChatStatusText(chatID int64) string {
 	}
 
 	if policy.MonthlyLimit.Valid == true {
-		capText = fmt.Sprintf("%d", policy.MonthlyLimit.Int64)
+		capText = formatGatedLimit(policy.MonthlyLimit.Int64)
 	}
 
 	result = fmt.Sprintf("Chat <code>%d</code>: %s, used <b>%d</b> of %s this month\n", chatID, state, used, capText)
@@ -244,7 +249,7 @@ func gatedUserStatusText(userID int64) string {
 	allowance := fmt.Sprintf("%d (default)", defaultAllowance)
 
 	if policy.MonthlyLimit.Valid == true {
-		allowance = fmt.Sprintf("%d", policy.MonthlyLimit.Int64)
+		allowance = formatGatedLimit(policy.MonthlyLimit.Int64)
 	}
 
 	result := fmt.Sprintf("User <code>%d</code>: used <b>%d</b> of %s this month\n", userID, used, allowance)
@@ -319,11 +324,12 @@ func parseGatedGroupID(params []string, index int, origChat *response.TgChat) (i
 	return result, err
 }
 
-// parseGatedLimit parses params[index] as a non-negative limit, or "default"
-// (an invalid NullInt64) to reset to the env default.
+// parseGatedLimit parses params[index] as a non-negative limit, "unlimited"
+// (GatedFetchUnlimited), or "default" (an invalid NullInt64) to reset to the
+// env default.
 func parseGatedLimit(params []string, index int) (sql.NullInt64, error) {
 	result := sql.NullInt64{}
-	err := fmt.Errorf("missing limit: a number or %s", gatedLimitDefault)
+	err := fmt.Errorf("missing limit: a number, %s or %s", gatedLimitUnlimited, gatedLimitDefault)
 	raw := ""
 
 	if len(params) > index {
@@ -331,11 +337,28 @@ func parseGatedLimit(params []string, index int) (sql.NullInt64, error) {
 		err = nil
 	}
 
-	if (err == nil) && (raw != gatedLimitDefault) {
+	isKeyword := ((raw == gatedLimitDefault) || (raw == gatedLimitUnlimited))
+
+	if raw == gatedLimitUnlimited {
+		result = sql.NullInt64{Int64: services.GatedFetchUnlimited, Valid: true}
+	}
+
+	if (err == nil) && (isKeyword == false) {
 		result, err = parseGatedLimitNumber(raw)
 	}
 
 	return result, err
+}
+
+// formatGatedLimit renders a stored limit for status replies.
+func formatGatedLimit(limit int64) string {
+	result := fmt.Sprintf("%d", limit)
+
+	if limit == services.GatedFetchUnlimited {
+		result = gatedLimitUnlimited
+	}
+
+	return result
 }
 
 // parseGatedLimitNumber parses a non-negative integer limit.

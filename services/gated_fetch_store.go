@@ -36,6 +36,10 @@ const (
 	GatedFetchDeniedNoDB    GatedFetchDenial = "no_database"
 )
 
+// GatedFetchUnlimited is the stored monthly limit of a chat or user without a
+// limit of its own (the global cap still applies).
+const GatedFetchUnlimited = -1
+
 // gatedFetchReserveTimeout caps the reservation transaction.
 const gatedFetchReserveTimeout = 5 * time.Second
 
@@ -125,7 +129,7 @@ func resolveScopedQuota(chatID, userID int64, isPrivate bool) (GatedFetchQuota, 
 		denial = GatedFetchDeniedChatOff
 	}
 
-	if (err == nil) && (denial == GatedFetchAllowed) && (result.Limit <= 0) {
+	if (err == nil) && (denial == GatedFetchAllowed) && (result.Limit == 0) {
 		denial = result.Denial
 	}
 
@@ -203,7 +207,7 @@ func takeGatedFetchUnit(ctx context.Context, tx *sql.Tx, quota GatedFetchQuota) 
 		VALUES ($1, $2, $3, 1)
 		ON CONFLICT (scope, scope_id, period)
 		DO UPDATE SET used = gated_fetch_usage.used + 1
-		WHERE gated_fetch_usage.used < $4
+		WHERE ($4 < 0 OR gated_fetch_usage.used < $4)
 		RETURNING used`
 	row := tx.QueryRowContext(ctx, query, string(quota.Scope), quota.ScopeID, quota.Period, quota.Limit)
 	err := row.Scan(&used)

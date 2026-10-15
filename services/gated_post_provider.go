@@ -61,20 +61,15 @@ const (
 
 	apifyMediaTypeVideo = "video"
 
-	// telegramCaptionLimitBytes is Telegram's media caption limit.
-	telegramCaptionLimitBytes = 1024
-
 	// gatedCaptionSeparator joins the author line and the caption text.
 	gatedCaptionSeparator = "\n\n"
 
 	// gatedFilePrefix starts the temp file name of a downloaded slide.
 	gatedFilePrefix = "instagram_apify"
 
-	gatedPlatform       = "instagram"
-	gatedMediaTypePhoto = "photo"
-	gatedMediaTypeVideo = "video"
-	gatedExtPhoto       = ".jpg"
-	gatedExtVideo       = ".mp4"
+	gatedPlatform = "instagram"
+	gatedExtPhoto = ".jpg"
+	gatedExtVideo = ".mp4"
 
 	// gatedSpoilerCaptionTemplate hides the caption text behind a spoiler, like
 	// the media it belongs to.
@@ -261,7 +256,7 @@ func gatedPostCaption(item apifyPostItem, instagramURL string) string {
 	escapedName := EscapeForTelegramHTML(item.FullName)
 	authorLine := FormatAuthorCaption(gatedPlatform, escapedName, item.Username, "")
 	linkSuffix := FormatOriginalLink(instagramURL)
-	budget := telegramCaptionLimitBytes - len(authorLine) - len(gatedCaptionSeparator) - len(linkSuffix)
+	budget := TelegramCaptionLimitBytes - len(authorLine) - len(gatedCaptionSeparator) - len(linkSuffix)
 	spoilerText := fitSpoilerCaption(item.Caption, budget)
 	result := FormatAuthorCaption(gatedPlatform, escapedName, item.Username, spoilerText)
 
@@ -319,11 +314,11 @@ func wrapSpoilerLines(raw string) string {
 // downloadSlide downloads one slide to a temp file.
 func (p *ApifyInstagramProvider) downloadSlide(slide apifyPostMedia, shortcode string, timestamp int64, index int) (*MediaInfo, error) {
 	var result *MediaInfo
-	mediaType := gatedMediaTypePhoto
+	mediaType := MediaTypePhoto
 	ext := gatedExtPhoto
 
 	if slide.MediaType == apifyMediaTypeVideo {
-		mediaType = gatedMediaTypeVideo
+		mediaType = MediaTypeVideo
 		ext = gatedExtVideo
 	}
 

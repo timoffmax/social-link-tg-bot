@@ -79,16 +79,28 @@ func (r *AuthorizedRequest) Send(respPayload interface{}) (ResponseInfo, error) 
 	request, err := prepareRequest(r)
 
 	if nil == err {
-		response, err := sendRequest(request)
-		defer response.Body.Close()
+		response, sendErr := sendRequest(request)
 
-		result = parseResponse(response, err, &respPayload)
+		// A transport failure (timeout, dropped connection) has no response to
+		// parse: report it with StatusCode 0, since Telegram may or may not
+		// have received the request.
+		if nil != sendErr {
+			log.Printf("❌ [TG-API] %s failed without a response: %v", r.ApiMethod, sendErr)
+			err = fmt.Errorf("request failed: %w", sendErr)
+		}
+
+		if nil != response {
+			defer response.Body.Close()
+		}
+
+		if nil == sendErr {
+			result = parseResponse(response, nil, &respPayload)
+		}
 
 		// Return error for non-200 status codes
-		if 200 != result.StatusCode {
+		if (nil == sendErr) && (200 != result.StatusCode) {
 			log.Printf("❌ [TG-API] %s failed: status=%d description=%q", r.ApiMethod, result.StatusCode, result.Message)
-
-			return result, fmt.Errorf("API error: %d - %s", result.StatusCode, result.Message)
+			err = fmt.Errorf("API error: %d - %s", result.StatusCode, result.Message)
 		}
 	}
 

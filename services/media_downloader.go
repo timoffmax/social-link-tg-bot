@@ -11,6 +11,14 @@ import (
 	"time"
 )
 
+// Media types and the Telegram caption limit shared by extractors and the
+// send path.
+const (
+	MediaTypePhoto            = "photo"
+	MediaTypeVideo            = "video"
+	TelegramCaptionLimitBytes = 1024
+)
+
 type MediaInfo struct {
 	Type        string // "photo", "video", "document"
 	URL         string

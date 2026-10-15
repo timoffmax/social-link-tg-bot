@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/timoffmax/social-link-bot/model/api/response"
+	"github.com/timoffmax/social-link-bot/services"
 )
 
 func TestParseGatedUserTargetPrefersExplicitIDOverReply(t *testing.T) {
@@ -98,5 +99,17 @@ func TestExtractAuthorInfoKeepsGatedCaptionLinesBalanced(t *testing.T) {
 
 	if strings.Count(line, "<tg-spoiler>") != strings.Count(line, "</tg-spoiler>") {
 		t.Fatalf("unbalanced line: %q", line)
+	}
+}
+
+func TestParseGatedLimitAcceptsUnlimited(t *testing.T) {
+	limit, err := parseGatedLimit([]string{"Unlimited"}, 0)
+
+	if (err != nil) || (limit.Valid == false) || (limit.Int64 != services.GatedFetchUnlimited) {
+		t.Fatalf("expected the unlimited marker, got %+v %v", limit, err)
+	}
+
+	if formatGatedLimit(limit.Int64) != "unlimited" {
+		t.Fatalf("unexpected rendering: %q", formatGatedLimit(limit.Int64))
 	}
 }

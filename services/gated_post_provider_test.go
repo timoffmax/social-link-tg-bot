@@ -180,7 +180,7 @@ func TestGatedPostCaptionSurvivesEscapingAndLinkSuffix(t *testing.T) {
 		appendOriginalURL(media, url)
 		caption := media[0].Caption
 
-		if len(caption) > telegramCaptionLimitBytes {
+		if len(caption) > TelegramCaptionLimitBytes {
 			t.Fatalf("caption is %d bytes", len(caption))
 		}
 

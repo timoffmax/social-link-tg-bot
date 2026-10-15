@@ -534,6 +534,10 @@ func processMediaDownload(url string, origChat *response.TgChat, origMessage *re
 			i+1, media.Type, media.URL, captionPreview, media.Filename)
 	}
 
+	// Photos and videos of one post go out as albums (up to 10 items each) in
+	// post order; whatever can't go into an album is sent below as before.
+	mediaInfos = sendMixedAlbums(mediaInfos, origChat, origMessage, url, downloader)
+
 	// Separate photos from other media types
 	var photos []*services.MediaInfo
 	var otherMedia []*services.MediaInfo
@@ -564,7 +568,7 @@ func processMediaDownload(url string, origChat *response.TgChat, origMessage *re
 	// Send photos as a media group if there are multiple photos
 	if len(photos) > 1 {
 		log.Printf("Sending %d photos as media group", len(photos))
-		err := sendPhotosAsMediaGroup(photos, origChat, origMessage, url)
+		err := sendMediaAsGroup(photos, origChat, origMessage, url)
 		if err != nil {
 			log.Printf("Failed to send photos as media group: %v", err)
 			// Fallback: send photos individually
@@ -929,73 +933,6 @@ func sendMediaFile(mediaInfo *services.MediaInfo, origChat *response.TgChat, ori
 		}
 		message.NewSendDocument(documentPayload)
 		// Note: NewSendDocument automatically sends the message
-	}
-
-	return nil
-}
-
-func sendPhotosAsMediaGroup(photos []*services.MediaInfo, origChat *response.TgChat, origMessage *response.TgMessage, url string) error {
-	if len(photos) == 0 {
-		return fmt.Errorf("no photos to send")
-	}
-
-	// Create media array for the media group
-	var mediaArray []payload.InputMediaPhoto
-	var filePaths []string
-
-	for i, photoInfo := range photos {
-		// Use attach:// prefix for file uploads in media groups
-		mediaItem := payload.InputMediaPhoto{
-			Type:       "photo",
-			Media:      fmt.Sprintf("attach://photo%d", i),
-			HasSpoiler: photoInfo.Spoiler,
-		}
-
-		// Only add caption to the first photo to avoid clutter
-		if i == 0 && photoInfo.Caption != "" {
-			// Sent with ParseModeHTML — entities must stay escaped (see sendMediaFile)
-			caption := photoInfo.Caption
-			mediaItem.Caption = caption
-			mediaItem.ParseMode = payload.ParseModeHTML
-
-			// Defensive fallback: upstream (appendOriginalURL) should already
-			// keep captions within the 1024-byte limit. If something slips
-			// through, blind-truncating would likely slice an HTML tag mid-way
-			// and cause "can't parse entities" — drop HTML parse mode instead.
-			if len(caption) > 1024 {
-				log.Printf("⚠️ Caption exceeds 1024 bytes (%d); truncating and disabling HTML parse mode", len(caption))
-				cut := 1021
-
-				for cut > 0 && (caption[cut]&0xC0) == 0x80 {
-					cut--
-				}
-				mediaItem.Caption = caption[:cut] + "..."
-				mediaItem.ParseMode = ""
-			}
-		}
-
-		mediaArray = append(mediaArray, mediaItem)
-		filePaths = append(filePaths, photoInfo.Filename)
-	}
-
-	// Create the media group payload with reply and silent notification
-	mediaGroupPayload := payload.TgPlSendMediaGroup{
-		ChatId:              origChat.Id,
-		Media:               mediaArray,
-		FilePaths:           filePaths,
-		ReplyToMessageId:    origMessage.MessageId,
-		DisableNotification: true,
-	}
-
-	// Send the media group
-	result := message.NewSendMediaGroup(mediaGroupPayload)
-	if result.Err != nil {
-		return fmt.Errorf("sendMediaGroup failed: %w", result.Err)
-	}
-
-	// Track each photo send
-	for range photos {
-		trackMediaSent(int64(origMessage.From.Id), origMessage.From.Username, origChat.Id, origChat.Title, url, "photo")
 	}
 
 	return nil
