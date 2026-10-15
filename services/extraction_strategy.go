@@ -33,6 +33,7 @@ const (
 	MethodInstagramOG
 	MethodYouTubeApify
 	MethodStoriesApify
+	MethodYouTubePost
 	MethodNone
 )
 
@@ -145,18 +146,19 @@ func GetExtractionStrategy(url string) *ExtractionStrategy {
 				HasFixedLink: false,
 			}
 		}
-		// Community posts: browser extraction only (yt-dlp doesn't support them)
+		// Community posts: text and images read from the post page (served to
+		// the datacenter IP; yt-dlp doesn't support posts).
 		if strings.Contains(url, "/post/") {
 			return &ExtractionStrategy{
 				Platform: "youtube",
 				Methods: []ExtractionMethod{
-					MethodBrowser,
+					MethodYouTubePost,
 				},
 				HasFixedLink: false,
 			}
 		}
-		// Regular videos: yt-dlp, which YouTube blocks from datacenter IPs
-		// since 2026-08, then the paid Apify downloader within its budget.
+		// Shorts (the only videos detected): yt-dlp, which YouTube blocks from
+		// datacenter IPs since 2026-08, then the paid Apify downloader.
 		return &ExtractionStrategy{
 			Platform: "youtube",
 			Methods: []ExtractionMethod{
@@ -321,6 +323,8 @@ func (es *ExtractionStrategy) LogStrategy() {
 			methodNames[i] = "youtube-apify"
 		case MethodStoriesApify:
 			methodNames[i] = "stories-apify"
+		case MethodYouTubePost:
+			methodNames[i] = "youtube-post"
 		default:
 			methodNames[i] = "unknown"
 		}

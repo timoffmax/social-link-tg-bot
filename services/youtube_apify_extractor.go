@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"strings"
 	"time"
 
 	"github.com/timoffmax/social-link-bot/config"
@@ -36,10 +35,10 @@ const (
 	// ($0.01/minute) or ~10 at 480p.
 	youtubeApifyMaxChargeUsd = 0.15
 
-	// Requested qualities: Shorts are short and vertical, so 480p fits the
-	// 50MB upload limit; regular videos get 360p to keep files and cost low.
-	youtubeQualityShorts  = "480"
-	youtubeQualityDefault = "360"
+	// Shorts are requested at 480p; a file over the 50MB upload limit is
+	// retried once at 360p.
+	youtubeQualityShorts   = "480"
+	youtubeQualityFallback = "360"
 
 	youtubeApifyFormat        = "default"
 	youtubeApifyProxyDisabled = "disabled"
@@ -53,8 +52,9 @@ const (
 // youtubeErrorFileTooLarge is the actor's own over-size error code.
 const youtubeErrorFileTooLarge = "FILE_TOO_LARGE"
 
-// youtubeVideoURLPattern matches video URLs (not channels or community pages).
-var youtubeVideoURLPattern = regexp.MustCompile(`(youtube\.com/(watch\?(.*&)?v=|shorts/|live/|embed/)|youtu\.be/)[A-Za-z0-9_-]{6,}`)
+// youtubeVideoURLPattern matches Shorts, the only videos the bot handles:
+// regular videos are not detected, and long ones would waste paid runs.
+var youtubeVideoURLPattern = regexp.MustCompile(`youtube\.com/shorts/[A-Za-z0-9_-]{6,}`)
 
 // errYouTubeTooLarge marks a video whose file exceeds Telegram's upload limit
 // (a property of the video, not a service failure).
@@ -109,14 +109,13 @@ func NewYouTubeApifyExtractor(tempDir string) *YouTubeApifyExtractor {
 	return result
 }
 
-// ExtractMedia downloads the video at youtubeQuality(url); a Short too large
-// at 480p is retried once at 360p while ctx has time left. Only video URLs
-// are sent to the paid actor.
+// ExtractMedia downloads a Short at 480p; one too large is retried once at
+// 360p while ctx has time left. Only Shorts URLs are sent to the paid actor.
 func (e *YouTubeApifyExtractor) ExtractMedia(ctx context.Context, youtubeURL string) ([]*MediaInfo, error) {
 	var result []*MediaInfo
 	var item youtubeApifyItem
 	err := checkYouTubeVideoURL(youtubeURL)
-	quality := youtubeQuality(youtubeURL)
+	quality := youtubeQualityShorts
 	isVideoURL := (err == nil)
 
 	if isVideoURL == true {
@@ -124,11 +123,11 @@ func (e *YouTubeApifyExtractor) ExtractMedia(ctx context.Context, youtubeURL str
 	}
 
 	isTooLarge := (errors.Is(err, errYouTubeTooLarge) == true) || (item.ErrorCode == youtubeErrorFileTooLarge)
-	isRetryable := (isTooLarge == true) && (quality != youtubeQualityDefault)
+	isRetryable := (isTooLarge == true) && (quality != youtubeQualityFallback)
 
 	if isRetryable == true {
-		log.Printf("📉 [apify-youtube] %sp is over the upload limit, retrying at %sp", quality, youtubeQualityDefault)
-		item, err = e.runActor(ctx, youtubeURL, youtubeQualityDefault)
+		log.Printf("📉 [apify-youtube] %sp is over the upload limit, retrying at %sp", quality, youtubeQualityFallback)
+		item, err = e.runActor(ctx, youtubeURL, youtubeQualityFallback)
 	}
 
 	if err == nil {
@@ -158,14 +157,13 @@ func isYouTubeServiceFailure(err error, item youtubeApifyItem) bool {
 	return result
 }
 
-// checkYouTubeVideoURL accepts watch, youtu.be, Shorts and live video URLs;
-// channel, community and playlist pages are not videos.
+// checkYouTubeVideoURL accepts Shorts URLs only.
 func checkYouTubeVideoURL(youtubeURL string) error {
 	var result error
 	isVideo := youtubeVideoURLPattern.MatchString(youtubeURL)
 
 	if isVideo == false {
-		result = fmt.Errorf("not a YouTube video URL: %s", youtubeURL)
+		result = fmt.Errorf("not a YouTube Shorts URL: %s", youtubeURL)
 	}
 
 	return result
@@ -231,15 +229,4 @@ func (e *YouTubeApifyExtractor) download(item youtubeApifyItem, youtubeURL strin
 	}
 
 	return result, err
-}
-
-// youtubeQuality picks the requested resolution for a URL.
-func youtubeQuality(youtubeURL string) string {
-	result := youtubeQualityDefault
-
-	if strings.Contains(youtubeURL, youtubeShortsPath) == true {
-		result = youtubeQualityShorts
-	}
-
-	return result
 }

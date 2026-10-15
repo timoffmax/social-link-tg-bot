@@ -79,14 +79,14 @@ func TestYouTubeApifyReportsActorFailure(t *testing.T) {
 	server := newFakeApify(t, `[{"status":"failed","errorCode":"PRIVATE_VIDEO","error":"Private video"}]`, &runs, &input)
 	extractor := &YouTubeApifyExtractor{tempDir: t.TempDir(), actor: "a~b", api: fakeApifyClient(server)}
 
-	_, err := extractor.ExtractMedia(context.Background(), "https://youtu.be/jNQXAC9IVRw")
+	_, err := extractor.ExtractMedia(context.Background(), "https://www.youtube.com/shorts/jNQXAC9IVRw")
 
 	if (err == nil) || (strings.Contains(err.Error(), "PRIVATE_VIDEO") == false) {
 		t.Fatalf("expected the actor error, got %v", err)
 	}
 
-	if strings.Contains(input, `"quality":"360"`) == false {
-		t.Fatalf("regular videos must use 360p: %s", input)
+	if strings.Contains(input, `"quality":"480"`) == false {
+		t.Fatalf("Shorts must use 480p: %s", input)
 	}
 }
 
@@ -141,7 +141,7 @@ func TestStoriesApifyRejectsHighlightsWithoutARun(t *testing.T) {
 func TestApifyMethodsAreOffWithoutToken(t *testing.T) {
 	sd := &SmartDownloader{}
 
-	_, ytErr := sd.youtubeApifyExtract(context.Background(), "https://youtu.be/jNQXAC9IVRw")
+	_, ytErr := sd.youtubeApifyExtract(context.Background(), "https://www.youtube.com/shorts/jNQXAC9IVRw")
 	_, storyErr := sd.storiesApifyExtract(context.Background(), "https://www.instagram.com/stories/nasa/1/")
 
 	if (errors.Is(ytErr, errApifyNotConfigured) == false) || (errors.Is(storyErr, errApifyNotConfigured) == false) {
@@ -162,15 +162,16 @@ func TestYouTubeApifyRetriesATooLargeShortAt360p(t *testing.T) {
 	}
 }
 
-func TestYouTubeApifySkipsNonVideoPagesWithoutARun(t *testing.T) {
+func TestYouTubeApifySkipsNonShortsWithoutARun(t *testing.T) {
 	runs := 0
 	input := ""
 	server := newFakeApify(t, `[]`, &runs, &input)
 	extractor := &YouTubeApifyExtractor{tempDir: t.TempDir(), actor: "a~b", api: fakeApifyClient(server)}
 
-	_, err := extractor.ExtractMedia(context.Background(), "https://youtube.com/channel/UCx/community")
+	_, channelErr := extractor.ExtractMedia(context.Background(), "https://youtube.com/channel/UCx/community")
+	_, err := extractor.ExtractMedia(context.Background(), "https://www.youtube.com/watch?v=jNQXAC9IVRw")
 
-	if (err == nil) || (runs != 0) {
+	if (channelErr == nil) || (err == nil) || (runs != 0) {
 		t.Fatalf("expected a refusal without a paid run, got runs=%d err=%v", runs, err)
 	}
 }

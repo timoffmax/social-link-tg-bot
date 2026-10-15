@@ -10,7 +10,7 @@ A Telegram bot that downloads and sends actual media files from social media lin
   - **Reddit**: vxreddit (works from datacenter IPs, resolves `/s/` share links) → direct JSON API (with inline JS-challenge solving; text posts) → yt-dlp
   - **TikTok**: direct scraping → slideshow API → tikwm.com → kktiktok redirector → headless browser; handles both videos and photo slideshows
   - **Twitter/X**: hybrid extraction — full tweet text (with author display name and recursive quote resolution) via FxTwitter + media via yt-dlp
-  - **YouTube**: yt-dlp (HLS merging via ffmpeg, EJS challenge solver) → a paid Apify downloader when YouTube walls the server IP
+  - **YouTube**: Shorts and community posts only (regular videos are ignored). Shorts: yt-dlp (HLS merging via ffmpeg, EJS challenge solver) → a paid Apify downloader when YouTube walls the server IP. Posts: text and images read from the post page
   - **Facebook**: yt-dlp (videos and reels; photo posts unsupported)
   - **Instagram stories**: a paid Apify stories scraper (stories need a login)
 - **Concurrent processing** — every Telegram update and every link within a message is processed in its own goroutine

@@ -983,13 +983,6 @@ func (yd *YtDlpDownloader) DownloadTwitterMedia(url string) ([]*MediaInfo, error
 }
 
 func (yd *YtDlpDownloader) DownloadYouTubeMedia(url string) ([]*MediaInfo, error) {
-	// Check if this is a YouTube community post (requires special handling)
-	if strings.Contains(url, "/post/") {
-		log.Printf("📺 Detected YouTube community post, using specialized extractor")
-		cliBrowser := NewCliBrowserExtractor(yd.WorkingDir, yd.TempDir)
-		return cliBrowser.ExtractYouTubeCommunityPost(url)
-	}
-
 	// Regular videos: yt-dlp only. The headless browser fallback never
 	// succeeded (YouTube walls the datacenter IP) and cost 30s per link; the
 	// strategy's next method (Apify) takes over instead.

@@ -16,6 +16,7 @@ import (
 const (
 	MediaTypePhoto            = "photo"
 	MediaTypeVideo            = "video"
+	MediaTypeText             = "text"
 	TelegramCaptionLimitBytes = 1024
 )
 

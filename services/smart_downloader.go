@@ -25,6 +25,7 @@ type SmartDownloader struct {
 	gated        GatedPostProvider
 	youtubeApify *YouTubeApifyExtractor
 	storiesApify *InstagramStoriesApifyExtractor
+	youtubePost  *YouTubePostExtractor
 	tempDir      string
 	workingDir   string
 }
@@ -52,6 +53,7 @@ func NewSmartDownloader() *SmartDownloader {
 		gated:        NewGatedPostProvider(tempDir),
 		youtubeApify: NewYouTubeApifyExtractor(tempDir),
 		storiesApify: NewInstagramStoriesApifyExtractor(tempDir),
+		youtubePost:  NewYouTubePostExtractor(tempDir),
 		tempDir:      tempDir,
 		workingDir:   workingDir,
 	}
@@ -352,12 +354,17 @@ func (sd *SmartDownloader) executeStrategy(
 		return nil, err
 
 	case MethodYouTubeApify:
-		mediaInfos, err := sd.runApifyMethod(ctx, strategy, mediaURL, "youtube-apify", sd.youtubeApifyExtract, overallStart, methodStartTime)
+		mediaInfos, err := sd.runExtractorMethod(ctx, strategy, mediaURL, "youtube-apify", sd.youtubeApifyExtract, overallStart, methodStartTime)
 
 		return mediaInfos, err
 
 	case MethodStoriesApify:
-		mediaInfos, err := sd.runApifyMethod(ctx, strategy, mediaURL, "stories-apify", sd.storiesApifyExtract, overallStart, methodStartTime)
+		mediaInfos, err := sd.runExtractorMethod(ctx, strategy, mediaURL, "stories-apify", sd.storiesApifyExtract, overallStart, methodStartTime)
+
+		return mediaInfos, err
+
+	case MethodYouTubePost:
+		mediaInfos, err := sd.runExtractorMethod(ctx, strategy, mediaURL, "youtube-post", sd.youtubePost.ExtractMedia, overallStart, methodStartTime)
 
 		return mediaInfos, err
 
@@ -635,9 +642,10 @@ func cleanURLParams(originalURL string) string {
 	return parsedURL.String()
 }
 
-// runApifyMethod runs one Apify-backed method with the chain's usual logging.
+// runExtractorMethod runs one context-aware extractor method (the Apify-backed
+// ones and the YouTube post reader) with the chain's usual logging.
 // appendOriginalURL is applied by the extractors themselves.
-func (sd *SmartDownloader) runApifyMethod(
+func (sd *SmartDownloader) runExtractorMethod(
 	ctx context.Context,
 	strategy *ExtractionStrategy,
 	mediaURL string,
@@ -650,7 +658,7 @@ func (sd *SmartDownloader) runApifyMethod(
 	err := ctx.Err()
 
 	if err == nil {
-		log.Printf("💳 Trying %s extraction", methodName)
+		log.Printf("Trying %s extraction", methodName)
 		result, err = extract(ctx, mediaURL)
 	}
 
