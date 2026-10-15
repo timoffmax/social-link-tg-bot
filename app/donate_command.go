@@ -38,6 +38,8 @@ Pick an amount with the buttons below. As a thank-you you get bonus downloads of
 • If the bot can't fetch the post, no bonus download is used. They don't expire.
 • Card and crypto donations don't add bonus downloads.
 
+Telegram sells Stars in packs; anything left over stays in your Telegram balance.
+
 By paying you agree to the /terms. Help with payments: /paysupport.`
 
 // donateBalanceTemplate adds the user's bonus downloads to the Stars section.

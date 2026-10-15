@@ -16,7 +16,7 @@ type TgPlSendVideo struct {
 	Thumb               string                        `json:"thumb,omitempty"`
 	Caption             string                        `json:"caption,omitempty"`
 	ParseMode           string                        `json:"parse_mode,omitempty"`
-	CaptionEntities     tg_api.TgPlaceholder          `json:"caption_entities,omitempty"`
+	CaptionEntities     []tg_api.TgPlaceholder        `json:"caption_entities,omitempty"`
 	HasSpoiler          bool                          `json:"has_spoiler,omitempty"`
 	SupportsStreaming   bool                          `json:"supports_streaming,omitempty"`
 	DisableNotification bool                          `json:"disable_notification,omitempty"`

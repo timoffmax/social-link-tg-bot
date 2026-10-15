@@ -43,6 +43,10 @@ func TestMultipartUploadSendsInlineButtonsAsJSON(t *testing.T) {
 		t.Fatalf("reply_markup is not JSON: %q (%v)", request.FormValue("reply_markup"), err)
 	}
 
+	if _, isSent := request.MultipartForm.Value["caption_entities"]; isSent == true {
+		t.Fatalf("unused caption_entities must be left out")
+	}
+
 	if (len(markup.InlineKeyboard) != 1) || (len(markup.InlineKeyboard[0]) != 1) || (markup.InlineKeyboard[0][0]["callback_data"] != "/donate") {
 		t.Fatalf("unexpected reply_markup: %+v", markup)
 	}

@@ -35,7 +35,7 @@ type TgMessage struct {
 	VideoNote                     tg_api.TgPlaceholder   `json:"video_note,omitempty"`
 	Voice                         tg_api.TgPlaceholder   `json:"voice,omitempty"`
 	Caption                       string                 `json:"caption,omitempty"`
-	CaptionEntities               []tg_api.TgPlaceholder `json:"caption_entities,omitempty"`
+	CaptionEntities               []TgMessageEntity      `json:"caption_entities,omitempty"`
 	Contact                       tg_api.TgPlaceholder   `json:"contact,omitempty"`
 	Dice                          tg_api.TgPlaceholder   `json:"dice,omitempty"`
 	Game                          tg_api.TgPlaceholder   `json:"game,omitempty"`

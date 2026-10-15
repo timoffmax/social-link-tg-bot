@@ -292,6 +292,12 @@ func processUpdate(upd *response.TgUpdate) {
 		return
 	}
 
+	// A reply to the bug report prompt is a report, even when it has a link
+	// or an owner's admin flow is active.
+	if handleReportPromptReply(&origMessage, &origChat, &origUser) == true {
+		return
+	}
+
 	// Handle admin state text input (blog add/edit flows)
 	if handleAdminStateInput(&origMessage, &origChat, &origUser) {
 		return
@@ -503,6 +509,7 @@ func processMediaDownload(url string, origChat *response.TgChat, origMessage *re
 				Text:                errorText,
 				ReplyToMessageId:    origMessage.MessageId,
 				DisableNotification: true,
+				ReplyMarkup:         reportFailedMarkup(),
 			}
 			response := message.NewSendMessage(errorMsg)
 			services.LogTelegramMessage(origChat.Id, "error", response != nil, "")
@@ -1930,7 +1937,7 @@ func handleBotCommand(origMessage *response.TgMessage, origChat *response.TgChat
 		handleBroadcastCommand(origMessage, origChat, origUser)
 	case donateCommand, supportCommand:
 		handleDonateCommand(origMessage, origChat, origUser)
-	case "/report":
+	case reportCommand:
 		handleReportCommand(origMessage, origChat, origUser)
 	case "/reply":
 		handleReplyCommand(origMessage, origChat, origUser)
@@ -3005,9 +3012,10 @@ func createMainMenuKeyboard(isGroupChat bool, userID int) *api.TgInlineKeyboardM
 		})
 	}
 
-	// Support row
+	// Support and bug report row
 	buttons = append(buttons, []api.TgInlineKeyboardButton{
 		{Text: supportMenuButtonText, CallbackData: donateCommand},
+		{Text: reportMenuButtonText, CallbackData: reportCommand},
 	})
 
 	// Last row - Help (refresh menu)
@@ -3040,6 +3048,10 @@ func handleCallbackQuery(callbackQuery *response.TgCallbackQuery) {
 		handleMyLimitCommand(&fakeMessage, &callbackQuery.Message.Chat, &callbackQuery.From)
 	} else if callbackQuery.Data == donateCommand {
 		handleDonateCommand(&fakeMessage, &callbackQuery.Message.Chat, &callbackQuery.From)
+	} else if callbackQuery.Data == reportCommand {
+		sendReportPrompt(&callbackQuery.Message.Chat, &callbackQuery.From, 0)
+	} else if callbackQuery.Data == reportFailedCallback {
+		handleReportFailedCallback(callbackQuery)
 	} else if strings.HasPrefix(callbackQuery.Data, "/help") {
 		handleStartCommand(&fakeMessage, &callbackQuery.Message.Chat, &callbackQuery.From)
 	} else if callbackQuery.Data == "/setlimit_start" {
@@ -4777,90 +4789,6 @@ func executeBroadcast(chatID int64, messageID int, postID int, audience string) 
 		editMessage(chatID, messageID, resultText, createBackToBroadcastKeyboard(postID))
 		log.Printf("📢 Broadcast to groups complete: %d sent, %d failed", sent, failed)
 	}
-}
-
-// handleReportCommand handles /report command - forwards user feedback to the bot owner
-func handleReportCommand(origMessage *response.TgMessage, origChat *response.TgChat, origUser *response.TgUser) {
-	adminUserID := config.GetAdminUserID()
-	if adminUserID == 0 {
-		return
-	}
-
-	// Parse report text after "/report "
-	reportText := ""
-	if idx := strings.Index(origMessage.Text, " "); idx >= 0 {
-		reportText = strings.TrimSpace(origMessage.Text[idx+1:])
-	}
-
-	if reportText == "" {
-		msg := payload.TgPlSendMessage{
-			ChatId:              origChat.Id,
-			ParseMode:           payload.ParseModeHTML,
-			Text:                "🐛 <b>Report an issue</b>\n\nUsage: <code>/report your message here</code>\n\nDescribe the problem — include the link that didn't work and what happened.\n\n<i>Example:</i>\n<code>/report Instagram reel link doesn't download: https://...</code>",
-			ReplyToMessageId:    origMessage.MessageId,
-			DisableNotification: true,
-		}
-
-		message.NewSendMessage(msg)
-		return
-	}
-
-	// Build report message for the owner
-	var report strings.Builder
-	report.WriteString("🐛 <b>New Report</b>\n\n")
-	report.WriteString(fmt.Sprintf("👤 From: %s", html.EscapeString(origUser.FirstName)))
-
-	if origUser.LastName != "" {
-		report.WriteString(fmt.Sprintf(" %s", html.EscapeString(origUser.LastName)))
-	}
-
-	if origUser.Username != "" {
-		report.WriteString(fmt.Sprintf(" (@%s)", origUser.Username))
-	}
-
-	report.WriteString(fmt.Sprintf("\n🆔 User ID: <code>%d</code>\n", origUser.Id))
-
-	if origChat.Type != "private" {
-		report.WriteString(fmt.Sprintf("💬 Chat: %s (<code>%d</code>)\n", html.EscapeString(origChat.Title), origChat.Id))
-	}
-
-	report.WriteString(fmt.Sprintf("\n📝 <b>Message:</b>\n%s", html.EscapeString(reportText)))
-
-	// Save to database
-	chatTitle := origChat.Title
-	if origChat.Type == "private" {
-		chatTitle = "Private Chat"
-	}
-
-	reportID, dbErr := services.CreateReport(int64(origUser.Id), origUser.Username, origUser.FirstName, origChat.Id, chatTitle, reportText)
-	if dbErr != nil {
-		log.Printf("❌ Failed to save report to DB: %v", dbErr)
-	} else {
-		report.WriteString(fmt.Sprintf("\n\n📌 Report ID: <code>#%d</code>", reportID))
-		report.WriteString(fmt.Sprintf("\n💬 Reply: <code>/reply %d your answer</code>", reportID))
-	}
-
-	// Send to owner
-	ownerMsg := payload.TgPlSendMessage{
-		ChatId:                adminUserID,
-		ParseMode:             payload.ParseModeHTML,
-		Text:                  report.String(),
-		DisableWebPagePreview: true,
-	}
-
-	message.NewSendMessage(ownerMsg)
-
-	// Confirm to user
-	confirmMsg := payload.TgPlSendMessage{
-		ChatId:              origChat.Id,
-		ParseMode:           payload.ParseModeHTML,
-		Text:                "✅ Your report has been sent to the developer. Thank you!",
-		ReplyToMessageId:    origMessage.MessageId,
-		DisableNotification: true,
-	}
-
-	message.NewSendMessage(confirmMsg)
-	log.Printf("🐛 Report #%d from user %d: %s", reportID, origUser.Id, reportText)
 }
 
 // handleReplyCommand handles /reply command - owner replies to a report
