@@ -73,6 +73,12 @@ func runStartupChecks() {
 		log.Printf("⚠️ Warning: Failed to set bot commands: %v", err)
 	}
 
+	descriptionsErr := services.SetBotDescriptions()
+
+	if descriptionsErr != nil {
+		log.Printf("⚠️ Warning: Failed to set bot descriptions: %v", descriptionsErr)
+	}
+
 	log.Printf("✅ Startup complete")
 }
 

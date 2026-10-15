@@ -19,8 +19,8 @@ const (
 	GatedFetchScopeUser   GatedFetchScope = "user"
 )
 
-// gatedFetchGlobalScopeID is the scope_id of the bot-wide counter.
-const gatedFetchGlobalScopeID = 0
+// GatedFetchGlobalScopeID is the scope_id of the bot-wide counter.
+const GatedFetchGlobalScopeID = 0
 
 // GatedFetchDenial says why a paid gated-post fetch was not allowed; empty
 // means allowed.
@@ -34,6 +34,10 @@ const (
 	GatedFetchDeniedUserCap GatedFetchDenial = "user_allowance"
 	GatedFetchDeniedGlobal  GatedFetchDenial = "global_cap"
 	GatedFetchDeniedNoDB    GatedFetchDenial = "no_database"
+	// GatedFetchDeniedBlocked is a user whose allowance is 0 (the owner's
+	// override or the default): bonus credits can't override it. A chat with
+	// a 0 cap is GatedFetchDeniedChatOff.
+	GatedFetchDeniedBlocked GatedFetchDenial = "blocked"
 )
 
 // GatedFetchUnlimited is the stored monthly limit of a chat or user without a
@@ -88,10 +92,7 @@ var errGatedFetchNoDatabase = errors.New("database not available")
 
 // gatedFetchPeriod returns the first day of the current UTC month.
 func gatedFetchPeriod() string {
-	now := time.Now().UTC()
-	year := now.Year()
-	month := now.Month()
-	firstDay := time.Date(year, month, 1, 0, 0, 0, 0, time.UTC)
+	firstDay := currentMonthStartUTC()
 	result := firstDay.Format(gatedFetchPeriodLayout)
 
 	return result
@@ -123,7 +124,7 @@ func ResolveGatedFetchQuotas(chatID, userID int64, isPrivate bool) ([]GatedFetch
 	}
 
 	if (denial == GatedFetchAllowed) && (err == nil) {
-		global := GatedFetchQuota{Scope: GatedFetchScopeGlobal, ScopeID: gatedFetchGlobalScopeID, Limit: globalCap, Denial: GatedFetchDeniedGlobal, Period: period}
+		global := GatedFetchQuota{Scope: GatedFetchScopeGlobal, ScopeID: GatedFetchGlobalScopeID, Limit: globalCap, Denial: GatedFetchDeniedGlobal, Period: period}
 		result = []GatedFetchQuota{global, scoped}
 	}
 
@@ -155,10 +156,22 @@ func resolveScopedQuota(chatID, userID int64, isPrivate bool) (GatedFetchQuota, 
 	}
 
 	if (err == nil) && (denial == GatedFetchAllowed) && (result.Limit == 0) {
-		denial = result.Denial
+		denial = zeroLimitDenial(isPrivate)
 	}
 
 	return result, denial, err
+}
+
+// zeroLimitDenial is the denial of a 0 limit: the chat is off in a group, the
+// user is blocked in a private chat.
+func zeroLimitDenial(isPrivate bool) GatedFetchDenial {
+	result := GatedFetchDeniedChatOff
+
+	if isPrivate == true {
+		result = GatedFetchDeniedBlocked
+	}
+
+	return result
 }
 
 // effectiveGatedFetchLimit returns the stored override, or the default.
@@ -303,13 +316,22 @@ func GetGatedFetchUsage(scope GatedFetchScope, scopeID int64) (int, error) {
 // GetGatedFetchPolicy returns the stored policy; a missing row is the default
 // policy (enabled, default limit). Only an explicit /gated off disables it.
 func GetGatedFetchPolicy(scope GatedFetchScope, scopeID int64) (GatedFetchPolicy, error) {
+	background := context.Background()
+	result, err := getGatedFetchPolicy(background, scope, scopeID)
+
+	return result, err
+}
+
+// getGatedFetchPolicy reads a scope's policy within ctx; no row means the
+// defaults.
+func getGatedFetchPolicy(ctx context.Context, scope GatedFetchScope, scopeID int64) (GatedFetchPolicy, error) {
 	result := GatedFetchPolicy{Enabled: true}
 	db := GetDB()
 	err := errGatedFetchNoDatabase
 	query := `SELECT enabled, monthly_limit FROM gated_fetch_policies WHERE scope = $1 AND scope_id = $2`
 
 	if db != nil {
-		err = db.QueryRow(query, string(scope), scopeID).Scan(&result.Enabled, &result.MonthlyLimit)
+		err = db.QueryRowContext(ctx, query, string(scope), scopeID).Scan(&result.Enabled, &result.MonthlyLimit)
 	}
 
 	if errors.Is(err, sql.ErrNoRows) == true {

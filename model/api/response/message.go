@@ -58,7 +58,7 @@ type TgMessage struct {
 	MigrateFromChatId             int                    `json:"migrate_from_chat_id,omitempty"`
 	PinnedMessage                 *TgMessage             `json:"pinned_message,omitempty"`
 	Invoice                       tg_api.TgPlaceholder   `json:"invoice,omitempty"`
-	SuccessfulPayment             tg_api.TgPlaceholder   `json:"successful_payment,omitempty"`
+	SuccessfulPayment             *TgSuccessfulPayment   `json:"successful_payment,omitempty"`
 	ConnectedWebsite              string                 `json:"connected_website,omitempty"`
 	PassportData                  tg_api.TgPlaceholder   `json:"passport_data,omitempty"`
 	ProximityAlertTriggered       tg_api.TgPlaceholder   `json:"proximity_alert_triggered,omitempty"`

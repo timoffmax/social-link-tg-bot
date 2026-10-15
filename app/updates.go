@@ -176,7 +176,7 @@ func processRecentUpdates(offset int, isFirstRun bool) *response.TgUpdate {
 	// Filter out old updates on first run
 	var validUpdates []*response.TgUpdate
 	for _, update := range updates {
-		if isFirstRun && isUpdateTooOld(update) {
+		if isFirstRun && isUpdateTooOld(update) && (isPaymentUpdate(update) == false) {
 			log.Printf("Skipping old update %d (too old for first run)", update.UpdateId)
 			lastProcessedUpd = update
 			continue
@@ -188,8 +188,22 @@ func processRecentUpdates(offset int, isFirstRun bool) *response.TgUpdate {
 	if len(validUpdates) > 0 {
 		log.Printf("🚀 [CONCURRENT] Starting concurrent processing of %d update(s)", len(validUpdates))
 
-		// Process each update in its own goroutine, bounded by semaphore
+		// Process each update in its own goroutine, bounded by semaphore.
+		// Payment updates skip the semaphore: a pre-checkout query must be
+		// answered within 10s (its own goroutine, no waiting for a busy slot),
+		// and a payment is recorded here, before the next poll confirms the
+		// offset (its thank-you and admin alert are sent in the background).
 		for i, update := range validUpdates {
+			isPayment := isPaymentRelatedUpdate(update)
+
+			if isPayment == true {
+				handlePaymentUpdate(update)
+			}
+
+			if isPayment == true {
+				continue
+			}
+
 			updateWg.Add(1)
 
 			go func(index int, upd *response.TgUpdate) {
@@ -226,7 +240,7 @@ func processRecentUpdates(offset int, isFirstRun bool) *response.TgUpdate {
 func getRecentUpdates(offset int) []*response.TgUpdate {
 	updates := message.NewGetUpdates(payload.TgPlGetUpdates{
 		Offset:         offset,
-		AllowedUpdates: []string{"message", "callback_query"},
+		AllowedUpdates: []string{"message", "callback_query", updateTypePreCheckoutQuery},
 		Timeout:        5,   // Short polling timeout (5 seconds) for faster response to new messages
 		Limit:          100, // Get up to 100 updates at once
 	})
@@ -1081,6 +1095,9 @@ const gatedGlobalCapReachedHint = "The bot has used all its downloads of restric
 // gatedChatOffHint is appended when the owner turned the paid fetch off here.
 const gatedChatOffHint = "Downloads of restricted posts are turned off in this chat."
 
+// gatedUserBlockedHint is appended when the user's allowance is 0.
+const gatedUserBlockedHint = "Downloads of restricted posts are turned off for you."
+
 // replyInstagramGate replies to an Instagram link whose author limited its
 // audience (e.g. "People under 15 can't see this content") with an explanation.
 // It reports whether that reply was sent, so a failed send keeps the fallbacks.
@@ -1138,6 +1155,21 @@ func instagramGateReplyText(downloadErr error, gate services.InstagramGate) stri
 
 	if (isDenied == true) && (deniedErr.Denial == services.GatedFetchDeniedChatOff) {
 		result = fmt.Sprintf("%s\n\n%s", result, gatedChatOffHint)
+	}
+
+	if (isDenied == true) && (deniedErr.Denial == services.GatedFetchDeniedBlocked) {
+		result = fmt.Sprintf("%s\n\n%s", result, gatedUserBlockedHint)
+	}
+
+	supportHint := ""
+
+	if isDenied == true {
+		isSupportEnabled := config.IsStarsSupportEnabled()
+		supportHint = supportGatedHint(deniedErr.Denial, isSupportEnabled)
+	}
+
+	if supportHint != "" {
+		result = fmt.Sprintf("%s\n%s", result, supportHint)
 	}
 
 	return result
@@ -1889,12 +1921,18 @@ func handleBotCommand(origMessage *response.TgMessage, origChat *response.TgChat
 		handleGatedCommand(origMessage, origChat, origUser)
 	case "/broadcast":
 		handleBroadcastCommand(origMessage, origChat, origUser)
-	case "/donate":
+	case donateCommand, supportCommand:
 		handleDonateCommand(origMessage, origChat, origUser)
 	case "/report":
 		handleReportCommand(origMessage, origChat, origUser)
 	case "/reply":
 		handleReplyCommand(origMessage, origChat, origUser)
+	case paySupportCommand:
+		handlePaySupportCommand(origMessage, origChat, origUser)
+	case termsCommand:
+		handleTermsCommand(origMessage, origChat, origUser)
+	case starsRefundCommand:
+		handleStarsRefundCommand(origMessage, origChat, origUser)
 	default:
 		// Unknown command - ignore it
 		log.Printf("🚫 Ignoring unknown command: %s from user %d", command, origUser.Id)
@@ -1906,19 +1944,11 @@ func handleStartCommand(origMessage *response.TgMessage, origChat *response.TgCh
 	var menuText strings.Builder
 	isGroupChat := origChat.Type != "private"
 
-	menuText.WriteString("🤖 <b>Social Link Bot</b>\n\n")
+	menuText.WriteString("🤖 <b>Fix Link Bot</b>\n\n")
 	menuText.WriteString("I download and send actual media files from social media platforms — no more link previews!\n\n")
 
 	// Platform support
-	menuText.WriteString("🌐 <b>Supported Platforms:</b>\n")
-	menuText.WriteString("📷 <b>Instagram</b> — Photos, Videos, Albums, Stories\n")
-	menuText.WriteString("🎵 <b>TikTok</b> — Videos, Photo Slideshows\n")
-	menuText.WriteString("🐦 <b>Twitter/X</b> — Photos, Videos, GIFs\n")
-	menuText.WriteString("📺 <b>YouTube</b> — Videos, Shorts\n")
-	menuText.WriteString("🔴 <b>Reddit</b> — Videos, Images, Galleries, Text Posts\n")
-	menuText.WriteString("👥 <b>Facebook</b> — Videos, Photos\n")
-	menuText.WriteString("😂 <b>9GAG</b> — Videos, Images\n")
-	menuText.WriteString("🧵 <b>Threads</b> — Text, Photos, Videos, Carousels\n\n")
+	menuText.WriteString(startPlatformsText)
 
 	// How to use — context-dependent
 	if isGroupChat {
@@ -1940,7 +1970,15 @@ func handleStartCommand(origMessage *response.TgMessage, origChat *response.TgCh
 	menuText.WriteString("• /stats [period] — View media statistics\n")
 	menuText.WriteString("  <i>Periods: today, week, month, year</i>\n")
 	menuText.WriteString("• /mylimit — Check your daily media limit\n")
-	menuText.WriteString("• /donate — Support the bot development\n")
+	menuText.WriteString("• /report — Report a bug or issue\n")
+
+	donateLine := startDonateCryptoLine
+
+	if config.IsStarsSupportEnabled() == true {
+		donateLine = startDonateStarsLine
+	}
+
+	menuText.WriteString(donateLine)
 
 	// Admin commands (only in groups)
 	if isGroupChat {
@@ -1954,7 +1992,6 @@ func handleStartCommand(origMessage *response.TgMessage, origChat *response.TgCh
 
 	// Footer
 	menuText.WriteString("\n━━━━━━━━━━━━━━━━━━━━\n")
-	menuText.WriteString("💚 Support the bot: /donate\n")
 	menuText.WriteString("💡 <i>Tip: Just paste a link to get started!</i>")
 
 	// Create interactive keyboard with menu buttons
@@ -1969,46 +2006,6 @@ func handleStartCommand(origMessage *response.TgMessage, origChat *response.TgCh
 
 	message.NewSendMessage(helpMsg)
 	log.Printf("✅ Sent interactive help/start message to user %d", origUser.Id)
-}
-
-// handleDonateCommand handles the /donate command
-func handleDonateCommand(origMessage *response.TgMessage, origChat *response.TgChat, origUser *response.TgUser) {
-	var text strings.Builder
-
-	text.WriteString("💚 <b>Support Social Link Bot</b>\n\n")
-	text.WriteString("If you find this bot useful, consider supporting its development!\n\n")
-	text.WriteString("🪙 <b>Donate with any crypto:</b>\n")
-	text.WriteString("Use the button below to donate via NOWPayments (USDT, BTC, ETH, and 300+ cryptos)\n\n")
-	text.WriteString("━━━━━━━━━━━━━━━━━━━━\n\n")
-	text.WriteString("💰 <b>Or send USDT directly:</b>\n\n")
-	text.WriteString("<b>ERC-20:</b>\n")
-	text.WriteString("<code>0xb3D102eA95Bf2376619730b8f3149131cc3F951B</code>\n\n")
-	text.WriteString("<b>TRC-20:</b>\n")
-	text.WriteString("<code>TWRfDPJ1TFUYJj47JcghvTEBnKcZWqgqcz</code>\n\n")
-	text.WriteString("<i>Tap an address to copy it. Thank you!</i> 🙏")
-
-	keyboard := &api.TgInlineKeyboardMarkup{
-		InlineKeyboard: [][]api.TgInlineKeyboardButton{
-			{
-				{Text: "🪙 Donate via NOWPayments", URL: "https://nowpayments.io/donation/sociallinkbot"},
-			},
-			{
-				{Text: "◀️ Back to Menu", CallbackData: "/help"},
-			},
-		},
-	}
-
-	donateMsg := payload.TgPlSendMessage{
-		ChatId:              origChat.Id,
-		ParseMode:           payload.ParseModeHTML,
-		Text:                text.String(),
-		ReplyToMessageId:    origMessage.MessageId,
-		DisableNotification: true,
-		ReplyMarkup:         keyboard,
-	}
-
-	message.NewSendMessage(donateMsg)
-	log.Printf("💚 Sent donate info to user %d", origUser.Id)
 }
 
 // handleStatsCommand handles /stats command with actual database functionality
@@ -2096,6 +2093,7 @@ func handleStatsCommand(origMessage *response.TgMessage, origChat *response.TgCh
 					"youtube":                "📺",
 					"reddit":                 "🔴",
 					"facebook":               "👥",
+					"9gag":                   "😂",
 					services.ThreadsPlatform: "🧵",
 				}
 				emoji := platformEmoji[strings.ToLower(platform.Platform)]
@@ -2622,33 +2620,10 @@ func handleSetGroupTimezoneCommand(origMessage *response.TgMessage, origChat *re
 
 // getBroadcastAnnouncement returns the predefined announcement message
 func getBroadcastAnnouncement() string {
-	var text strings.Builder
-	text.WriteString("🎉 <b>Social Link Bot — What's New!</b>\n\n")
+	isStarsEnabled := config.IsStarsSupportEnabled()
+	result := buildBroadcastAnnouncement(isStarsEnabled)
 
-	text.WriteString("Hey! Here's what's been improved recently:\n\n")
-
-	text.WriteString("🆕 <b>9GAG support</b>\n")
-	text.WriteString("Send any 9gag.com link — videos and images are now downloaded directly!\n\n")
-
-	text.WriteString("🔴 <b>Reddit support</b>\n")
-	text.WriteString("Videos, images, galleries, and even text posts — all extracted and sent to you.\n\n")
-
-	text.WriteString("📸 <b>Instagram improvements</b>\n")
-	text.WriteString("Better photo/carousel downloads, Stories support via API, and more reliable Reels extraction.\n\n")
-
-	text.WriteString("🎬 <b>YouTube improvements</b>\n")
-	text.WriteString("Shorts + Community posts with images now supported. Faster HLS stream processing.\n\n")
-
-	text.WriteString("🐦 <b>Twitter/X improvements</b>\n")
-	text.WriteString("Full tweet text with author info, plus better media extraction.\n\n")
-
-	text.WriteString("━━━━━━━━━━━━━━━━━━━━\n\n")
-
-	text.WriteString("💡 <b>Tip:</b> Add me to a group chat — I'll automatically download media from links shared by anyone in the group!\n\n")
-
-	text.WriteString("💚 Like this bot? Use /donate to support development!")
-
-	return text.String()
+	return result
 }
 
 // handleBroadcastCommand handles /broadcast command (owner only)
@@ -2845,6 +2820,7 @@ func handleAdminStatsCommand(origMessage *response.TgMessage, origChat *response
 			"youtube":                "📺",
 			"reddit":                 "🔴",
 			"facebook":               "👥",
+			"9gag":                   "😂",
 			services.ThreadsPlatform: "🧵",
 		}
 		for _, ps := range stats.PlatformStats {
@@ -2871,6 +2847,9 @@ func handleAdminStatsCommand(origMessage *response.TgMessage, origChat *response
 			statsText.WriteString(fmt.Sprintf("%d. %s: <b>%d</b>\n", i+1, html.EscapeString(chatName), cs.Total))
 		}
 	}
+
+	paidStats := paidFetchingStatsText()
+	statsText.WriteString(paidStats)
 
 	statsText.WriteString("\n━━━━━━━━━━━━━━━━━━━━")
 	statsText.WriteString("\n💡 <code>/adminstats [period]</code> - change period")
@@ -3019,9 +2998,9 @@ func createMainMenuKeyboard(isGroupChat bool, userID int) *api.TgInlineKeyboardM
 		})
 	}
 
-	// Donate row
+	// Support row
 	buttons = append(buttons, []api.TgInlineKeyboardButton{
-		{Text: "💚 Donate (USDT)", CallbackData: "/donate"},
+		{Text: supportMenuButtonText, CallbackData: donateCommand},
 	})
 
 	// Last row - Help (refresh menu)
@@ -3052,7 +3031,7 @@ func handleCallbackQuery(callbackQuery *response.TgCallbackQuery) {
 		handleStatsCommand(&fakeMessage, &callbackQuery.Message.Chat, &callbackQuery.From)
 	} else if strings.HasPrefix(callbackQuery.Data, "/mylimit") {
 		handleMyLimitCommand(&fakeMessage, &callbackQuery.Message.Chat, &callbackQuery.From)
-	} else if callbackQuery.Data == "/donate" {
+	} else if callbackQuery.Data == donateCommand {
 		handleDonateCommand(&fakeMessage, &callbackQuery.Message.Chat, &callbackQuery.From)
 	} else if strings.HasPrefix(callbackQuery.Data, "/help") {
 		handleStartCommand(&fakeMessage, &callbackQuery.Message.Chat, &callbackQuery.From)
@@ -3090,6 +3069,8 @@ func handleCallbackQuery(callbackQuery *response.TgCallbackQuery) {
 		handleBlogCallback(callbackQuery)
 	} else if strings.HasPrefix(callbackQuery.Data, "/broadcast_") {
 		handleBroadcastCallback(callbackQuery)
+	} else if strings.HasPrefix(callbackQuery.Data, supportCallbackPrefix) {
+		handleSupportTierCallback(callbackQuery)
 	} else {
 		log.Printf("🤷 Unknown callback query: %s", callbackQuery.Data)
 	}

@@ -130,6 +130,7 @@ func TestInstagramGateReplyExplainsTheReason(t *testing.T) {
 		services.GatedFetchDeniedChatCap: gatedChatCapReachedHint,
 		services.GatedFetchDeniedGlobal:  gatedGlobalCapReachedHint,
 		services.GatedFetchDeniedChatOff: gatedChatOffHint,
+		services.GatedFetchDeniedBlocked: gatedUserBlockedHint,
 	}
 
 	for denial, hint := range cases {

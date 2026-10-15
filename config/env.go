@@ -297,6 +297,20 @@ func GetGatedFetchChatMonthlyCap() int {
 	return result
 }
 
+// Optional Telegram Stars "support the developer" payments.
+const (
+	starsSupportEnabledKey     = "STARS_SUPPORT_ENABLED"
+	defaultStarsSupportEnabled = false
+)
+
+// IsStarsSupportEnabled reports whether /support sells Telegram Stars support
+// tiers; off by default.
+func IsStarsSupportEnabled() bool {
+	result := getBoolEnv(starsSupportEnabledKey, defaultStarsSupportEnabled)
+
+	return result
+}
+
 // Apify budget and per-platform actors.
 const (
 	apifyMonthlyBudgetUsdKey     = "APIFY_MONTHLY_BUDGET_USD"

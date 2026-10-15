@@ -17,8 +17,11 @@ import (
 
 const gatedFetchTestDSNKey = "GATED_FETCH_TEST_DSN"
 
-// gatedFetchTestMigration is applied to the test database before each test.
-const gatedFetchTestMigration = "../migrations/006_create_gated_fetch.up.sql"
+// gatedFetchTestMigrations are applied to the test database before each test.
+var gatedFetchTestMigrations = []string{
+	"../migrations/006_create_gated_fetch.up.sql",
+	"../migrations/007_create_support_payments.up.sql",
+}
 
 func setupGatedFetchTestDB(t *testing.T) {
 	dsn := os.Getenv(gatedFetchTestDSNKey)
@@ -33,14 +36,17 @@ func setupGatedFetchTestDB(t *testing.T) {
 		t.Fatalf("open: %v", err)
 	}
 
-	migration, err := os.ReadFile(gatedFetchTestMigration)
+	mustExec(t, db, "DROP TABLE IF EXISTS gated_fetch_usage, gated_fetch_policies, support_payments, gated_fetch_credits CASCADE")
 
-	if err != nil {
-		t.Fatalf("read migration: %v", err)
+	for _, path := range gatedFetchTestMigrations {
+		migration, err := os.ReadFile(path)
+
+		if err != nil {
+			t.Fatalf("read migration: %v", err)
+		}
+
+		mustExec(t, db, string(migration))
 	}
-
-	mustExec(t, db, "DROP TABLE IF EXISTS gated_fetch_usage, gated_fetch_policies CASCADE")
-	mustExec(t, db, string(migration))
 
 	previous := dbService
 	dbService = &DatabaseService{db: db}
@@ -155,8 +161,8 @@ func TestGatedFetchUserOverrideZeroDisablesPrivateUse(t *testing.T) {
 		t.Fatalf("override: %v", err)
 	}
 
-	if denial := reserveOnce(t, 9, 9, true); denial != GatedFetchDeniedUserCap {
-		t.Fatalf("expected the zero allowance to deny, got %q", denial)
+	if denial := reserveOnce(t, 9, 9, true); denial != GatedFetchDeniedBlocked {
+		t.Fatalf("expected the zero allowance to block, got %q", denial)
 	}
 }
 
@@ -333,5 +339,47 @@ func TestGatedFetchCaptionEndsWithTheRemainingQuota(t *testing.T) {
 
 	if (err != nil) || (strings.HasSuffix(media[0].Caption, "📊 Restricted posts left this month: 19 of 20") == false) {
 		t.Fatalf("expected the quota note, got %q %v", media[0].Caption, err)
+	}
+}
+
+func TestGatedFetchGroupCapZeroTurnsTheChatOff(t *testing.T) {
+	setupGatedFetchTestDB(t)
+
+	if err := SetGatedFetchMonthlyLimit(GatedFetchScopeChat, -400, sql.NullInt64{Int64: 0, Valid: true}); err != nil {
+		t.Fatalf("override: %v", err)
+	}
+
+	if denial := reserveOnce(t, -400, 7, false); denial != GatedFetchDeniedChatOff {
+		t.Fatalf("expected a zero group cap to turn the chat off, got %q", denial)
+	}
+}
+
+func TestCanUseGatedFetchCreditsFollowsTheEffectiveUserAllowance(t *testing.T) {
+	setupGatedFetchTestDB(t)
+
+	if CanUseGatedFetchCredits(5) == false {
+		t.Fatalf("expected credits to be usable with the default allowance")
+	}
+
+	if err := SetGatedFetchMonthlyLimit(GatedFetchScopeUser, 6, sql.NullInt64{Int64: 0, Valid: true}); err != nil {
+		t.Fatalf("override: %v", err)
+	}
+
+	if CanUseGatedFetchCredits(6) == true {
+		t.Fatalf("expected a zero override to make credits unusable")
+	}
+
+	t.Setenv("GATED_FETCH_USER_MONTHLY_ALLOWANCE", "0")
+
+	if CanUseGatedFetchCredits(5) == true {
+		t.Fatalf("expected a zero default allowance to make credits unusable")
+	}
+
+	if err := SetGatedFetchMonthlyLimit(GatedFetchScopeUser, 7, sql.NullInt64{Int64: 2, Valid: true}); err != nil {
+		t.Fatalf("override: %v", err)
+	}
+
+	if CanUseGatedFetchCredits(7) == false {
+		t.Fatalf("expected a user override above zero to beat the zero default")
 	}
 }

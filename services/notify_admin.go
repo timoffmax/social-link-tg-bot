@@ -1,10 +1,11 @@
 package services
 
 import (
+	"bytes"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
-	"strings"
 	"sync"
 	"time"
 	"unicode/utf8"
@@ -52,6 +53,39 @@ func NotifyAdmin(alertKey, text string) bool {
 	adminAlertLast[alertKey] = time.Now()
 	adminAlertMu.Unlock()
 
+	result = sendAdminMessage(token, adminID, alertKey, text)
+
+	if result == false {
+		rollbackAdminAlert(alertKey)
+	}
+
+	return result
+}
+
+// unthrottledAlertLabel names unthrottled alerts in the log.
+const unthrottledAlertLabel = "unthrottled"
+
+// NotifyAdminUnthrottled sends a plain-text message to the configured admin
+// without rate limiting or keeping any state, for one-off events such as a
+// payment. Returns true when the message was sent.
+func NotifyAdminUnthrottled(text string) bool {
+	result := false
+	token := config.GetTgBotToken()
+	adminID := config.GetAdminUserID()
+
+	if (token != "") && (adminID != 0) {
+		result = sendAdminMessage(token, adminID, unthrottledAlertLabel, text)
+	}
+
+	return result
+}
+
+// sendAdminMessage sends text to the admin; label names the alert in the log.
+// Transport errors are logged without the request URL, which holds the token.
+func sendAdminMessage(token string, adminID int64, label, text string) bool {
+	var resp *http.Response
+	url := fmt.Sprintf(botAPIURLTemplate, token, adminSendMethod)
+
 	if len(text) > adminAlertMaxLen {
 		text = truncateAtRuneBoundary(text, adminAlertMaxLen) + "…"
 	}
@@ -62,36 +96,35 @@ func NotifyAdmin(alertKey, text string) bool {
 		"disable_web_page_preview": true,
 	})
 
+	if err == nil {
+		reader := bytes.NewReader(body)
+		resp, err = SharedHTTPClient.Post(url, "application/json", reader)
+		err = withoutRequestURL(adminSendMethod, err)
+	}
+
+	if err == nil {
+		defer resp.Body.Close()
+	}
+
+	if (err == nil) && (resp.StatusCode != http.StatusOK) {
+		err = fmt.Errorf("rejected by Telegram: HTTP %d", resp.StatusCode)
+	}
+
 	if err != nil {
-		rollbackAdminAlert(alertKey)
-
-		return result
+		log.Printf("❌ Failed to send admin alert %q: %v", label, err)
 	}
 
-	resp, err := SharedHTTPClient.Post("https://api.telegram.org/bot"+token+"/sendMessage", "application/json", strings.NewReader(string(body)))
-
-	if err != nil {
-		log.Printf("❌ Failed to send admin alert %q: %v", alertKey, err)
-		rollbackAdminAlert(alertKey)
-
-		return result
+	if err == nil {
+		log.Printf("📣 Admin alert sent: %s", label)
 	}
 
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		log.Printf("❌ Admin alert %q rejected by Telegram: HTTP %d", alertKey, resp.StatusCode)
-		rollbackAdminAlert(alertKey)
-
-		return result
-	}
-
-	log.Printf("📣 Admin alert sent: %s", alertKey)
-
-	result = true
+	result := (err == nil)
 
 	return result
 }
+
+// adminSendMethod is the Bot API method of admin alerts.
+const adminSendMethod = "sendMessage"
 
 // ResetAdminAlert clears the rate-limit stamp for an alert key, so the next
 // occurrence alerts immediately (used when a service recovers, so a repeat

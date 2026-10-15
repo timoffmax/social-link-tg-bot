@@ -21,6 +21,10 @@ import (
 
 const API_URL = "https://api.telegram.org/bot{{token}}/{{method_name}}"
 
+// apiURLTemplate is the Bot API URL requests are sent to; tests point it at
+// an httptest server.
+var apiURLTemplate = API_URL
+
 const ContentTypeFormUrlEncoded = "application/x-www-form-urlencoded"
 const ContentTypeJson = "application/json; charset=UTF-8"
 const ContentTypeFormData = "multipart/form-data"
@@ -272,6 +276,16 @@ func prepareMultipartRequest(r *AuthorizedRequest, requestURL string) (*http.Req
 	return request, nil
 }
 
+// SetAPIURLTemplate changes the Bot API URL template (with the {{token}} and
+// {{method_name}} placeholders) and returns the previous one, so tests can
+// send requests to an httptest server and restore it afterwards.
+func SetAPIURLTemplate(template string) string {
+	result := apiURLTemplate
+	apiURLTemplate = template
+
+	return result
+}
+
 /*
 Sets auth parameters
 */
@@ -287,7 +301,7 @@ func authorizeRequest(r *AuthorizedRequest) {
 Substitutes URL placeholders, adds GET parameters
 */
 func prepareRequestURL(r *AuthorizedRequest) string {
-	result := strings.Replace(API_URL, "{{token}}", r.Token, 1)
+	result := strings.Replace(apiURLTemplate, "{{token}}", r.Token, 1)
 	result = strings.Replace(result, "{{method_name}}", r.ApiMethod, 1)
 
 	if (RequestMethodGET == r.RequestMethod) && (nil != r.Payload) {

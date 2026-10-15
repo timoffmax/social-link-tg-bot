@@ -30,8 +30,9 @@ A Telegram bot that downloads and sends actual media files from social media lin
 | `/menu`, `/start`, `/help` | Main menu and usage guide (context-aware for private chats vs groups) |
 | `/stats` | Media statistics (today/week/month/year) |
 | `/mylimit` | Check your daily media limit |
-| `/donate` | Support development (USDT + NOWPayments) |
+| `/donate` (alias `/support`) | Support the bot. With `STARS_SUPPORT_ENABLED=true`: Telegram Stars tier buttons first (25 / 50 / 100 Stars, thank-you of +10 / +25 / +60 bonus downloads of restricted Instagram posts, used after the monthly free ones) and the user's bonus balance; always: a card option (monobank jar, any card or Apple/Google Pay) and crypto options (NOWPayments + USDT ERC-20/TRC-20), which unlock nothing. Also the "💚 Support the bot" menu button |
 | `/report` | Report a bug or issue to the owner |
+| `/paysupport`, `/terms` | Help with Stars payments and the support terms. They always answer (Telegram requires `/paysupport` once a bot has taken payments); they appear in the command menu only when `STARS_SUPPORT_ENABLED=true` |
 
 **Group admins**
 | Command | Description |
@@ -45,11 +46,12 @@ A Telegram bot that downloads and sends actual media files from social media lin
 | Command | Description |
 |---|---|
 | `/owner` | Owner panel |
-| `/adminstats [period]` | Global stats: chats, media counts, platform breakdown, top chats |
+| `/adminstats [period]` | Global stats: chats, media counts, platform breakdown, top chats, plus "Paid fetching": restricted-post fetches this month vs the cap, Apify spend vs budget, Stars support totals (month / all time, refunds excluded) and unused bonus downloads |
 | `/broadcast` | Announcements with test/preview targeting (users vs groups) |
 | `/gated` | Paid fetch of author-gated Instagram posts: status, `on`/`off` per group, monthly `cap` per group and per-`user` allowance (`N`, `unlimited`, `default`) |
 | Blog system | Publish/edit/toggle posts shown to users |
 | Report inbox | Review `/report` submissions and `/reply` to reporters |
+| `/starsrefund USER_ID CHARGE_ID` | Refund a Stars support payment in full and remove its unused bonus downloads (hidden; works even with Stars support off) |
 
 ## Architecture
 
@@ -101,6 +103,7 @@ go build -o social-link-bot .
 | `APIFY_MONTHLY_BUDGET_USD`, `APIFY_YOUTUBE_ACTOR`, `APIFY_STORIES_ACTOR` | Shared monthly Apify spend limit and the YouTube / Instagram stories actors |
 | `KKINSTAGRAM_HOST`, `KKTIKTOK_HOST`, `VXREDDIT_HOST` | Override third-party fallback hosts |
 | `DEFAULT_DAILY_MEDIA_LIMIT` | Default per-user daily limit (0 = unlimited) |
+| `STARS_SUPPORT_ENABLED` | Optional "support the developer" payments in Telegram Stars (tier buttons on `/donate`, alias `/support`; `/paysupport`, `/terms`); default `false` |
 
 See `.env.example` for the full annotated list.
 

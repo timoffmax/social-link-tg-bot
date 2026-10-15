@@ -71,6 +71,24 @@ func (sd *SmartDownloader) fetchGatedWithQuota(instagramURL string, downloadErr 
 		denial, usage, err = ReserveGatedFetch(quotas)
 	}
 
+	isCreditUsed := false
+	creditsLeft := 0
+	isCreditEligible := (err == nil) && (userID > 0) && (IsCreditDenial(denial) == true)
+
+	if isCreditEligible == true {
+		isCreditUsed, creditsLeft, err = TakeGatedFetchCredit(userID)
+	}
+
+	// A bonus credit replaces the monthly counters: the denied reservation
+	// took nothing, so nothing must be refunded from them. Like unlimited
+	// scopes, credits skip the shared fetch cap; the dollar budget applies.
+	if isCreditUsed == true {
+		log.Printf("🎟️ [gated-fetch] user %d used a bonus credit (%d left)", userID, creditsLeft)
+		denial = GatedFetchAllowed
+		quotas = nil
+		usage = GatedFetchUsage{}
+	}
+
 	if (denial == GatedFetchAllowed) && (err == nil) {
 		providerName := sd.gated.Name()
 		log.Printf("🔞 [%s] fetching gated post %s (chat %d, user %d)", providerName, instagramURL, chatID, userID)
@@ -94,6 +112,11 @@ func (sd *SmartDownloader) fetchGatedWithQuota(instagramURL string, downloadErr 
 		sd.refundGatedQuotas(quotas)
 	}
 
+	// A paid-for credit goes back on any failure, budget refusal included.
+	if (fetchErr != nil) && (isCreditUsed == true) {
+		sd.returnGatedFetchCredit(userID)
+	}
+
 	if err != nil {
 		log.Printf("⚠️ [gated-fetch] quota check failed for %s: %v", instagramURL, err)
 	}
@@ -107,12 +130,46 @@ func (sd *SmartDownloader) fetchGatedWithQuota(instagramURL string, downloadErr 
 		result[0].Caption = appendGatedQuotaNote(result[0].Caption, usage)
 	}
 
+	if (err == nil) && (len(result) > 0) && (isCreditUsed == true) {
+		result[0].Caption = appendGatedCreditNote(result[0].Caption, creditsLeft)
+	}
+
 	return result, err
 }
 
 // gatedQuotaNoteTemplate tells a limited chat or user how many restricted
 // posts are left this month; it ends the post's caption.
 const gatedQuotaNoteTemplate = "\n\n📊 Restricted posts left this month: %d of %d"
+
+// gatedCreditNoteTemplate tells a user who used a bonus credit how many are
+// left; it ends the post's caption instead of the monthly note.
+const gatedCreditNoteTemplate = "\n\n🎟️ Bonus downloads left: %d"
+
+// IsCreditDenial reports whether a bonus credit may replace the denied
+// fetch: the user's allowance or the chat's cap is used up, or the shared
+// fetch cap is (which credits skip).
+func IsCreditDenial(denial GatedFetchDenial) bool {
+	result := (denial == GatedFetchDeniedUserCap) || (denial == GatedFetchDeniedChatCap) || (denial == GatedFetchDeniedGlobal)
+
+	return result
+}
+
+// appendGatedCreditNote adds the remaining bonus credits line to a caption.
+func appendGatedCreditNote(caption string, creditsLeft int) string {
+	note := fmt.Sprintf(gatedCreditNoteTemplate, creditsLeft)
+	result := strings.TrimSpace(caption + note)
+
+	return result
+}
+
+// returnGatedFetchCredit gives a used credit back, logging a failed return.
+func (sd *SmartDownloader) returnGatedFetchCredit(userID int64) {
+	err := ReturnGatedFetchCredit(userID)
+
+	if err != nil {
+		log.Printf("⚠️ [gated-fetch] bonus credit return failed for user %d: %v", userID, err)
+	}
+}
 
 // gatedQuotaNoteReserve is the caption space kept free for the note.
 const gatedQuotaNoteReserve = 80

@@ -26,7 +26,7 @@ type TgUpdate struct {
 	ChosenInlineResult tg_api.TgPlaceholder `json:"chosen_inline_result"`
 	CallbackQuery      TgCallbackQuery      `json:"callback_query"`
 	ShippingQuery      tg_api.TgPlaceholder `json:"shipping_query"`
-	PreCheckoutQuery   tg_api.TgPlaceholder `json:"pre_checkout_query"`
+	PreCheckoutQuery   TgPreCheckoutQuery   `json:"pre_checkout_query"`
 	Poll               tg_api.TgPlaceholder `json:"poll"`
 	PollAnswer         tg_api.TgPlaceholder `json:"poll_answer"`
 	MyChatMember       tg_api.TgPlaceholder `json:"my_chat_member"`
