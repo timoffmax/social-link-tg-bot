@@ -247,7 +247,7 @@ const (
 	gatedFetchUserMonthlyAllowKey     = "GATED_FETCH_USER_MONTHLY_ALLOWANCE"
 	gatedFetchChatMonthlyCapKey       = "GATED_FETCH_CHAT_MONTHLY_CAP"
 	defaultApifyInstagramActor        = "intropix~instagram-posts-reels-scraper"
-	defaultGatedFetchGlobalMonthlyCap = 100
+	defaultGatedFetchGlobalMonthlyCap = GatedFetchNoGlobalCap
 	defaultGatedFetchUserMonthlyAllow = 20
 	defaultGatedFetchChatMonthlyCap   = 20
 )
@@ -276,7 +276,7 @@ func GetApifyInstagramActor() string {
 // GetGatedFetchGlobalMonthlyCap returns the bot-wide monthly cap of paid
 // gated-post fetches; 0 disables the feature.
 func GetGatedFetchGlobalMonthlyCap() int {
-	result := getIntEnv(gatedFetchGlobalMonthlyCapKey, defaultGatedFetchGlobalMonthlyCap)
+	result := getCapEnv(gatedFetchGlobalMonthlyCapKey, defaultGatedFetchGlobalMonthlyCap)
 
 	return result
 }
@@ -377,6 +377,21 @@ func getIntEnv(key string, defaultValue int) int {
 	return result
 }
 
+// getCapEnv reads a cap that may be GatedFetchNoGlobalCap (-1, no cap) or
+// any value from 0 up; other values keep the default.
+func getCapEnv(key string, defaultValue int) int {
+	result := defaultValue
+	value := os.Getenv(key)
+	raw := strings.TrimSpace(value)
+	parsed, err := strconv.Atoi(raw)
+
+	if (raw != "") && (err == nil) && (parsed >= GatedFetchNoGlobalCap) {
+		result = parsed
+	}
+
+	return result
+}
+
 // Helper function to parse boolean environment variables
 func getBoolEnv(key string, defaultValue bool) bool {
 	value := strings.ToLower(strings.TrimSpace(os.Getenv(key)))
@@ -385,3 +400,8 @@ func getBoolEnv(key string, defaultValue bool) bool {
 	}
 	return value == "true" || value == "1" || value == "yes" || value == "on"
 }
+
+// GatedFetchNoGlobalCap is the bot-wide monthly cap of restricted posts that
+// means no cap: fetches are still counted, and only the Apify dollar budget
+// stops them. 0 turns the paid fetch off.
+const GatedFetchNoGlobalCap = -1

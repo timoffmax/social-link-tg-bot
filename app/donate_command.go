@@ -110,21 +110,6 @@ func isStarsOfferedTo(userID int64) bool {
 	return result
 }
 
-// postSupportMarkup returns the button that opens /donate for a photo or
-// video that is a whole post (not an album item) in a private chat; groups
-// stay clean. Otherwise it is nil, so the message has no buttons.
-func postSupportMarkup(chat *response.TgChat, isWholePost bool) api.TgReplyMarkupInterface {
-	var result api.TgReplyMarkupInterface
-	isShown := (isWholePost == true) && (chat.Type == chatTypePrivate)
-
-	if isShown == true {
-		button := api.TgInlineKeyboardButton{Text: supportMenuButtonText, CallbackData: donateCommand}
-		result = &api.TgInlineKeyboardMarkup{InlineKeyboard: [][]api.TgInlineKeyboardButton{{button}}}
-	}
-
-	return result
-}
-
 // donateText returns the /donate reply text.
 func donateText(isStarsEnabled bool, userID int64) string {
 	moneyOptions := fmt.Sprintf(donateSectionsLayout, donateCardText, donateCryptoText)
@@ -165,4 +150,19 @@ func donateKeyboard(isStarsEnabled bool) *api.TgInlineKeyboardMarkup {
 	result.InlineKeyboard = append(result.InlineKeyboard, cardRow, cryptoRow, backRow)
 
 	return result
+}
+
+// handleStartOrDeepLink answers /start, /help and /menu; "/start donate"
+// (the group support button's link) opens /donate instead of the menu.
+func handleStartOrDeepLink(origMessage *response.TgMessage, origChat *response.TgChat, origUser *response.TgUser) {
+	startPayload := commandArgsText(origMessage.Text)
+	isDonateLink := (startPayload == donateStartPayload)
+
+	if isDonateLink == true {
+		handleDonateCommand(origMessage, origChat, origUser)
+	}
+
+	if isDonateLink == false {
+		handleStartCommand(origMessage, origChat, origUser)
+	}
 }

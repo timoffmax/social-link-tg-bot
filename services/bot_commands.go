@@ -44,6 +44,7 @@ func botCommandList(isStarsSupportEnabled bool) []BotCommand {
 	result := []BotCommand{
 		{Command: "menu", Description: "Show main menu"},
 		{Command: "start", Description: "Show main menu and help"},
+		{Command: "info", Description: "How the bot works: chats, groups and limits"},
 		{Command: "help", Description: "Show main menu and help"},
 		{Command: "stats", Description: "View media statistics (today/week/month/year)"},
 		{Command: "mylimit", Description: "Check your daily media limit"},
@@ -75,27 +76,44 @@ func SetBotCommands() error {
 	return err
 }
 
-// BotDescription is shown in the empty chat with the bot (setMyDescription,
-// up to 512 characters).
-const BotDescription = `I download photos, videos and other media from social networks and send them to you or your group chat.
+// botDescriptionTemplate is shown in the empty chat with the bot
+// (setMyDescription, up to 512 characters): the monthly restricted-post
+// limits per person and per group fill it in.
+const botDescriptionTemplate = `Send a link, get the actual photos and videos right in Telegram.
 
-Supported platforms:
-📸 Instagram — Posts, Reels, Stories, Restricted Posts
-🎵 TikTok — Videos, Photo Slideshows
-🐦 Twitter/X — Photos, Videos, GIFs, Text
-🎬 YouTube — Shorts, Community Posts
-🔴 Reddit — Videos, Images
-👥 Facebook — Videos, Reels
-😂 9GAG — Videos, Images
-🧵 Threads — Text, Photos, Videos
+📸 Instagram · 🎵 TikTok · 🐦 X · 🎬 YouTube Shorts · 🔴 Reddit · 👥 Facebook · 😂 9GAG · 🧵 Threads
 
-No ads, no forced subscriptions. Just send a link!
+💬 Private chat: send me any link.
+👥 Groups: add me, and I answer every link anyone posts.
 
-💚 Support the bot: /donate`
+🔓 Public posts: free, no monthly limit.
+%s
+No ads, no forced subscriptions. Tap Start for details.`
+
+// botDescriptionRestrictedTemplate is the restricted-post line of the
+// description: the default monthly limits per person and per group.
+const botDescriptionRestrictedTemplate = "🔞 Restricted Instagram posts (age- or region-limited): by default %d a month per person, %d per group.\n"
+
+// BotDescription returns the bot description with the configured default
+// limits; the restricted-post line only while they can be fetched.
+func BotDescription() string {
+	userAllowance := config.GetGatedFetchUserMonthlyAllowance()
+	chatCap := config.GetGatedFetchChatMonthlyCap()
+	isRestrictedOn := IsRestrictedPostsOffered()
+	restrictedLine := ""
+
+	if isRestrictedOn == true {
+		restrictedLine = fmt.Sprintf(botDescriptionRestrictedTemplate, userAllowance, chatCap)
+	}
+
+	result := fmt.Sprintf(botDescriptionTemplate, restrictedLine)
+
+	return result
+}
 
 // BotShortDescription is shown on the bot's profile and in shares
 // (setMyShortDescription, up to 120 characters).
-const BotShortDescription = "Downloads media from Instagram, TikTok, X, YouTube Shorts, Reddit, Facebook, 9GAG & Threads. No ads. Just send a link!"
+const BotShortDescription = "Send a link, get the photo or video: Instagram, TikTok, X, YouTube Shorts, Threads & more. Private chats & groups."
 
 // Bot API limits of the descriptions, in characters.
 const (
@@ -106,7 +124,8 @@ const (
 // SetBotDescriptions sets the bot's description and short description; a
 // failure of one doesn't skip the other.
 func SetBotDescriptions() error {
-	descriptionErr := postBotAPI("setMyDescription", map[string]interface{}{"description": BotDescription})
+	description := BotDescription()
+	descriptionErr := postBotAPI("setMyDescription", map[string]interface{}{"description": description})
 	shortDescriptionErr := postBotAPI("setMyShortDescription", map[string]interface{}{"short_description": BotShortDescription})
 	result := descriptionErr
 

@@ -98,6 +98,10 @@ func (sd *SmartDownloader) fetchGatedWithQuota(instagramURL string, downloadErr 
 
 	isBudgetRefusal := isApifyBudgetError(fetchErr)
 
+	if isBudgetRefusal == true {
+		denial = GatedFetchDeniedBudget
+	}
+
 	if fetchErr != nil {
 		log.Printf("❌ [gated-fetch] fetch failed for %s: %v", instagramURL, fetchErr)
 	}

@@ -4,7 +4,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/timoffmax/social-link-bot/model/api"
 	"github.com/timoffmax/social-link-bot/model/api/response"
 )
 
@@ -133,23 +132,15 @@ func TestDonateHidesStarsFromUsersWhoCantUseBonusDownloads(t *testing.T) {
 	}
 }
 
-func TestPostSupportButtonOnlyUnderWholePostsInPrivateChats(t *testing.T) {
-	private := &response.TgChat{Id: 42, Type: chatTypePrivate}
-	markup, isKeyboard := postSupportMarkup(private, true).(*api.TgInlineKeyboardMarkup)
+func TestStartDonateDeepLinkOpensDonate(t *testing.T) {
+	recorder := startTestBotAPI(t, false)
 
-	if (isKeyboard == false) || (len(markup.InlineKeyboard) != 1) || (len(markup.InlineKeyboard[0]) != 1) {
-		t.Fatalf("expected one button in a private chat, got %+v", markup)
-	}
+	handleStartOrDeepLink(&response.TgMessage{MessageId: 5, Text: "/start donate"}, &response.TgChat{Id: 42, Type: chatTypePrivate}, &response.TgUser{Id: 42})
 
-	if markup.InlineKeyboard[0][0].CallbackData != donateCommand {
-		t.Fatalf("expected the button to open /donate, got %+v", markup)
-	}
+	calls := recorder.all()
+	text, _ := calls[0].body["text"].(string)
 
-	if postSupportMarkup(private, false) != nil {
-		t.Fatalf("album items must not get the support button")
-	}
-
-	if postSupportMarkup(&response.TgChat{Id: -100, Type: "supergroup"}, true) != nil {
-		t.Fatalf("groups must not get the support button")
+	if strings.Contains(text, donateCardText) == false {
+		t.Fatalf("expected the donate screen, got %q", text)
 	}
 }

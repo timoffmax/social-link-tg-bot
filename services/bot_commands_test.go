@@ -1,6 +1,7 @@
 package services
 
 import (
+	"strings"
 	"testing"
 	"unicode/utf16"
 	"unicode/utf8"
@@ -76,11 +77,15 @@ func utf16Length(text string) int {
 }
 
 func TestBotDescriptionsFitTelegramLimits(t *testing.T) {
+	t.Setenv("APIFY_TOKEN", "test-token")
+	t.Setenv("GATED_FETCH_USER_MONTHLY_ALLOWANCE", "1000")
+	t.Setenv("GATED_FETCH_CHAT_MONTHLY_CAP", "1000")
+
 	descriptions := []struct {
 		text      string
 		maxLength int
 	}{
-		{BotDescription, botDescriptionMaxLength},
+		{BotDescription(), botDescriptionMaxLength},
 		{BotShortDescription, botShortDescriptionMaxLength},
 	}
 
@@ -92,5 +97,19 @@ func TestBotDescriptionsFitTelegramLimits(t *testing.T) {
 		if utf16Length(description.text) > description.maxLength {
 			t.Fatalf("%d UTF-16 units over the limit of %d: %q", utf16Length(description.text), description.maxLength, description.text)
 		}
+	}
+}
+
+func TestBotDescriptionMentionsRestrictedPostsOnlyWhenTheyCanBeFetched(t *testing.T) {
+	t.Setenv("APIFY_TOKEN", "test-token")
+
+	if strings.Contains(BotDescription(), "Restricted Instagram posts") == false {
+		t.Fatalf("expected the restricted line while paid fetching is configured")
+	}
+
+	t.Setenv("APIFY_TOKEN", "")
+
+	if strings.Contains(BotDescription(), "Restricted Instagram posts") == true {
+		t.Fatalf("the restricted line must go while paid fetching is off")
 	}
 }

@@ -34,6 +34,9 @@ const (
 	GatedFetchDeniedUserCap GatedFetchDenial = "user_allowance"
 	GatedFetchDeniedGlobal  GatedFetchDenial = "global_cap"
 	GatedFetchDeniedNoDB    GatedFetchDenial = "no_database"
+	// GatedFetchDeniedBudget is this month's Apify budget used up: the paid
+	// service is paused until the next month.
+	GatedFetchDeniedBudget GatedFetchDenial = "budget"
 	// GatedFetchDeniedBlocked is a user whose allowance is 0 (the owner's
 	// override or the default): bonus credits can't override it. A chat with
 	// a 0 cap is GatedFetchDeniedChatOff.
@@ -106,7 +109,7 @@ func ResolveGatedFetchQuotas(chatID, userID int64, isPrivate bool) ([]GatedFetch
 	denial := GatedFetchAllowed
 	var err error
 	globalCap := config.GetGatedFetchGlobalMonthlyCap()
-	isConfigured := ((config.GetApifyToken() != "") && (globalCap > 0))
+	isConfigured := IsGatedFetchConfigured()
 	var scoped GatedFetchQuota
 	period := gatedFetchPeriod()
 
@@ -378,4 +381,35 @@ func execGatedFetchPolicy(query string, args ...interface{}) error {
 	}
 
 	return err
+}
+
+// IsRestrictedPostsOffered reports whether restricted posts are offered at
+// all: they can be fetched, and private chats or groups get some by default.
+func IsRestrictedPostsOffered() bool {
+	userAllowance := config.GetGatedFetchUserMonthlyAllowance()
+	chatCap := config.GetGatedFetchChatMonthlyCap()
+	isConfigured := IsGatedFetchConfigured()
+	result := (isConfigured == true) && ((userAllowance != 0) || (chatCap != 0))
+
+	return result
+}
+
+// IsPaidServiceConfigured reports whether the paid service (Apify) can run
+// at all: a token and a monthly budget above 0.
+func IsPaidServiceConfigured() bool {
+	budget := config.GetApifyMonthlyBudgetUsd()
+	result := (config.GetApifyToken() != "") && (budget > 0)
+
+	return result
+}
+
+// IsGatedFetchConfigured reports whether restricted posts can be fetched at
+// all: the paid service and a bot-wide monthly cap that isn't 0 (no cap by
+// default).
+func IsGatedFetchConfigured() bool {
+	globalCap := config.GetGatedFetchGlobalMonthlyCap()
+	isPaidServiceOn := IsPaidServiceConfigured()
+	result := (isPaidServiceOn == true) && (globalCap != 0)
+
+	return result
 }

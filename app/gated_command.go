@@ -125,7 +125,8 @@ func handleGatedStatus(params []string, origMessage *response.TgMessage, origCha
 
 	text.WriteString("🔞 <b>Gated Instagram fetch</b>\n\n")
 	fmt.Fprintf(&text, "Provider: %s\n", provider)
-	fmt.Fprintf(&text, "This month, all chats: <b>%d</b> of %d\n", globalUsed, globalCap)
+	capText := globalCapText(globalCap)
+	fmt.Fprintf(&text, "This month, all chats: <b>%d</b> of %s\n", globalUsed, capText)
 	fmt.Fprintf(&text, "Private chats: %d free per user per month by default\n\n", userAllowance)
 
 	if (err == nil) && (chatID < 0) {
@@ -424,4 +425,18 @@ func replyGated(origMessage *response.TgMessage, origChat *response.TgChat, text
 	}
 
 	message.NewSendMessage(reply)
+}
+
+// globalNoCapText shows a bot-wide cap of GatedFetchNoGlobalCap.
+const globalNoCapText = "no cap (the Apify budget is the limit)"
+
+// globalCapText shows the bot-wide monthly cap of restricted posts.
+func globalCapText(globalCap int) string {
+	result := fmt.Sprintf("%d", globalCap)
+
+	if globalCap == config.GatedFetchNoGlobalCap {
+		result = globalNoCapText
+	}
+
+	return result
 }

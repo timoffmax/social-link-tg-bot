@@ -293,3 +293,56 @@ func GetChatDescriptionSettings(chatID int64) (map[string]bool, error) {
 
 	return descriptionSettings, nil
 }
+
+// Chat settings of the buttons under group posts.
+const (
+	chatSettingButtons       = "buttons"
+	chatSettingSupportButton = "support"
+	chatSettingReportButton  = "report"
+)
+
+// ChatButtonSettings says which buttons a group shows under posts.
+type ChatButtonSettings struct {
+	IsReportEnabled  bool
+	IsSupportEnabled bool
+}
+
+// GetChatButtonSettings reads both button settings of a group with one
+// query; a button is on unless the group turned it off. On a failed read it
+// returns both on, with the error.
+func GetChatButtonSettings(chatID int64) (ChatButtonSettings, error) {
+	result := ChatButtonSettings{IsReportEnabled: true, IsSupportEnabled: true}
+	settings, err := GetChatSettings(chatID)
+
+	if err == nil {
+		buttons := settings.Settings[chatSettingButtons]
+		result.IsReportEnabled = isChatButtonOn(buttons, chatSettingReportButton)
+		result.IsSupportEnabled = isChatButtonOn(buttons, chatSettingSupportButton)
+	}
+
+	return result, err
+}
+
+// isChatButtonOn reads one button setting; a missing or non-boolean value
+// means on.
+func isChatButtonOn(buttons map[string]interface{}, key string) bool {
+	value, exists := buttons[key]
+	enabled, isBool := value.(bool)
+	result := (exists == false) || (isBool == false) || (enabled == true)
+
+	return result
+}
+
+// SetChatSupportButtonEnabled turns a group's support button on or off.
+func SetChatSupportButtonEnabled(chatID int64, enabled bool) error {
+	err := SetChatSetting(chatID, chatSettingButtons, chatSettingSupportButton, enabled)
+
+	return err
+}
+
+// SetChatReportButtonEnabled turns a group's report button on or off.
+func SetChatReportButtonEnabled(chatID int64, enabled bool) error {
+	err := SetChatSetting(chatID, chatSettingButtons, chatSettingReportButton, enabled)
+
+	return err
+}

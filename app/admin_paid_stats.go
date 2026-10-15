@@ -13,8 +13,8 @@ import (
 // Lines of the owner's "Paid fetching" stats section.
 const (
 	paidStatsHeading            = "\n<b>💳 Paid fetching</b>\n"
-	paidStatsFetchesTemplate    = "• Bot-wide restricted-post cap: <b>%d</b> of %d used\n"
-	paidStatsFetchesUnknown     = "• Bot-wide restricted-post cap: <i>unavailable</i> (cap %d)\n"
+	paidStatsFetchesTemplate    = "• Restricted posts this month (counted ones): <b>%d</b> of %s\n"
+	paidStatsFetchesUnknown     = "• Restricted posts this month: <i>unavailable</i> (cap %s)\n"
 	paidStatsApifyTemplate      = "• Apify this month: <b>$%.2f</b> of $%.2f\n"
 	paidStatsApifyUnknown       = "• Apify budget: $%.2f <i>(usage unavailable)</i>\n"
 	paidStatsStarsMonthTemplate = "• Stars this month: <b>%d</b> payments, <b>%d</b> ⭐\n"
@@ -92,12 +92,13 @@ func logPaidStatsError(name string, err error) {
 // formatPaidFetchingStats renders the "Paid fetching" section.
 func formatPaidFetchingStats(stats paidFetchingStats) string {
 	var text strings.Builder
-	fetchesLine := fmt.Sprintf(paidStatsFetchesTemplate, stats.FetchesUsed, stats.FetchesCap)
+	capText := globalCapText(stats.FetchesCap)
+	fetchesLine := fmt.Sprintf(paidStatsFetchesTemplate, stats.FetchesUsed, capText)
 	apifyLine := fmt.Sprintf(paidStatsApifyTemplate, stats.ApifyUsedUsd, stats.ApifyBudget)
 	supportLines := formatSupportStats(stats.Support)
 
 	if stats.FetchesErr != nil {
-		fetchesLine = fmt.Sprintf(paidStatsFetchesUnknown, stats.FetchesCap)
+		fetchesLine = fmt.Sprintf(paidStatsFetchesUnknown, capText)
 	}
 
 	if stats.ApifyErr != nil {

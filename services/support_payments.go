@@ -483,7 +483,7 @@ const creditsCheckTimeout = 3 * time.Second
 // unusable. Payments are declined otherwise, so nobody pays for unusable
 // credits.
 func CanUseGatedFetchCredits(userID int64) bool {
-	isConfigured := (config.GetApifyToken() != "") && (config.GetGatedFetchGlobalMonthlyCap() > 0) && (IsDBInitialized() == true)
+	isConfigured := (IsGatedFetchConfigured() == true) && (IsDBInitialized() == true)
 	result := false
 
 	if isConfigured == true {

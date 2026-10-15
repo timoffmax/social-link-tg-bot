@@ -5,7 +5,7 @@ import (
 	"html"
 	"log"
 	"strings"
-	"sync"
+	"time"
 
 	"github.com/timoffmax/social-link-bot/config"
 	"github.com/timoffmax/social-link-bot/model/api"
@@ -21,14 +21,44 @@ const reportCommand = "/report"
 // reportFailedCallback is the button under a failed download's error message.
 const reportFailedCallback = "/report_failed"
 
+// reportPostCallback is the report button under a post in a private chat.
+const reportPostCallback = "/report_post"
+
 // Report buttons.
 const (
 	reportMenuButtonText   = "🐛 Report a bug"
 	reportFailedButtonText = "🐛 Report problem"
+	reportPostButtonText   = "🐛 Report"
 )
 
-// reportPromptTitle starts the prompt; a reply to a bot message starting with
-// it is a report. Telegram returns the message text without HTML tags.
+// reportPostTitle opens a report filed with the button under a post.
+const reportPostTitle = "Post reported with the button"
+
+// reportFollowUpTitle starts the thank-you for a post report; the reporter's
+// reply to it adds details to the report.
+const reportFollowUpTitle = "🐛 Reported, thank you!"
+
+// reportFollowUpTemplate thanks for a post report and invites optional
+// details: the title, the reporter's mention (empty in private chats) and
+// the report number line. It is no forced reply, so the user's next link
+// isn't taken for details by accident.
+const reportFollowUpTemplate = "<b>%s</b>\n\n%s%sAnything to add? Reply to this message."
+
+// reportNumberTemplate names the report in the follow-up.
+const reportNumberTemplate = "Report #%d. "
+
+// reportDetailsTemplate opens details replied to a post report's follow-up.
+const reportDetailsTemplate = "Details for report #%d"
+
+// Toasts of the report button under posts.
+const (
+	reportPostDoneToast   = "🐛 Reported, thank you!"
+	reportPostRepeatToast = "You already reported this post. Thank you!"
+	reportPostTooOldToast = "This post is too old to report with the button. Use /report instead."
+	reportPostFailedToast = "Couldn't save the report. Please try again later."
+)
+
+// reportPromptTitle starts the prompt.
 const reportPromptTitle = "🐛 What went wrong?"
 
 // reportPromptTemplate asks for the report: the title, then the user mention
@@ -39,7 +69,7 @@ const reportPromptTemplate = "<b>%s</b>\n\n%sReply to this message and describe 
 const reportPromptPlaceholder = "Describe the problem"
 
 // reportThanksText confirms a report to the user.
-const reportThanksText = "✅ Your report has been sent to the developer. Thank you!"
+const reportThanksText = "✅ Thanks! Your report has been received."
 
 // reportFailedDoneSuffix replaces the button of a reported error message.
 const reportFailedDoneSuffix = "\n\n✅ Reported to the developer. Thank you!"
@@ -60,7 +90,7 @@ const reportPrivateChatTitle = "Private Chat"
 // prompt; /report in reply to a bot message reports that message, with its
 // text and links attached.
 func handleReportCommand(origMessage *response.TgMessage, origChat *response.TgChat, origUser *response.TgUser) {
-	description := reportCommandText(origMessage.Text)
+	description := commandArgsText(origMessage.Text)
 	botMessage := repliedBotMessage(origMessage)
 	isPrompt := ((description == "") && (botMessage == nil))
 
@@ -71,13 +101,29 @@ func handleReportCommand(origMessage *response.TgMessage, origChat *response.TgC
 	if isPrompt == false {
 		reportContext := botMessageContext(botMessage)
 		reportText := joinReportParts(description, reportContext)
-		submitReport(origChat, origUser, reportText)
-		sendReportThanks(origChat.Id, origMessage.MessageId)
+		outcome := submitReport(origChat, origUser, reportText)
+		answer := reportAnswerText(outcome)
+		sendReportReply(origChat.Id, origMessage.MessageId, answer)
 	}
 }
 
-// reportCommandText returns the text after the command word.
-func reportCommandText(text string) string {
+// reportCommandFailedText answers a /report that was neither saved nor
+// delivered.
+const reportCommandFailedText = "❌ Couldn't send your report. Please try again later."
+
+// reportAnswerText thanks for a delivered /report or says it failed.
+func reportAnswerText(outcome reportOutcome) string {
+	result := reportCommandFailedText
+
+	if outcome.IsDelivered == true {
+		result = reportThanksText
+	}
+
+	return result
+}
+
+// commandArgsText returns the text after the command word.
+func commandArgsText(text string) string {
 	result := ""
 	index := strings.Index(text, " ")
 
@@ -117,15 +163,9 @@ func isOwnBotMessage(msg *response.TgMessage) bool {
 // reply targets them (a user without a username gets a link mention).
 func sendReportPrompt(chat *response.TgChat, user *response.TgUser, replyToMessageID int) {
 	mention := ""
-	isGroupButton := (replyToMessageID == 0) && (chat.Type != chatTypePrivate)
 
-	if (isGroupButton == true) && (user.Username != "") {
-		mention = fmt.Sprintf("@%s: ", user.Username)
-	}
-
-	if (isGroupButton == true) && (user.Username == "") {
-		name := html.EscapeString(user.FirstName)
-		mention = fmt.Sprintf("<a href=\"tg://user?id=%d\">%s</a>: ", user.Id, name)
+	if replyToMessageID == 0 {
+		mention = reportUserMention(chat, user)
 	}
 
 	prompt := payload.TgPlSendMessage{
@@ -137,20 +177,168 @@ func sendReportPrompt(chat *response.TgChat, user *response.TgUser, replyToMessa
 		ReplyMarkup:         &api.TgForceReply{ForceReply: true, InputFieldPlaceholder: reportPromptPlaceholder, Selective: true},
 	}
 
-	message.NewSendMessage(prompt)
+	sent := message.NewSendMessage(prompt)
+	rememberReportReply(chat.Id, sent.ResponsePayload, user.Id, 0)
 }
 
-// handleReportPromptReply files a reply to the report prompt as a report.
-// It returns false for any other message.
-func handleReportPromptReply(origMessage *response.TgMessage, origChat *response.TgChat, origUser *response.TgUser) bool {
-	botMessage := repliedBotMessage(origMessage)
-	result := (botMessage != nil) && (strings.HasPrefix(botMessage.Text, reportPromptTitle) == true)
+// reportUserMention @mentions the user in a group (a link mention without a
+// username), so a selective forced reply targets them; empty in private chats.
+func reportUserMention(chat *response.TgChat, user *response.TgUser) string {
+	result := ""
+	isGroup := (chat.Type != chatTypePrivate)
 
-	if result == true {
+	if (isGroup == true) && (user.Username != "") {
+		result = fmt.Sprintf("@%s: ", user.Username)
+	}
+
+	if (isGroup == true) && (user.Username == "") {
+		name := html.EscapeString(user.FirstName)
+		result = fmt.Sprintf("<a href=\"tg://user?id=%d\">%s</a>: ", user.Id, name)
+	}
+
+	return result
+}
+
+// reportReplyTTL is how long the bot waits for a reply to its report prompt
+// or follow-up.
+const reportReplyTTL = 48 * time.Hour
+
+// reportReplyTarget is a report prompt or follow-up awaiting its user's
+// reply; ReportID is the report a follow-up's reply adds details to.
+type reportReplyTarget struct {
+	UserID   int
+	ReportID int
+}
+
+// reportReplies are the prompts and follow-ups awaiting a reply, by
+// "chat:message". The list is in memory: after a restart, a reply to an
+// older prompt is handled as a normal message.
+var reportReplies = newTTLStore(reportReplyTTL)
+
+// rememberReportReply waits for the user's reply to a sent prompt or
+// follow-up; a send without a message id (failed) is ignored.
+func rememberReportReply(chatID int64, sent *response.TgMessage, userID int, reportID int) {
+	isSent := (sent != nil) && (sent.MessageId != 0)
+
+	if isSent == true {
+		key := reportReplyKey(chatID, sent.MessageId)
+		reportReplies.set(key, reportReplyTarget{UserID: userID, ReportID: reportID})
+	}
+}
+
+// reportReplyKey names a prompt or follow-up awaiting a reply.
+func reportReplyKey(chatID int64, messageID int) string {
+	result := fmt.Sprintf("%d:%d", chatID, messageID)
+
+	return result
+}
+
+// reportSaveFailedText answers a reply whose report couldn't be saved; the
+// prompt keeps waiting, so the user can reply again.
+const reportSaveFailedText = "❌ Couldn't save your report. Please reply again later."
+
+// reportPromptExpiredText answers a reply to a prompt or follow-up the bot no
+// longer waits on (answered already, expired, or sent before a restart).
+const reportPromptExpiredText = "This report message has expired. Send /report to report again."
+
+// handleReportPromptReply files the user's reply to their report prompt or
+// follow-up as a report; one reply each, and only from the user it was sent
+// to, so other members' replies (or links) are handled normally. The
+// awaited reply is taken atomically, and put back when the report couldn't
+// be saved. It returns false for any other message.
+func handleReportPromptReply(origMessage *response.TgMessage, origChat *response.TgChat, origUser *response.TgUser) bool {
+	target, isAwaited := takeAwaitedReportReply(origMessage, origChat, origUser)
+	isExpired := (isAwaited == false) && (isExpiredReportReply(origMessage, origChat) == true)
+
+	if isExpired == true {
+		sendReportReply(origChat.Id, origMessage.MessageId, reportPromptExpiredText)
+	}
+
+	if isAwaited == true {
 		description := messageText(origMessage)
-		reportText := joinReportParts(description, "")
-		submitReport(origChat, origUser, reportText)
+		detailsContext := reportDetailsContext(target.ReportID)
+		reportText := joinReportParts(description, detailsContext)
+		outcome := submitReport(origChat, origUser, reportText)
+		finishReportReply(origMessage, origChat, target, outcome)
+	}
+
+	result := (isAwaited == true) || (isExpired == true)
+
+	return result
+}
+
+// isExpiredReportReply reports a reply, in a private chat, to one of the
+// bot's report prompts or follow-ups that no reply is awaited on any more,
+// so it isn't lost in silence (a link in it isn't downloaded either: it was
+// meant as a report). In groups such replies are handled normally, since
+// they may come from anyone.
+func isExpiredReportReply(origMessage *response.TgMessage, origChat *response.TgChat) bool {
+	result := false
+	botMessage := repliedBotMessage(origMessage)
+	isPrivate := (origChat.Type == chatTypePrivate)
+
+	if (botMessage != nil) && (isPrivate == true) {
+		key := reportReplyKey(origChat.Id, botMessage.MessageId)
+		_, isTracked := reportReplies.get(key)
+		isPrompt := strings.HasPrefix(botMessage.Text, reportPromptTitle)
+		isFollowUp := strings.HasPrefix(botMessage.Text, reportFollowUpTitle)
+		result = (isTracked == false) && ((isPrompt == true) || (isFollowUp == true))
+	}
+
+	return result
+}
+
+// takeAwaitedReportReply takes the prompt or follow-up the message replies
+// to, when it awaits this user's reply; another user's reply leaves it.
+func takeAwaitedReportReply(origMessage *response.TgMessage, origChat *response.TgChat, origUser *response.TgUser) (reportReplyTarget, bool) {
+	result := reportReplyTarget{}
+	isAwaited := false
+	botMessage := repliedBotMessage(origMessage)
+	key := ""
+
+	if botMessage != nil {
+		key = reportReplyKey(origChat.Id, botMessage.MessageId)
+		value, isTaken := reportReplies.takeIf(key, isReplyFrom(origUser.Id))
+		result, isAwaited = value.(reportReplyTarget)
+		isAwaited = (isTaken == true) && (isAwaited == true)
+	}
+
+	return result, isAwaited
+}
+
+// isReplyFrom accepts an awaited reply addressed to the user.
+func isReplyFrom(userID int) func(value interface{}) bool {
+	result := func(value interface{}) bool {
+		target, isTarget := value.(reportReplyTarget)
+		isFromUser := (isTarget == true) && (target.UserID == userID)
+
+		return isFromUser
+	}
+
+	return result
+}
+
+// finishReportReply thanks for a delivered reply; one that neither was saved
+// nor reached the owner puts the awaited reply back and says so.
+func finishReportReply(origMessage *response.TgMessage, origChat *response.TgChat, target reportReplyTarget, outcome reportOutcome) {
+	if outcome.IsDelivered == true {
 		sendReportThanks(origChat.Id, origMessage.MessageId)
+	}
+
+	if outcome.IsDelivered == false {
+		key := reportReplyKey(origChat.Id, origMessage.ReplyToMessage.MessageId)
+		reportReplies.set(key, target)
+		sendReportReply(origChat.Id, origMessage.MessageId, reportSaveFailedText)
+	}
+}
+
+// reportDetailsContext names the report that details belong to; empty for a
+// reply to the prompt.
+func reportDetailsContext(reportID int) string {
+	result := ""
+
+	if reportID > 0 {
+		result = fmt.Sprintf(reportDetailsTemplate, reportID)
 	}
 
 	return result
@@ -186,16 +374,16 @@ func handleReportFailedCallback(callbackQuery *response.TgCallbackQuery) {
 	isAccessible := (errorMessage.Date != 0)
 	isClaimed := false
 
+	claimKey := reportReplyKey(errorMessage.Chat.Id, errorMessage.MessageId)
+
 	if isAccessible == true {
-		isClaimed = claimFailedReport(errorMessage.Chat.Id, errorMessage.MessageId)
+		isClaimed = reportClaims.add(claimKey, true)
 	}
 
 	if isClaimed == true {
 		reportText := failedDownloadReportText(&errorMessage)
-		escapedError := html.EscapeString(errorMessage.Text)
-		doneText := fmt.Sprintf("%s%s", escapedError, reportFailedDoneSuffix)
-		submitReport(&errorMessage.Chat, &callbackQuery.From, reportText)
-		editMessage(errorMessage.Chat.Id, errorMessage.MessageId, doneText, nil)
+		outcome := submitReport(&errorMessage.Chat, &callbackQuery.From, reportText)
+		finishFailedReport(&errorMessage, claimKey, outcome)
 	}
 
 	if isAccessible == false {
@@ -203,20 +391,121 @@ func handleReportFailedCallback(callbackQuery *response.TgCallbackQuery) {
 	}
 }
 
-// reportedErrorMessages holds the error messages already reported, as
-// "chat:message" keys, so a double tap or two members tapping at once file
-// one report.
-var reportedErrorMessages sync.Map
+// handleReportPostCallback reports the post under which the button was
+// tapped: its caption and links, and the user's message with the link it
+// replies to. Each user reports a post once (others still can); the button
+// is answered with a toast and the report is followed by an invitation to
+// add details.
+func handleReportPostCallback(callbackQuery *response.TgCallbackQuery) {
+	post := callbackQuery.Message
+	isAccessible := (post.Date != 0)
+	isClaimed := false
+	toast := reportPostTooOldToast
 
-// claimFailedReport reports whether this call is the first to report the
-// error message.
-func claimFailedReport(chatID int64, messageID int) bool {
-	key := fmt.Sprintf("%d:%d", chatID, messageID)
-	_, isLoaded := reportedErrorMessages.LoadOrStore(key, true)
-	result := (isLoaded == false)
+	postKey := reportReplyKey(post.Chat.Id, post.MessageId)
+	claimKey := fmt.Sprintf("%s:%d", postKey, callbackQuery.From.Id)
+
+	if isAccessible == true {
+		isClaimed = reportClaims.add(claimKey, true)
+		toast = reportPostRepeatToast
+	}
+
+	if isClaimed == true {
+		reportText := postReportText(&post)
+		outcome := submitReport(&post.Chat, &callbackQuery.From, reportText)
+		toast = finishPostReport(&post, &callbackQuery.From, claimKey, outcome)
+	}
+
+	answerCallbackQueryText(callbackQuery.Id, toast)
+}
+
+// finishFailedReport replaces the error message's button with a thank-you
+// once the report is delivered; an undelivered report releases its claim,
+// so the button can be tapped again.
+func finishFailedReport(errorMessage *response.TgMessage, claimKey string, outcome reportOutcome) {
+	escapedError := html.EscapeString(errorMessage.Text)
+	doneText := fmt.Sprintf("%s%s", escapedError, reportFailedDoneSuffix)
+
+	if outcome.IsDelivered == true {
+		editMessage(errorMessage.Chat.Id, errorMessage.MessageId, doneText, nil)
+	}
+
+	if outcome.IsDelivered == false {
+		reportClaims.remove(claimKey)
+	}
+}
+
+// finishPostReport invites details once the report is delivered and returns
+// the toast; an undelivered report releases its claim, so the user can tap
+// again.
+func finishPostReport(post *response.TgMessage, user *response.TgUser, claimKey string, outcome reportOutcome) string {
+	result := reportPostFailedToast
+
+	if outcome.IsDelivered == true {
+		sendReportFollowUp(&post.Chat, user, post.MessageId, outcome.ID)
+		result = reportPostDoneToast
+	}
+
+	if outcome.IsDelivered == false {
+		reportClaims.remove(claimKey)
+	}
 
 	return result
 }
+
+// postReportText describes a reported post and the user's message with the
+// link it replies to.
+func postReportText(post *response.TgMessage) string {
+	var text strings.Builder
+	text.WriteString(reportPostTitle)
+	original := post.ReplyToMessage
+
+	if original != nil {
+		originalText := messageText(original)
+		excerpt := reportExcerpt(originalText)
+		userLine := fmt.Sprintf("\n\nUser's message: %s", excerpt)
+		text.WriteString(userLine)
+	}
+
+	postContext := botMessageContext(post)
+	postLine := fmt.Sprintf("\n\n%s", postContext)
+	text.WriteString(postLine)
+	result := text.String()
+
+	return result
+}
+
+// sendReportFollowUp thanks for a delivered post report, names its number
+// (when it was saved) and invites the reporter's details. It replies to the
+// bot's post; in a group it mentions the reporter.
+func sendReportFollowUp(chat *response.TgChat, user *response.TgUser, postMessageID int, reportID int) {
+	mention := reportUserMention(chat, user)
+	numberLine := ""
+
+	if reportID > 0 {
+		numberLine = fmt.Sprintf(reportNumberTemplate, reportID)
+	}
+
+	followUp := payload.TgPlSendMessage{
+		ChatId:              chat.Id,
+		ParseMode:           payload.ParseModeHTML,
+		Text:                fmt.Sprintf(reportFollowUpTemplate, reportFollowUpTitle, mention, numberLine),
+		ReplyToMessageId:    postMessageID,
+		DisableNotification: true,
+	}
+
+	sent := message.NewSendMessage(followUp)
+	rememberReportReply(chat.Id, sent.ResponsePayload, user.Id, reportID)
+}
+
+// reportClaimTTL is how long a claim is kept: Telegram stops sending a
+// message with button presses after 48 hours.
+const reportClaimTTL = 48 * time.Hour
+
+// reportClaims are the error messages ("chat:message") and posts
+// ("chat:message:user") already reported, so a double tap or two members
+// tapping at once file one report.
+var reportClaims = newTTLStore(reportClaimTTL)
 
 // failedDownloadReportText describes a failed download from its error
 // message and the user's message it replies to.
@@ -304,8 +593,18 @@ func joinReportParts(description, reportContext string) string {
 	return result
 }
 
+// createReport saves a report; a variable so tests run without a database.
+var createReport = services.CreateReport
+
+// reportOutcome says what became of a report: its saved number (0 when the
+// save failed) and whether it reached the owner, saved or not.
+type reportOutcome struct {
+	ID          int
+	IsDelivered bool
+}
+
 // submitReport saves the report and sends it to the owner with a /reply hint.
-func submitReport(chat *response.TgChat, user *response.TgUser, reportText string) {
+func submitReport(chat *response.TgChat, user *response.TgUser, reportText string) reportOutcome {
 	adminUserID := config.GetAdminUserID()
 	chatTitle := chat.Title
 	isPrivate := (chat.Type == chatTypePrivate)
@@ -315,13 +614,15 @@ func submitReport(chat *response.TgChat, user *response.TgUser, reportText strin
 	}
 
 	userID := int64(user.Id)
-	reportID, dbErr := services.CreateReport(userID, user.Username, user.FirstName, chat.Id, chatTitle, reportText)
+	reportID, dbErr := createReport(userID, user.Username, user.FirstName, chat.Id, chatTitle, reportText)
 
 	if dbErr != nil {
 		log.Printf("❌ Failed to save report to DB: %v", dbErr)
 	}
 
 	ownerText := ownerReportText(chat, user, reportText, reportID, dbErr)
+
+	isSentToOwner := false
 
 	if adminUserID != 0 {
 		ownerMessage := payload.TgPlSendMessage{
@@ -330,10 +631,14 @@ func submitReport(chat *response.TgChat, user *response.TgUser, reportText strin
 			Text:                  ownerText,
 			DisableWebPagePreview: true,
 		}
-		message.NewSendMessage(ownerMessage)
+		sent := message.NewSendMessage(ownerMessage)
+		isSentToOwner = (sent.ResponsePayload != nil) && (sent.ResponsePayload.MessageId != 0)
 	}
 
-	log.Printf("🐛 Report #%d from user %d: %s", reportID, user.Id, reportText)
+	log.Printf("🐛 Report #%d from user %d (sent to owner: %t): %s", reportID, user.Id, isSentToOwner, reportText)
+	result := reportOutcome{ID: reportID, IsDelivered: (reportID > 0) || (isSentToOwner == true)}
+
+	return result
 }
 
 // ownerReportText formats a report for the owner.
@@ -379,13 +684,18 @@ func ownerReportText(chat *response.TgChat, user *response.TgUser, reportText st
 
 // sendReportThanks confirms a report to the user.
 func sendReportThanks(chatID int64, replyToMessageID int) {
-	thanks := payload.TgPlSendMessage{
+	sendReportReply(chatID, replyToMessageID, reportThanksText)
+}
+
+// sendReportReply answers the user's report message.
+func sendReportReply(chatID int64, replyToMessageID int, text string) {
+	reply := payload.TgPlSendMessage{
 		ChatId:              chatID,
 		ParseMode:           payload.ParseModeHTML,
-		Text:                reportThanksText,
+		Text:                text,
 		ReplyToMessageId:    replyToMessageID,
 		DisableNotification: true,
 	}
 
-	message.NewSendMessage(thanks)
+	message.NewSendMessage(reply)
 }

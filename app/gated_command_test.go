@@ -155,3 +155,18 @@ func TestThreadsLinkWithAFacebookUsernameIsNotQuiet(t *testing.T) {
 		t.Fatalf("expected threads")
 	}
 }
+
+func TestBudgetDenialExplainsThePause(t *testing.T) {
+	gate := services.InstagramGate{Restricted: true, Title: "x"}
+	err := &services.GatedFetchDeniedError{Denial: services.GatedFetchDeniedBudget, Cause: &services.InstagramGatedError{Gate: gate}}
+
+	if strings.Contains(instagramGateReplyText(err, gate), paidBudgetPausedText) == false {
+		t.Fatalf("expected the budget pause note")
+	}
+}
+
+func TestGlobalCapTextShowsNoCap(t *testing.T) {
+	if (globalCapText(-1) != globalNoCapText) || (globalCapText(100) != "100") {
+		t.Fatalf("unexpected cap texts %q %q", globalCapText(-1), globalCapText(100))
+	}
+}

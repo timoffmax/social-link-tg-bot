@@ -200,6 +200,14 @@ func (c *apifyClient) monthlyUsage(ctx context.Context) (float64, error) {
 	return result, err
 }
 
+// IsPaidBudgetError reports that a download failed because this month's
+// budget for the paid service is used up, anywhere in the error chain.
+func IsPaidBudgetError(err error) bool {
+	result := isApifyBudgetError(err)
+
+	return result
+}
+
 // isApifyBudgetError reports a deliberate budget refusal: nothing was billed
 // and it is not a service failure.
 func isApifyBudgetError(err error) bool {

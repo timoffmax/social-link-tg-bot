@@ -482,6 +482,12 @@ func processMediaDownload(url string, origChat *response.TgChat, origMessage *re
 			return
 		}
 
+		// The paid service's monthly budget ran out (Stories, a Shorts
+		// fallback): say so instead of a generic error or a fixed link.
+		if replyPaidBudgetPaused(err, origMessage, origChat) == true {
+			return
+		}
+
 		// For Instagram videos, we already tried fixed link first, so don't fallback
 		// For other platforms (TikTok, Twitter) that didn't try fixed link first, fallback
 		if !strings.Contains(url, "instagram.com") || (!strings.Contains(url, "/reel/") && !strings.Contains(url, "/tv/")) {
@@ -816,10 +822,10 @@ func extractOtherAuthorInfo(fullCaption, platform string) string {
 }
 
 // sendMediaFile sends one media item; isWholePost marks the post's only
-// item, which may carry the support button (see postSupportMarkup).
+// item, which may carry the report and support buttons (see postButtonsMarkup).
 func sendMediaFile(mediaInfo *services.MediaInfo, origChat *response.TgChat, origMessage *response.TgMessage, url string, isWholePost bool) error {
 	log.Printf("Sending media to chat ID: %d", origChat.Id)
-	supportMarkup := postSupportMarkup(origChat, isWholePost)
+	postMarkup := postButtonsMarkup(origChat, isWholePost)
 
 	// Captions are sent with ParseModeHTML: entities (&amp;/&lt;) render
 	// correctly as-is, while unescaping them here would produce raw '<'/'&'
@@ -876,6 +882,7 @@ func sendMediaFile(mediaInfo *services.MediaInfo, origChat *response.TgChat, ori
 			Text:                mediaInfo.Caption,
 			ReplyToMessageId:    origMessage.MessageId,
 			DisableNotification: true,
+			ReplyMarkup:         postMarkup,
 		}
 		message.NewSendMessage(textPayload)
 		// Note: NewSendMessage automatically sends the message
@@ -890,7 +897,7 @@ func sendMediaFile(mediaInfo *services.MediaInfo, origChat *response.TgChat, ori
 			HasSpoiler:          mediaInfo.Spoiler,
 			ReplyToMessageId:    origMessage.MessageId,
 			DisableNotification: true,
-			ReplyMarkup:         supportMarkup,
+			ReplyMarkup:         postMarkup,
 		}
 		response := message.NewSendPhoto(photoPayload)
 		// Check if the photo was sent successfully
@@ -931,6 +938,7 @@ func sendMediaFile(mediaInfo *services.MediaInfo, origChat *response.TgChat, ori
 						FilePath:            mediaInfo.Filename,
 						ReplyToMessageId:    origMessage.MessageId,
 						DisableNotification: true,
+						ReplyMarkup:         postMarkup,
 					}
 					message.NewSendDocument(documentPayload)
 
@@ -967,6 +975,7 @@ func sendMediaFile(mediaInfo *services.MediaInfo, origChat *response.TgChat, ori
 					FilePath:            mediaInfo.Filename,
 					ReplyToMessageId:    origMessage.MessageId,
 					DisableNotification: true,
+					ReplyMarkup:         postMarkup,
 				}
 				message.NewSendDocument(documentPayload)
 
@@ -987,7 +996,7 @@ func sendMediaFile(mediaInfo *services.MediaInfo, origChat *response.TgChat, ori
 			HasSpoiler:          mediaInfo.Spoiler,
 			ReplyToMessageId:    origMessage.MessageId,
 			DisableNotification: true,
-			ReplyMarkup:         supportMarkup,
+			ReplyMarkup:         postMarkup,
 		}
 		message.NewSendVideo(videoPayload)
 		// Note: NewSendVideo automatically sends the message
@@ -1017,6 +1026,7 @@ func sendMediaFile(mediaInfo *services.MediaInfo, origChat *response.TgChat, ori
 			FilePath:            mediaInfo.Filename,
 			ReplyToMessageId:    origMessage.MessageId,
 			DisableNotification: true,
+			ReplyMarkup:         postMarkup,
 		}
 		message.NewSendDocument(documentPayload)
 		// Note: NewSendDocument automatically sends the message
@@ -1106,6 +1116,10 @@ const gatedChatCapReachedHint = "This chat has used all its downloads of restric
 // gatedGlobalCapReachedHint is appended when the bot-wide monthly cap is used up.
 const gatedGlobalCapReachedHint = "The bot has used all its downloads of restricted posts for this month."
 
+// paidBudgetPausedText says the paid service is paused for the month and
+// why; it answers restricted posts and other paid downloads alike.
+const paidBudgetPausedText = "⏸ The bot's monthly budget for the paid service (restricted Instagram posts, Stories and some YouTube Shorts) is used up for now, so these are paused. Please try again later: at the latest it resets next month. The developer pays for it; with more support (/donate) the limits can go up."
+
 // gatedChatOffHint is appended when the owner turned the paid fetch off here.
 const gatedChatOffHint = "Downloads of restricted posts are turned off in this chat."
 
@@ -1175,6 +1189,10 @@ func instagramGateReplyText(downloadErr error, gate services.InstagramGate) stri
 		result = fmt.Sprintf("%s\n\n%s", result, gatedUserBlockedHint)
 	}
 
+	if (isDenied == true) && (deniedErr.Denial == services.GatedFetchDeniedBudget) {
+		result = fmt.Sprintf("%s\n\n%s", result, paidBudgetPausedText)
+	}
+
 	supportHint := ""
 
 	if isDenied == true {
@@ -1184,6 +1202,24 @@ func instagramGateReplyText(downloadErr error, gate services.InstagramGate) stri
 
 	if supportHint != "" {
 		result = fmt.Sprintf("%s\n%s", result, supportHint)
+	}
+
+	return result
+}
+
+// replyPaidBudgetPaused answers a download stopped by the paid service's
+// monthly budget and reports whether it did.
+func replyPaidBudgetPaused(downloadErr error, origMessage *response.TgMessage, origChat *response.TgChat) bool {
+	result := services.IsPaidBudgetError(downloadErr)
+
+	if result == true {
+		pausedMsg := payload.TgPlSendMessage{
+			ChatId:              origChat.Id,
+			Text:                paidBudgetPausedText,
+			ReplyToMessageId:    origMessage.MessageId,
+			DisableNotification: true,
+		}
+		message.NewSendMessage(pausedMsg)
 	}
 
 	return result
@@ -1907,12 +1943,24 @@ func handleBotCommand(origMessage *response.TgMessage, origChat *response.TgChat
 	}
 
 	command := strings.ToLower(commandText)
+	isAdminCommand := (isGroupAdminCommand(command) == true) && (isAnonymousGroupAdmin(origMessage, origChat) == false)
+	isRefused := (isAdminCommand == true) && (canManageGroup(origChat, origUser.Id) == false)
+
+	if isRefused == true {
+		log.Printf("🚫 User %d may not use %s in chat %d", origUser.Id, command, origChat.Id)
+		replyGroupAdminOnly(origMessage, origChat)
+		command = refusedCommand
+	}
 
 	log.Printf("🤖 Processing command: %s from user %d in chat %d", command, origUser.Id, origChat.Id)
 
 	switch command {
 	case "/start", "/help", "/menu":
-		handleStartCommand(origMessage, origChat, origUser)
+		handleStartOrDeepLink(origMessage, origChat, origUser)
+	case refusedCommand:
+		// Refused above: the user was told only admins may use it.
+	case infoCommand:
+		handleInfoCommand(origMessage, origChat, origUser)
 	case "/stats":
 		handleStatsCommand(origMessage, origChat, origUser)
 	case "/mylimit":
@@ -1958,29 +2006,17 @@ func handleStartCommand(origMessage *response.TgMessage, origChat *response.TgCh
 	var menuText strings.Builder
 	isGroupChat := origChat.Type != "private"
 
-	menuText.WriteString("🤖 <b>Fix Link Bot</b>\n\n")
-	menuText.WriteString("I download and send actual media files from social media platforms — no more link previews!\n\n")
-
-	// Platform support
-	menuText.WriteString(startPlatformsText)
-
-	// How to use — context-dependent
-	if isGroupChat {
-		menuText.WriteString("👥 <b>How to use in group chats:</b>\n")
-		menuText.WriteString("Anyone posts a supported link — I'll automatically download and send the media.\n")
-		menuText.WriteString("Group admins can manage limits and settings.\n\n")
-	} else {
-		menuText.WriteString("💬 <b>How to use in private chat:</b>\n")
-		menuText.WriteString("Just send me any supported link and I'll reply with the actual media file.\n\n")
-		menuText.WriteString("👥 <b>How to use in group chats:</b>\n")
-		menuText.WriteString("1. Add me to your group\n")
-		menuText.WriteString("2. Anyone posts a supported link — I'll download and send the media automatically\n")
-		menuText.WriteString("3. Group admins can manage daily limits and settings\n\n")
-	}
+	isStarsEnabled := config.IsStarsSupportEnabled()
+	guideText := startGuideText(isStarsEnabled)
+	menuText.WriteString(startIntroText)
+	platformsText := startPlatformsText()
+	menuText.WriteString(platformsText)
+	menuText.WriteString(guideText)
 
 	// Commands
 	menuText.WriteString("⚡ <b>Commands:</b>\n")
 	menuText.WriteString("• /start, /help — Show this menu\n")
+	menuText.WriteString("• /info — How I work: chats, groups and limits\n")
 	menuText.WriteString("• /stats [period] — View media statistics\n")
 	menuText.WriteString("  <i>Periods: today, week, month, year</i>\n")
 	menuText.WriteString("• /mylimit — Check your daily media limit\n")
@@ -1988,7 +2024,7 @@ func handleStartCommand(origMessage *response.TgMessage, origChat *response.TgCh
 
 	donateLine := startDonateCryptoLine
 
-	if config.IsStarsSupportEnabled() == true {
+	if isStarsEnabled == true {
 		donateLine = startDonateStarsLine
 	}
 
@@ -2995,8 +3031,8 @@ func createMainMenuKeyboard(isGroupChat bool, userID int) *api.TgInlineKeyboardM
 
 		// Group admin actions
 		buttons = append(buttons, []api.TgInlineKeyboardButton{
-			{Text: "👮 Set User Limit", CallbackData: "/setlimit_start"},
-			{Text: "🏢 Group Settings", CallbackData: "/group_settings"},
+			{Text: "👮 Set User Limit", CallbackData: callbackSetLimitStart},
+			{Text: "🏢 Group Settings", CallbackData: callbackGroupSettings},
 		})
 	} else {
 		// Private chat - only show user limit
@@ -3028,8 +3064,24 @@ func createMainMenuKeyboard(isGroupChat bool, userID int) *api.TgInlineKeyboardM
 	}
 }
 
-// handleCallbackQuery handles button presses from inline keyboards
+// handleCallbackQuery checks that Group Settings buttons are pressed by a
+// group admin, then dispatches the button.
 func handleCallbackQuery(callbackQuery *response.TgCallbackQuery) {
+	isAdminButton := isGroupAdminCallback(callbackQuery.Data)
+	isAllowed := (isAdminButton == false) || (canManageGroup(&callbackQuery.Message.Chat, callbackQuery.From.Id) == true)
+
+	if isAllowed == true {
+		dispatchCallbackQuery(callbackQuery)
+	}
+
+	if isAllowed == false {
+		log.Printf("🚫 User %d may not use %s in chat %d", callbackQuery.From.Id, callbackQuery.Data, callbackQuery.Message.Chat.Id)
+		answerCallbackQueryText(callbackQuery.Id, groupAdminOnlyText)
+	}
+}
+
+// dispatchCallbackQuery runs the handler of a button press.
+func dispatchCallbackQuery(callbackQuery *response.TgCallbackQuery) {
 	log.Printf("📱 Handling callback query: %s from user %d", callbackQuery.Data, callbackQuery.From.Id)
 
 	// Create a fake message object to reuse existing command handlers
@@ -3042,60 +3094,68 @@ func handleCallbackQuery(callbackQuery *response.TgCallbackQuery) {
 	}
 
 	// Process the command based on callback data
-	if strings.HasPrefix(callbackQuery.Data, "/stats") {
+	switch {
+	case strings.HasPrefix(callbackQuery.Data, "/stats"):
 		handleStatsCommand(&fakeMessage, &callbackQuery.Message.Chat, &callbackQuery.From)
-	} else if strings.HasPrefix(callbackQuery.Data, "/mylimit") {
+	case strings.HasPrefix(callbackQuery.Data, "/mylimit"):
 		handleMyLimitCommand(&fakeMessage, &callbackQuery.Message.Chat, &callbackQuery.From)
-	} else if callbackQuery.Data == donateCommand {
+	case callbackQuery.Data == donateCommand:
 		handleDonateCommand(&fakeMessage, &callbackQuery.Message.Chat, &callbackQuery.From)
-	} else if callbackQuery.Data == reportCommand {
+	case callbackQuery.Data == reportCommand:
 		sendReportPrompt(&callbackQuery.Message.Chat, &callbackQuery.From, 0)
-	} else if callbackQuery.Data == reportFailedCallback {
+	case callbackQuery.Data == reportFailedCallback:
 		handleReportFailedCallback(callbackQuery)
-	} else if strings.HasPrefix(callbackQuery.Data, "/help") {
+	case callbackQuery.Data == reportPostCallback:
+		handleReportPostCallback(callbackQuery)
+	case isPostButtonToggleCallback(callbackQuery.Data) == true:
+		handlePostButtonToggleCallback(callbackQuery)
+	case strings.HasPrefix(callbackQuery.Data, "/help"):
 		handleStartCommand(&fakeMessage, &callbackQuery.Message.Chat, &callbackQuery.From)
-	} else if callbackQuery.Data == "/setlimit_start" {
+	case callbackQuery.Data == callbackSetLimitStart:
 		handleSetLimitStartCallback(&callbackQuery.Message.Chat, &callbackQuery.From, callbackQuery.Message.MessageId)
-	} else if callbackQuery.Data == "/group_settings" {
+	case callbackQuery.Data == callbackGroupSettings:
 		handleGroupSettingsCallback(&callbackQuery.Message.Chat, &callbackQuery.From, callbackQuery.Message.MessageId)
-	} else if strings.HasPrefix(callbackQuery.Data, "/setgrouplimit_") {
+	case strings.HasPrefix(callbackQuery.Data, callbackSetGroupLimitPrefix):
 		handleSetGroupLimitCallback(callbackQuery)
-	} else if callbackQuery.Data == "/timezone_menu" {
+	case callbackQuery.Data == callbackTimezoneMenu:
 		handleTimezoneMenuCallback(&callbackQuery.Message.Chat, &callbackQuery.From)
-	} else if strings.HasPrefix(callbackQuery.Data, "/tz_") {
+	case strings.HasPrefix(callbackQuery.Data, callbackTimezoneRegionPrefix):
 		handleTimezoneRegionCallback(callbackQuery)
-	} else if strings.HasPrefix(callbackQuery.Data, "/setgrouptimezone_") {
+	case strings.HasPrefix(callbackQuery.Data, callbackSetTimezonePrefix):
 		handleSetTimezoneCallback(callbackQuery)
-	} else if callbackQuery.Data == "/platform_settings" {
+	case callbackQuery.Data == callbackPlatformSettings:
 		handlePlatformSettingsCallback(&callbackQuery.Message.Chat, &callbackQuery.From, callbackQuery.Message.MessageId)
-	} else if strings.HasPrefix(callbackQuery.Data, "/toggle_platform_") {
+	case strings.HasPrefix(callbackQuery.Data, callbackTogglePlatformPrefix):
 		handleTogglePlatformCallback(*callbackQuery)
-	} else if callbackQuery.Data == "/platform_enable_all" {
+	case callbackQuery.Data == callbackPlatformEnableAll:
 		handlePlatformEnableAllCallback(*callbackQuery)
-	} else if callbackQuery.Data == "/platform_disable_all" {
+	case callbackQuery.Data == callbackPlatformDisableAll:
 		handlePlatformDisableAllCallback(*callbackQuery)
-	} else if callbackQuery.Data == "/description_settings" {
+	case callbackQuery.Data == callbackDescriptionSettings:
 		handleDescriptionSettingsCallback(&callbackQuery.Message.Chat, &callbackQuery.From, callbackQuery.Message.MessageId)
-	} else if strings.HasPrefix(callbackQuery.Data, "/toggle_description_") {
+	case strings.HasPrefix(callbackQuery.Data, callbackToggleDescriptionPrefix):
 		handleToggleDescriptionCallback(*callbackQuery)
-	} else if callbackQuery.Data == "/description_enable_all" {
+	case callbackQuery.Data == callbackDescriptionEnableAll:
 		handleDescriptionEnableAllCallback(*callbackQuery)
-	} else if callbackQuery.Data == "/description_disable_all" {
+	case callbackQuery.Data == callbackDescriptionDisableAll:
 		handleDescriptionDisableAllCallback(*callbackQuery)
-	} else if strings.HasPrefix(callbackQuery.Data, "/owner") {
+	case strings.HasPrefix(callbackQuery.Data, "/owner"):
 		handleOwnerCallback(callbackQuery)
-	} else if strings.HasPrefix(callbackQuery.Data, "/blog_") {
+	case strings.HasPrefix(callbackQuery.Data, "/blog_"):
 		handleBlogCallback(callbackQuery)
-	} else if strings.HasPrefix(callbackQuery.Data, "/broadcast_") {
+	case strings.HasPrefix(callbackQuery.Data, "/broadcast_"):
 		handleBroadcastCallback(callbackQuery)
-	} else if strings.HasPrefix(callbackQuery.Data, supportCallbackPrefix) {
+	case strings.HasPrefix(callbackQuery.Data, supportCallbackPrefix):
 		handleSupportTierCallback(callbackQuery)
-	} else {
+	default:
 		log.Printf("🤷 Unknown callback query: %s", callbackQuery.Data)
 	}
 
-	// Answer the callback query to remove the loading state
-	answerCallbackQuery(callbackQuery.Id)
+	// Answer the callback query to remove the loading state, unless its
+	// handler answered it with a toast
+	if isSelfAnsweredCallback(callbackQuery.Data) == false {
+		answerCallbackQuery(callbackQuery.Id)
+	}
 }
 
 // handleSetLimitStartCallback handles the "Set User Limit" button press
@@ -3114,21 +3174,60 @@ func handleSetLimitStartCallback(origChat *response.TgChat, origUser *response.T
 // handleGroupSettingsCallback handles the "Group Settings" button press
 func handleGroupSettingsCallback(origChat *response.TgChat, origUser *response.TgUser, messageId int) {
 	log.Printf("🏢 Admin %d opened group settings in chat %d", origUser.Id, origChat.Id)
+	text, err := buildGroupSettingsText(origChat)
 
-	// Get current group settings
-	groupInfo, err := services.GetGroupLimitInfo(origChat.Id)
 	if err != nil {
 		log.Printf("Error getting group limit info: %v", err)
-		errorMsg := payload.TgPlSendMessage{
-			ChatId:    origChat.Id,
-			ParseMode: payload.ParseModeHTML,
-			Text:      "❌ Error retrieving group settings. Please try again later.",
-		}
-		message.NewSendMessage(errorMsg)
-		return
+		text = groupSettingsErrorText
 	}
 
-	// Build settings message
+	settingsMsg := payload.TgPlSendMessage{
+		ChatId:    origChat.Id,
+		ParseMode: payload.ParseModeHTML,
+		Text:      text,
+	}
+
+	// The settings buttons only come with the settings themselves.
+	if err == nil {
+		settingsMsg.ReplyMarkup = createGroupSettingsKeyboard()
+	}
+
+	message.NewSendMessage(settingsMsg)
+}
+
+// groupSettingsErrorText replaces the Group Settings text when it can't be read.
+const groupSettingsErrorText = "❌ Error retrieving group settings. Please try again later."
+
+// buildGroupSettingsText renders the Group Settings message from fresh
+// reads of the group's limits and buttons; buttons that can't be read show
+// as unavailable instead of a guessed state.
+func buildGroupSettingsText(origChat *response.TgChat) (string, error) {
+	result := ""
+	groupInfo, err := services.GetGroupLimitInfo(origChat.Id)
+	buttons := services.ChatButtonSettings{}
+
+	buttonsErr := err
+
+	if err == nil {
+		buttons, buttonsErr = getGroupButtonSettings(origChat.Id)
+	}
+
+	postButtonsLines := groupPostButtonsStatusLines(buttons)
+
+	if buttonsErr != nil {
+		postButtonsLines = postButtonsUnavailableLines
+	}
+
+	if err == nil {
+		result = renderGroupSettingsText(origChat, groupInfo, postButtonsLines)
+	}
+
+	return result, err
+}
+
+// renderGroupSettingsText renders the Group Settings message from the
+// group's limit info.
+func renderGroupSettingsText(origChat *response.TgChat, groupInfo *services.GroupLimitInfo, postButtonsLines string) string {
 	var settingsText strings.Builder
 	settingsText.WriteString("🏢 <b>Group Settings</b>\n")
 	settingsText.WriteString(fmt.Sprintf("<i>Chat: %s</i>\n\n", html.EscapeString(origChat.Title)))
@@ -3142,6 +3241,8 @@ func handleGroupSettingsCallback(origChat *response.TgChat, origUser *response.T
 		settingsText.WriteString(fmt.Sprintf("🔒 %d media items per day\n", groupInfo.DefaultDailyLimit))
 		settingsText.WriteString("📋 <b>Status:</b> Applied to users without individual limits\n")
 	}
+
+	settingsText.WriteString(postButtonsLines)
 
 	// Timezone settings
 	settingsText.WriteString(fmt.Sprintf("\n🌍 <b>Timezone:</b> %s\n", groupInfo.Timezone))
@@ -3176,17 +3277,9 @@ func handleGroupSettingsCallback(origChat *response.TgChat, origUser *response.T
 	settingsText.WriteString("\n━━━━━━━━━━━━━━━━━━━━\n")
 	settingsText.WriteString("📈 Use buttons below to configure settings")
 
-	// Create interactive keyboard for group settings
-	keyboard := createGroupSettingsKeyboard()
+	result := settingsText.String()
 
-	settingsMsg := payload.TgPlSendMessage{
-		ChatId:      origChat.Id,
-		ParseMode:   payload.ParseModeHTML,
-		Text:        settingsText.String(),
-		ReplyMarkup: keyboard,
-	}
-
-	message.NewSendMessage(settingsMsg)
+	return result
 }
 
 // createGroupSettingsKeyboard creates the interactive keyboard for group settings
@@ -3208,15 +3301,20 @@ func createGroupSettingsKeyboard() *api.TgInlineKeyboardMarkup {
 		},
 		// Fourth row - Platform settings
 		{
-			{Text: "📱 Platform Settings", CallbackData: "/platform_settings"},
+			{Text: "📱 Platform Settings", CallbackData: callbackPlatformSettings},
 		},
 		// Fifth row - Description settings
 		{
-			{Text: "📝 Description Settings", CallbackData: "/description_settings"},
+			{Text: "📝 Description Settings", CallbackData: callbackDescriptionSettings},
 		},
 		// Sixth row - Timezone settings
 		{
-			{Text: "🌍 Change Timezone", CallbackData: "/timezone_menu"},
+			{Text: "🌍 Change Timezone", CallbackData: callbackTimezoneMenu},
+		},
+		// Buttons under posts
+		{
+			{Text: reportButtonToggleText, CallbackData: reportButtonToggleCallback},
+			{Text: supportButtonToggleText, CallbackData: supportButtonToggleCallback},
 		},
 		// Sixth row - Back to main menu
 		{
@@ -3247,7 +3345,7 @@ func createTimezoneMenuKeyboard() *api.TgInlineKeyboardMarkup {
 		},
 		// Back button
 		{
-			{Text: "⬅️ Back to Settings", CallbackData: "/group_settings"},
+			{Text: "⬅️ Back to Settings", CallbackData: callbackGroupSettings},
 		},
 	}
 
@@ -3276,7 +3374,7 @@ func createAmericasTimezoneKeyboard() *api.TgInlineKeyboardMarkup {
 			{Text: "🏔️ Buenos Aires", CallbackData: "/setgrouptimezone_America/Buenos_Aires"},
 		},
 		{
-			{Text: "⬅️ Back", CallbackData: "/timezone_menu"},
+			{Text: "⬅️ Back", CallbackData: callbackTimezoneMenu},
 		},
 	}
 
@@ -3305,7 +3403,7 @@ func createEuropeTimezoneKeyboard() *api.TgInlineKeyboardMarkup {
 			{Text: "🇺🇦 Kyiv", CallbackData: "/setgrouptimezone_Europe/Kyiv"},
 		},
 		{
-			{Text: "⬅️ Back", CallbackData: "/timezone_menu"},
+			{Text: "⬅️ Back", CallbackData: callbackTimezoneMenu},
 		},
 	}
 
@@ -3334,7 +3432,7 @@ func createAsiaTimezoneKeyboard() *api.TgInlineKeyboardMarkup {
 			{Text: "🇮🇩 Jakarta", CallbackData: "/setgrouptimezone_Asia/Jakarta"},
 		},
 		{
-			{Text: "⬅️ Back", CallbackData: "/timezone_menu"},
+			{Text: "⬅️ Back", CallbackData: callbackTimezoneMenu},
 		},
 	}
 
@@ -3409,7 +3507,7 @@ func handleTimezoneMenuCallback(origChat *response.TgChat, origUser *response.Tg
 
 // handleTimezoneRegionCallback shows timezones for a specific region
 func handleTimezoneRegionCallback(callbackQuery *response.TgCallbackQuery) {
-	region := strings.TrimPrefix(callbackQuery.Data, "/tz_")
+	region := strings.TrimPrefix(callbackQuery.Data, callbackTimezoneRegionPrefix)
 
 	var keyboard *api.TgInlineKeyboardMarkup
 	var regionName string
@@ -3437,7 +3535,7 @@ func handleTimezoneRegionCallback(callbackQuery *response.TgCallbackQuery) {
 					{Text: "🇦🇺 Brisbane", CallbackData: "/setgrouptimezone_Australia/Brisbane"},
 				},
 				{
-					{Text: "⬅️ Back", CallbackData: "/timezone_menu"},
+					{Text: "⬅️ Back", CallbackData: callbackTimezoneMenu},
 				},
 			},
 		}
@@ -3455,7 +3553,7 @@ func handleTimezoneRegionCallback(callbackQuery *response.TgCallbackQuery) {
 					{Text: "🇰🇪 Nairobi", CallbackData: "/setgrouptimezone_Africa/Nairobi"},
 				},
 				{
-					{Text: "⬅️ Back", CallbackData: "/timezone_menu"},
+					{Text: "⬅️ Back", CallbackData: callbackTimezoneMenu},
 				},
 			},
 		}
@@ -3477,7 +3575,7 @@ func handleTimezoneRegionCallback(callbackQuery *response.TgCallbackQuery) {
 // handleSetTimezoneCallback sets the group timezone
 func handleSetTimezoneCallback(callbackQuery *response.TgCallbackQuery) {
 	// Extract timezone from callback data
-	timezone := strings.TrimPrefix(callbackQuery.Data, "/setgrouptimezone_")
+	timezone := strings.TrimPrefix(callbackQuery.Data, callbackSetTimezonePrefix)
 
 	// Set the group timezone
 	err := services.SetGroupTimezone(callbackQuery.Message.Chat.Id, callbackQuery.Message.Chat.Title, timezone)
@@ -3672,13 +3770,13 @@ func createPlatformSettingsKeyboard(chatID int64) (*api.TgInlineKeyboardMarkup, 
 
 	// Add control buttons
 	buttons = append(buttons, []api.TgInlineKeyboardButton{
-		{Text: "✅ Enable All", CallbackData: "/platform_enable_all"},
-		{Text: "❌ Disable All", CallbackData: "/platform_disable_all"},
+		{Text: "✅ Enable All", CallbackData: callbackPlatformEnableAll},
+		{Text: "❌ Disable All", CallbackData: callbackPlatformDisableAll},
 	})
 
 	// Add back button
 	buttons = append(buttons, []api.TgInlineKeyboardButton{
-		{Text: "⬅️ Back to Group Settings", CallbackData: "/group_settings"},
+		{Text: "⬅️ Back to Group Settings", CallbackData: callbackGroupSettings},
 	})
 
 	return &api.TgInlineKeyboardMarkup{
@@ -3738,7 +3836,7 @@ func handlePlatformSettingsCallback(origChat *response.TgChat, origUser *respons
 // handleTogglePlatformCallback handles individual platform toggle
 func handleTogglePlatformCallback(callbackQuery response.TgCallbackQuery) {
 	// Extract platform from callback data
-	platform := strings.TrimPrefix(callbackQuery.Data, "/toggle_platform_")
+	platform := strings.TrimPrefix(callbackQuery.Data, callbackTogglePlatformPrefix)
 	chatID := callbackQuery.Message.Chat.Id
 	userID := callbackQuery.From.Id
 
@@ -3898,7 +3996,7 @@ func createDescriptionSettingsKeyboard(chatID int64) (*api.TgInlineKeyboardMarku
 
 		button1 := api.TgInlineKeyboardButton{
 			Text:         fmt.Sprintf("%s %s %s", platform1.Emoji, platform1.Name, status1),
-			CallbackData: "/toggle_description_" + platform1.Key,
+			CallbackData: callbackToggleDescriptionPrefix + platform1.Key,
 		}
 		row = append(row, button1)
 
@@ -3916,7 +4014,7 @@ func createDescriptionSettingsKeyboard(chatID int64) (*api.TgInlineKeyboardMarku
 
 			button2 := api.TgInlineKeyboardButton{
 				Text:         fmt.Sprintf("%s %s %s", platform2.Emoji, platform2.Name, status2),
-				CallbackData: "/toggle_description_" + platform2.Key,
+				CallbackData: callbackToggleDescriptionPrefix + platform2.Key,
 			}
 			row = append(row, button2)
 		}
@@ -3926,8 +4024,8 @@ func createDescriptionSettingsKeyboard(chatID int64) (*api.TgInlineKeyboardMarku
 
 	// Add bulk action buttons
 	rows = append(rows, []api.TgInlineKeyboardButton{
-		{Text: "✅ Enable All Descriptions", CallbackData: "/description_enable_all"},
-		{Text: "🔇 Disable All Descriptions", CallbackData: "/description_disable_all"},
+		{Text: "✅ Enable All Descriptions", CallbackData: callbackDescriptionEnableAll},
+		{Text: "🔇 Disable All Descriptions", CallbackData: callbackDescriptionDisableAll},
 	})
 
 	// Add back button
@@ -3943,7 +4041,7 @@ func createDescriptionSettingsKeyboard(chatID int64) (*api.TgInlineKeyboardMarku
 // handleToggleDescriptionCallback handles individual description toggle
 func handleToggleDescriptionCallback(callbackQuery response.TgCallbackQuery) {
 	// Extract platform from callback data
-	platform := strings.TrimPrefix(callbackQuery.Data, "/toggle_description_")
+	platform := strings.TrimPrefix(callbackQuery.Data, callbackToggleDescriptionPrefix)
 	chatID := callbackQuery.Message.Chat.Id
 	userID := callbackQuery.From.Id
 
@@ -4116,16 +4214,16 @@ func handleAdminCommand(origMessage *response.TgMessage, origChat *response.TgCh
 	keyboard := &api.TgInlineKeyboardMarkup{
 		InlineKeyboard: [][]api.TgInlineKeyboardButton{
 			{
-				{Text: "⚙️ Set User Limit", CallbackData: "/setlimit_start"},
-				{Text: "🌍 Set Timezone", CallbackData: "/timezone_menu"},
+				{Text: "⚙️ Set User Limit", CallbackData: callbackSetLimitStart},
+				{Text: "🌍 Set Timezone", CallbackData: callbackTimezoneMenu},
 			},
 			{
 				{Text: "📊 Group Stats", CallbackData: "/stats today"},
-				{Text: "🔧 Platform Settings", CallbackData: "/platform_settings"},
+				{Text: "🔧 Platform Settings", CallbackData: callbackPlatformSettings},
 			},
 			{
-				{Text: "📝 Description Settings", CallbackData: "/description_settings"},
-				{Text: "🏢 Group Settings", CallbackData: "/group_settings"},
+				{Text: "📝 Description Settings", CallbackData: callbackDescriptionSettings},
+				{Text: "🏢 Group Settings", CallbackData: callbackGroupSettings},
 			},
 		},
 	}
