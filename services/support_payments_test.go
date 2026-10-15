@@ -45,10 +45,36 @@ func TestParseSupportPayloadRejectsUnknownOrMalformedPayloads(t *testing.T) {
 }
 
 func TestAppendGatedCreditNoteEndsTheCaption(t *testing.T) {
-	caption := appendGatedCreditNote("📷 author", 9)
+	caption := appendGatedCreditNote("📷 author", gatedCredit{IsUsed: true, Left: 9})
+	groupCaption := appendGatedCreditNote("📷 author", gatedCredit{IsUsed: true, IsGroup: true, Left: 4})
 
 	if strings.HasSuffix(caption, "🎟️ Bonus downloads left: 9") == false {
 		t.Fatalf("unexpected caption %q", caption)
+	}
+
+	if strings.HasSuffix(groupCaption, "🚀 Group bonus downloads left: 4") == false {
+		t.Fatalf("unexpected group caption %q", groupCaption)
+	}
+}
+
+func TestBoostPayloadRoundTripsAndNeedsAGroup(t *testing.T) {
+	tier, _ := FindSupportTier(50)
+	invoice, err := ParseSupportPayload(BuildBoostPayload(tier, 42, -1001234))
+
+	if (err != nil) || (invoice.BoostChatID != -1001234) || (invoice.UserID != 42) || (invoice.Tier.Credits != tier.Credits) {
+		t.Fatalf("unexpected boost invoice %+v (%v)", invoice, err)
+	}
+
+	for _, payload := range []string{"boost:50:42:777", "boost:50:42", "boost:51:42:-1", "boost:50:0:-1"} {
+		if _, err := ParseSupportPayload(payload); err == nil {
+			t.Fatalf("expected %q to be rejected", payload)
+		}
+	}
+
+	personal, err := ParseSupportPayload(BuildSupportPayload(tier, 42))
+
+	if (err != nil) || (personal.BoostChatID != 0) {
+		t.Fatalf("personal support must not boost a group: %+v (%v)", personal, err)
 	}
 }
 

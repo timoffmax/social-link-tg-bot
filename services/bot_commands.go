@@ -22,6 +22,7 @@ type BotCommand struct {
 // starsSupportCommands are listed only while Telegram Stars support is on.
 // /support stays an unlisted alias of /donate.
 var starsSupportCommands = []BotCommand{
+	{Command: "boost", Description: "Raise a group's limit of restricted posts (Stars)"},
 	{Command: "paysupport", Description: "Help with Stars payments"},
 	{Command: "terms", Description: "Terms of Stars support"},
 }

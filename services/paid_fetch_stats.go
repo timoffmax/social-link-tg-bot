@@ -35,7 +35,7 @@ func GetSupportStats() (SupportStats, error) {
 			COUNT(*),
 			COALESCE(SUM(stars), 0)
 		FROM support_payments WHERE refunded_at IS NULL`
-	creditsQuery := `SELECT COALESCE(SUM(credits), 0) FROM gated_fetch_credits`
+	creditsQuery := `SELECT (SELECT COALESCE(SUM(credits), 0) FROM gated_fetch_credits) + (SELECT COALESCE(SUM(credits), 0) FROM gated_fetch_chat_credits)`
 
 	defer cancel()
 

@@ -99,6 +99,7 @@ const (
 const (
 	starsRefundUsageText       = "Usage (owner only): <code>/starsrefund USER_ID CHARGE_ID</code>, or <code>/starsrefund USER_ID CHARGE_ID mark</code> to only record a refund Telegram already made"
 	starsRefundDoneTemplate    = "✅ Refunded charge <code>%s</code> of user <code>%d</code>. Removed %d unused bonus downloads; %d left."
+	starsRefundBoostTemplate   = "✅ Refunded charge <code>%s</code> of user <code>%d</code>, a boost of group <code>%d</code>. Removed %d of the group's unused bonus downloads; the group has %d left."
 	starsRefundNoRecordText    = "✅ Refunded charge <code>%s</code> of user <code>%d</code> in Telegram. There's no local record of it, so no credits were removed."
 	starsRefundMarkFailedText  = "⚠️ Refunded charge <code>%s</code> in Telegram, but marking it refunded failed: %s"
 	starsRefundFailedTemplate  = "❌ Refund failed: %s"
@@ -198,7 +199,7 @@ func sendSupportInvoice(invoice payload.TgPlSendInvoice) {
 func handlePreCheckoutQuery(query *response.TgPreCheckoutQuery) {
 	isEnabled := config.IsStarsSupportEnabled()
 	payerID := int64(query.From.Id)
-	isCreditsUsable := supportCreditsUsable(payerID)
+	isCreditsUsable := invoiceCreditsUsable(query.InvoicePayload, payerID)
 	refusal := supportPreCheckoutRefusal(query, isEnabled, isCreditsUsable)
 	answer := payload.TgPlAnswerPreCheckoutQuery{
 		PreCheckoutQueryId: query.Id,
@@ -212,6 +213,19 @@ func handlePreCheckoutQuery(query *response.TgPreCheckoutQuery) {
 	if sent.Err != nil {
 		log.Printf("❌ [stars] answering pre-checkout %s failed: %v", query.Id, sent.Err)
 	}
+}
+
+// invoiceCreditsUsable reports whether the credits an invoice buys could be
+// used: a boost's by its group, personal support's by the payer.
+func invoiceCreditsUsable(invoicePayload string, payerID int64) bool {
+	invoice, err := services.ParseSupportPayload(invoicePayload)
+	result := supportCreditsUsable(payerID)
+
+	if (err == nil) && (invoice.BoostChatID != 0) {
+		result = (canBoostGroup(invoice.BoostChatID) == true) && (isGroupReachable(invoice.BoostChatID) == true)
+	}
+
+	return result
 }
 
 // supportCreditsUsable reports whether payments can be recorded and the payer
@@ -285,16 +299,19 @@ func handleSuccessfulPayment(origMessage *response.TgMessage, origChat *response
 	paid := origMessage.SuccessfulPayment
 	userID := int64(origUser.Id)
 	credits := supportPaymentCredits(paid)
+	invoice, _ := services.ParseSupportPayload(paid.InvoicePayload)
 	payment := services.SupportPayment{
-		ChargeID: paid.TelegramPaymentChargeId,
-		UserID:   userID,
-		ChatID:   origChat.Id,
-		Stars:    paid.TotalAmount,
-		Credits:  credits,
-		Payload:  paid.InvoicePayload,
+		ChargeID:    paid.TelegramPaymentChargeId,
+		UserID:      userID,
+		ChatID:      origChat.Id,
+		Stars:       paid.TotalAmount,
+		Credits:     credits,
+		Payload:     paid.InvoicePayload,
+		BoostChatID: invoice.BoostChatID,
 	}
 	record, err := services.RecordSupportPayment(payment)
 	text := supportPaymentReplyText(record, err, credits)
+	isBoost := (err == nil) && (payment.BoostChatID != 0)
 
 	alert := ""
 
@@ -308,9 +325,22 @@ func handleSuccessfulPayment(origMessage *response.TgMessage, origChat *response
 		alert = fmt.Sprintf(supportPaymentAlertText, payment.Stars, userID, origChat.Id, payment.ChargeID, credits)
 	}
 
-	// The payment is recorded; the replies don't hold up the polling loop.
+	if (alert != "") && (payment.BoostChatID != 0) {
+		alert = fmt.Sprintf(boostAlertTemplate, alert, payment.BoostChatID)
+	}
+
+	// The payment is recorded; the replies don't hold up the polling loop. A
+	// boost's thank-you names the group and tells it, so it's sent apart.
+	if isBoost == true {
+		text = ""
+		go sendBoostPaymentReplies(record, credits, payment.BoostChatID, origUser.FirstName, origChat.Id, origMessage.MessageId)
+	}
+
 	go sendSupportPaymentReplies(origChat.Id, origMessage.MessageId, text, alert)
 }
+
+// boostAlertTemplate adds the boosted group to the owner's payment alert.
+const boostAlertTemplate = "%s\n🚀 Boost for group %d"
 
 // sendSupportPaymentReplies thanks the payer and alerts the owner (when there
 // is an alert). Every payment alerts: one alert per charge, not rate-limited.
@@ -319,7 +349,9 @@ func sendSupportPaymentReplies(chatID int64, replyToMessageID int, text, alert s
 		services.NotifyAdminUnthrottled(alert)
 	}
 
-	sendSupportReply(chatID, replyToMessageID, text)
+	if text != "" {
+		sendSupportReply(chatID, replyToMessageID, text)
+	}
 }
 
 // supportPaymentCredits returns the credits a payment earns: its tier's, when
@@ -497,6 +529,10 @@ func markStarsRefunded(userID int64, chargeID string) string {
 	escapedID := html.EscapeString(chargeID)
 	result := fmt.Sprintf(starsRefundDoneTemplate, escapedID, userID, refunded.CreditsRemoved, refunded.Balance)
 
+	if refunded.BoostChatID != 0 {
+		result = fmt.Sprintf(starsRefundBoostTemplate, escapedID, userID, refunded.BoostChatID, refunded.CreditsRemoved, refunded.Balance)
+	}
+
 	if err != nil {
 		detail := html.EscapeString(err.Error())
 		result = fmt.Sprintf(starsRefundMarkFailedText, escapedID, detail)
@@ -510,9 +546,15 @@ func markStarsRefunded(userID int64, chargeID string) string {
 func supportGatedHint(denial services.GatedFetchDenial, isEnabled bool) string {
 	result := ""
 	isCapDenial := services.IsCreditDenial(denial)
+	isGroupCap := (denial == services.GatedFetchDeniedChatCap)
 
 	if (isEnabled == true) && (isCapDenial == true) {
 		result = fmt.Sprintf(supportGatedHintTemplate, donateCommand)
+	}
+
+	// A group's own cap is raised for everyone with a boost.
+	if (isEnabled == true) && (isGroupCap == true) {
+		result = fmt.Sprintf(boostGatedHintTemplate, boostCommand)
 	}
 
 	return result

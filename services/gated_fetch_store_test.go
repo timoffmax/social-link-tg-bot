@@ -21,6 +21,7 @@ const gatedFetchTestDSNKey = "GATED_FETCH_TEST_DSN"
 var gatedFetchTestMigrations = []string{
 	"../migrations/006_create_gated_fetch.up.sql",
 	"../migrations/007_create_support_payments.up.sql",
+	"../migrations/008_create_group_credits.up.sql",
 }
 
 func setupGatedFetchTestDB(t *testing.T) {
@@ -36,7 +37,7 @@ func setupGatedFetchTestDB(t *testing.T) {
 		t.Fatalf("open: %v", err)
 	}
 
-	mustExec(t, db, "DROP TABLE IF EXISTS gated_fetch_usage, gated_fetch_policies, support_payments, gated_fetch_credits CASCADE")
+	mustExec(t, db, "DROP TABLE IF EXISTS gated_fetch_usage, gated_fetch_policies, support_payments, gated_fetch_credits, gated_fetch_chat_credits CASCADE")
 
 	for _, path := range gatedFetchTestMigrations {
 		migration, err := os.ReadFile(path)

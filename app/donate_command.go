@@ -30,7 +30,7 @@ const donateIntroCryptoText = "Support is optional: the bot stays free, with no 
 // donateStarsText describes the Stars tiers; only Stars support adds bonus
 // downloads, crypto donations unlock nothing.
 const donateStarsText = `⭐ <b>Telegram Stars:</b>
-Pick an amount with the buttons below. As a thank-you you get bonus downloads of restricted Instagram posts: age- or region-limited posts the bot can only fetch through a paid service.
+Pick an amount with the buttons below. As a thank-you you get bonus downloads of restricted Instagram posts: age- or region-limited posts the bot can only fetch through a paid service. To raise a group's limit for everyone there instead, send /boost in that group.
 
 <b>How bonus downloads work:</b>
 • They're yours: they work in any chat, but only for links you send. They aren't shared with the group.
@@ -153,16 +153,24 @@ func donateKeyboard(isStarsEnabled bool) *api.TgInlineKeyboardMarkup {
 }
 
 // handleStartOrDeepLink answers /start, /help and /menu; "/start donate"
-// (the group support button's link) opens /donate instead of the menu.
+// (the group support button's link) opens /donate, and "/start boost_<id>"
+// (the boost button's link) a group's boost screen, instead of the menu.
 func handleStartOrDeepLink(origMessage *response.TgMessage, origChat *response.TgChat, origUser *response.TgUser) {
 	startPayload := commandArgsText(origMessage.Text)
 	isDonateLink := (startPayload == donateStartPayload)
+	boostChatID, isBoostLink := boostStartChatID(startPayload)
+	isPrivate := (origChat.Type == chatTypePrivate)
+	isBoostScreen := (isBoostLink == true) && (isPrivate == true)
 
 	if isDonateLink == true {
 		handleDonateCommand(origMessage, origChat, origUser)
 	}
 
-	if isDonateLink == false {
+	if isBoostScreen == true {
+		handleBoostStart(origMessage, origChat, origUser, boostChatID)
+	}
+
+	if (isDonateLink == false) && (isBoostScreen == false) {
 		handleStartCommand(origMessage, origChat, origUser)
 	}
 }

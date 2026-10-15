@@ -30,6 +30,7 @@ A Telegram bot that downloads and sends actual media files from social media lin
 | `/menu`, `/start`, `/help` | Main menu and usage guide (context-aware for private chats vs groups) |
 | `/stats` | Media statistics (today/week/month/year) |
 | `/mylimit` | Check your daily media limit |
+| `/boost` | Raise a group's limit of restricted posts with Telegram Stars (needs `STARS_SUPPORT_ENABLED=true`). In a group it links to the private chat's boost screen (`/start boost_<chat_id>`) with the same tiers as `/donate` (25 / 50 / 100 Stars for +10 / +25 / +60). The group's bonus downloads are shared by all members and used after its free monthly ones, before the poster's own; the group gets a notice. Refunds remove the group's unused ones |
 | `/info` | How the bot works: private chats vs groups, free vs restricted content, the default limits and why they exist (the same guide as `/start`, without the menu) |
 | `/donate` (alias `/support`) | Support the bot. With `STARS_SUPPORT_ENABLED=true`: Telegram Stars tier buttons first (25 / 50 / 100 Stars, thank-you of +10 / +25 / +60 bonus downloads of restricted Instagram posts, used after the monthly free ones) and the user's bonus balance; always: a card option (monobank jar, any card or Apple/Google Pay) and crypto options (NOWPayments + USDT ERC-20/TRC-20), which unlock nothing. Also the "💚 Support the bot" menu button |
 | `/report` | Report a bug or issue to the owner |

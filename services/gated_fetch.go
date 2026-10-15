@@ -3,6 +3,7 @@ package services
 import (
 	"errors"
 	"fmt"
+	"github.com/timoffmax/social-link-bot/config"
 	"log"
 	"strings"
 )
@@ -71,19 +72,20 @@ func (sd *SmartDownloader) fetchGatedWithQuota(instagramURL string, downloadErr 
 		denial, usage, err = ReserveGatedFetch(quotas)
 	}
 
-	isCreditUsed := false
-	creditsLeft := 0
-	isCreditEligible := (err == nil) && (userID > 0) && (IsCreditDenial(denial) == true)
+	credit := gatedCredit{}
+	isCreditEligible := (err == nil) && (IsCreditDenial(denial) == true)
 
 	if isCreditEligible == true {
-		isCreditUsed, creditsLeft, err = TakeGatedFetchCredit(userID)
+		credit, err = takeGatedCredit(chatID, userID, denial)
 	}
+
+	isCreditUsed := credit.IsUsed
 
 	// A bonus credit replaces the monthly counters: the denied reservation
 	// took nothing, so nothing must be refunded from them. Like unlimited
 	// scopes, credits skip the shared fetch cap; the dollar budget applies.
 	if isCreditUsed == true {
-		log.Printf("🎟️ [gated-fetch] user %d used a bonus credit (%d left)", userID, creditsLeft)
+		log.Printf("🎟️ [gated-fetch] chat %d, user %d used a bonus credit (group pool: %t, %d left)", chatID, userID, credit.IsGroup, credit.Left)
 		denial = GatedFetchAllowed
 		quotas = nil
 		usage = GatedFetchUsage{}
@@ -118,7 +120,7 @@ func (sd *SmartDownloader) fetchGatedWithQuota(instagramURL string, downloadErr 
 
 	// A paid-for credit goes back on any failure, budget refusal included.
 	if (fetchErr != nil) && (isCreditUsed == true) {
-		sd.returnGatedFetchCredit(userID)
+		sd.returnGatedCredit(credit, chatID, userID)
 	}
 
 	if err != nil {
@@ -135,7 +137,7 @@ func (sd *SmartDownloader) fetchGatedWithQuota(instagramURL string, downloadErr 
 	}
 
 	if (err == nil) && (len(result) > 0) && (isCreditUsed == true) {
-		result[0].Caption = appendGatedCreditNote(result[0].Caption, creditsLeft)
+		result[0].Caption = appendGatedCreditNote(result[0].Caption, credit)
 	}
 
 	return result, err
@@ -145,9 +147,78 @@ func (sd *SmartDownloader) fetchGatedWithQuota(instagramURL string, downloadErr 
 // posts are left this month; it ends the post's caption.
 const gatedQuotaNoteTemplate = "\n\n📊 Restricted posts left this month: %d of %d"
 
-// gatedCreditNoteTemplate tells a user who used a bonus credit how many are
-// left; it ends the post's caption instead of the monthly note.
-const gatedCreditNoteTemplate = "\n\n🎟️ Bonus downloads left: %d"
+// Credit notes end the post's caption instead of the monthly note: how many
+// of the poster's or the group's bonus downloads are left.
+const (
+	gatedCreditNoteTemplate      = "\n\n🎟️ Bonus downloads left: %d"
+	gatedGroupCreditNoteTemplate = "\n\n🚀 Group bonus downloads left: %d"
+)
+
+// gatedCredit is a bonus credit used for a fetch: from the group's pool or
+// the poster's, with the balance left.
+type gatedCredit struct {
+	IsUsed  bool
+	IsGroup bool
+	Left    int
+}
+
+// takeGatedCredit uses a bonus credit for a denied fetch. The group's pool
+// is used only when the group's own monthly cap is what ran out (so free
+// downloads always come first), then the poster's own; otherwise the
+// poster's own.
+func takeGatedCredit(chatID, userID int64, denial GatedFetchDenial) (gatedCredit, error) {
+	result := gatedCredit{}
+	var err error
+	isGroupCap := (denial == GatedFetchDeniedChatCap) && (chatID < 0)
+	isGlobalInGroup := (denial == GatedFetchDeniedGlobal) && (chatID < 0)
+
+	// The bot-wide cap is checked first, so a full one hides a group cap that
+	// is used up too: the group's pool applies then as well.
+	if isGlobalInGroup == true {
+		isGroupCap = isGroupCapUsedUp(chatID)
+	}
+
+	if isGroupCap == true {
+		result.IsUsed, result.Left, err = TakeGroupFetchCredit(chatID)
+		result.IsGroup = result.IsUsed
+	}
+
+	if (result.IsUsed == false) && (err == nil) && (userID > 0) {
+		result.IsUsed, result.Left, err = TakeGatedFetchCredit(userID)
+	}
+
+	return result, err
+}
+
+// isGroupCapUsedUp reports whether the group has used its own monthly cap
+// this month; an unlimited group or a failed read counts as no.
+func isGroupCapUsedUp(chatID int64) bool {
+	policy, policyErr := GetGatedFetchPolicy(GatedFetchScopeChat, chatID)
+	defaultCap := config.GetGatedFetchChatMonthlyCap()
+	limit := effectiveGatedFetchLimit(policy, defaultCap)
+	used, usageErr := GetGatedFetchUsage(GatedFetchScopeChat, chatID)
+	result := (policyErr == nil) && (usageErr == nil) && (limit > 0) && (used >= limit)
+
+	return result
+}
+
+// returnGatedCredit gives a used credit back to the one pool it came from,
+// logging a failure.
+func (sd *SmartDownloader) returnGatedCredit(credit gatedCredit, chatID, userID int64) {
+	var err error
+
+	if credit.IsGroup == true {
+		err = ReturnGroupFetchCredit(chatID)
+	}
+
+	if credit.IsGroup == false {
+		err = ReturnGatedFetchCredit(userID)
+	}
+
+	if err != nil {
+		log.Printf("⚠️ [gated-fetch] bonus credit return failed (chat %d, user %d, group pool %t): %v", chatID, userID, credit.IsGroup, err)
+	}
+}
 
 // IsCreditDenial reports whether a bonus credit may replace the denied
 // fetch: the user's allowance or the chat's cap is used up, or the shared
@@ -159,20 +230,17 @@ func IsCreditDenial(denial GatedFetchDenial) bool {
 }
 
 // appendGatedCreditNote adds the remaining bonus credits line to a caption.
-func appendGatedCreditNote(caption string, creditsLeft int) string {
-	note := fmt.Sprintf(gatedCreditNoteTemplate, creditsLeft)
+func appendGatedCreditNote(caption string, credit gatedCredit) string {
+	template := gatedCreditNoteTemplate
+
+	if credit.IsGroup == true {
+		template = gatedGroupCreditNoteTemplate
+	}
+
+	note := fmt.Sprintf(template, credit.Left)
 	result := strings.TrimSpace(caption + note)
 
 	return result
-}
-
-// returnGatedFetchCredit gives a used credit back, logging a failed return.
-func (sd *SmartDownloader) returnGatedFetchCredit(userID int64) {
-	err := ReturnGatedFetchCredit(userID)
-
-	if err != nil {
-		log.Printf("⚠️ [gated-fetch] bonus credit return failed for user %d: %v", userID, err)
-	}
 }
 
 // gatedQuotaNoteReserve is the caption space kept free for the note.

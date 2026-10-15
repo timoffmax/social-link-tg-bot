@@ -282,6 +282,12 @@ func processUpdate(upd *response.TgUpdate) {
 		return
 	}
 
+	// A group upgraded to a supergroup gets a new id: its paid bonus
+	// downloads and settings move with it.
+	if origMessage.MigrateToChatId != 0 {
+		moveUpgradedGroup(origChat.Id, int64(origMessage.MigrateToChatId))
+	}
+
 	if 0 == origUser.Id {
 		return
 	}
@@ -1961,6 +1967,8 @@ func handleBotCommand(origMessage *response.TgMessage, origChat *response.TgChat
 		// Refused above: the user was told only admins may use it.
 	case infoCommand:
 		handleInfoCommand(origMessage, origChat, origUser)
+	case boostCommand:
+		handleBoostCommand(origMessage, origChat, origUser)
 	case "/stats":
 		handleStatsCommand(origMessage, origChat, origUser)
 	case "/mylimit":
@@ -2045,7 +2053,7 @@ func handleStartCommand(origMessage *response.TgMessage, origChat *response.TgCh
 	menuText.WriteString("💡 <i>Tip: Just paste a link to get started!</i>")
 
 	// Create interactive keyboard with menu buttons
-	keyboard := createMainMenuKeyboard(isGroupChat, origUser.Id)
+	keyboard := createMainMenuKeyboard(origChat, origUser.Id)
 
 	helpMsg := payload.TgPlSendMessage{
 		ChatId:      origChat.Id,
@@ -3007,7 +3015,9 @@ func handleAdminChatsCommand(origMessage *response.TgMessage, origChat *response
 }
 
 // createMainMenuKeyboard creates the interactive main menu keyboard
-func createMainMenuKeyboard(isGroupChat bool, userID int) *api.TgInlineKeyboardMarkup {
+func createMainMenuKeyboard(chat *response.TgChat, userID int) *api.TgInlineKeyboardMarkup {
+	isGroupChat := (chat.Type != chatTypePrivate)
+
 	// First row - Today and Week stats
 	buttons := [][]api.TgInlineKeyboardButton{
 		{
@@ -3048,11 +3058,26 @@ func createMainMenuKeyboard(isGroupChat bool, userID int) *api.TgInlineKeyboardM
 		})
 	}
 
-	// Support and bug report row
-	buttons = append(buttons, []api.TgInlineKeyboardButton{
-		{Text: supportMenuButtonText, CallbackData: donateCommand},
-		{Text: reportMenuButtonText, CallbackData: reportCommand},
-	})
+	// Support and bug report row; in a group support links to the private
+	// chat, so the donate screen never appears in the group
+	supportButton := postSupportButton(chat)
+	reportButton := api.TgInlineKeyboardButton{Text: reportMenuButtonText, CallbackData: reportCommand}
+	supportRow := []api.TgInlineKeyboardButton{supportButton, reportButton}
+
+	// Without the bot's username a group can't get the private-chat link.
+	if (isGroupChat == true) && (botUsername == "") {
+		supportRow = []api.TgInlineKeyboardButton{reportButton}
+	}
+
+	buttons = append(buttons, supportRow)
+
+	// Group boost, while Stars support is on
+	boostButton, hasBoost := groupBoostButton(chat.Id)
+	isBoostShown := (isGroupChat == true) && (hasBoost == true) && (config.IsStarsSupportEnabled() == true)
+
+	if isBoostShown == true {
+		buttons = append(buttons, []api.TgInlineKeyboardButton{boostButton})
+	}
 
 	// Last row - Help (refresh menu)
 	buttons = append(buttons, []api.TgInlineKeyboardButton{
@@ -3109,6 +3134,8 @@ func dispatchCallbackQuery(callbackQuery *response.TgCallbackQuery) {
 		handleReportPostCallback(callbackQuery)
 	case isReportPromptCallback(callbackQuery.Data) == true:
 		handleReportPromptCallback(callbackQuery)
+	case isBoostTierCallback(callbackQuery.Data) == true:
+		handleBoostTierCallback(callbackQuery)
 	case isPostButtonToggleCallback(callbackQuery.Data) == true:
 		handlePostButtonToggleCallback(callbackQuery)
 	case strings.HasPrefix(callbackQuery.Data, "/help"):

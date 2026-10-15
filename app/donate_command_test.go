@@ -87,7 +87,7 @@ func TestSupportCommandIsAnAliasOfDonate(t *testing.T) {
 }
 
 func TestMainMenuOpensDonateWithTheSupportButton(t *testing.T) {
-	keyboard := createMainMenuKeyboard(false, 42)
+	keyboard := createMainMenuKeyboard(&response.TgChat{Id: 42, Type: chatTypePrivate}, 42)
 	isFound := false
 
 	for _, row := range keyboard.InlineKeyboard {

@@ -46,8 +46,10 @@ const (
 	starsPaymentsFailedText   = "⚠️ Payments unavailable: %s"
 	starsPaymentLineTemplate  = "%d. %d ⭐ from <code>%d</code> · %s · +%d bonus%s\n"
 	starsPaymentRefundedMark  = " · ↩️ refunded"
+	starsPaymentBoostMark     = " · 🚀 group <code>%d</code>"
 	starsRefundButtonTemplate = "↩️ Refund #%d · %d ⭐"
 	starsRefundAskTemplate    = "↩️ <b>Refund %d Stars to user <code>%d</code>?</b>\n\nPaid %s. The Stars go back to their Telegram balance, and the unused bonus downloads of this payment (up to %d) are removed."
+	starsRefundBoostAskText   = "\n\n🚀 This was a boost of group <code>%d</code>: the bonus downloads are removed from the group's shared pool, which may include ones other members paid for."
 	starsRefundConfirmText    = "✅ Yes, refund"
 	starsRefundNotFoundText   = "⚠️ This payment is no longer in the recent list."
 	starsRefundBusyText       = "⏳ This refund is already running."
@@ -119,6 +121,11 @@ func starsPaymentsText(payments []services.SupportPayment, err error) string {
 			refundedMark = starsPaymentRefundedMark
 		}
 
+		if payment.BoostChatID != 0 {
+			boostMark := fmt.Sprintf(starsPaymentBoostMark, payment.BoostChatID)
+			refundedMark = fmt.Sprintf("%s%s", boostMark, refundedMark)
+		}
+
 		line := fmt.Sprintf(starsPaymentLineTemplate, index+1, payment.Stars, payment.UserID, paidAt, payment.Credits, refundedMark)
 		text.WriteString(line)
 	}
@@ -188,6 +195,7 @@ func askStarsRefund(chatID int64, messageID int, key string) {
 	if isRefundable == true {
 		paidAt := payment.CreatedAt.UTC().Format(starsPaymentTimeLayout)
 		text = fmt.Sprintf(starsRefundAskTemplate, payment.Stars, payment.UserID, paidAt, payment.Credits)
+		text = refundAskWithBoost(text, payment)
 		callbackData := fmt.Sprintf("%s%s", starsRefundRunCallbackPref, key)
 		confirmButton := api.TgInlineKeyboardButton{Text: starsRefundConfirmText, CallbackData: callbackData}
 		keyboard.InlineKeyboard = [][]api.TgInlineKeyboardButton{{confirmButton, backButton}}
@@ -270,6 +278,18 @@ func refundCheckedStarsPayment(listed services.SupportPayment) string {
 	if err != nil {
 		detail := html.EscapeString(err.Error())
 		result = fmt.Sprintf(starsRefundFailedTemplate, detail)
+	}
+
+	return result
+}
+
+// refundAskWithBoost adds the shared-pool warning to a boost's confirmation.
+func refundAskWithBoost(text string, payment services.SupportPayment) string {
+	result := text
+
+	if payment.BoostChatID != 0 {
+		warning := fmt.Sprintf(starsRefundBoostAskText, payment.BoostChatID)
+		result = fmt.Sprintf("%s%s", text, warning)
 	}
 
 	return result

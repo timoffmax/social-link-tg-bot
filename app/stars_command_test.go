@@ -214,10 +214,15 @@ func TestSupportPaymentReplyText(t *testing.T) {
 
 func TestSupportGatedHintOnlyForCapDenialsWhenEnabled(t *testing.T) {
 	capDenials := []services.GatedFetchDenial{services.GatedFetchDeniedUserCap, services.GatedFetchDeniedChatCap, services.GatedFetchDeniedGlobal}
+	expectedCommands := map[services.GatedFetchDenial]string{
+		services.GatedFetchDeniedUserCap: "/donate",
+		services.GatedFetchDeniedChatCap: "/boost",
+		services.GatedFetchDeniedGlobal:  "/donate",
+	}
 
 	for _, denial := range capDenials {
-		if hint := supportGatedHint(denial, true); strings.Contains(hint, "/donate") == false {
-			t.Fatalf("%v: expected the /donate hint, got %q", denial, hint)
+		if hint := supportGatedHint(denial, true); strings.Contains(hint, expectedCommands[denial]) == false {
+			t.Fatalf("%v: expected the %s hint, got %q", denial, expectedCommands[denial], hint)
 		}
 
 		if hint := supportGatedHint(denial, false); hint != "" {

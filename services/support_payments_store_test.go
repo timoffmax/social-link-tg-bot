@@ -322,3 +322,177 @@ func TestListRecentSupportPaymentsReturnsNewestFirstWithRefunds(t *testing.T) {
 		t.Fatalf("expected the refund mark and creation time, got %+v", payments)
 	}
 }
+
+func recordTestBoost(t *testing.T, chargeID string, userID int64, chatID int64, stars int) {
+	tier, _ := FindSupportTier(stars)
+	payment := SupportPayment{ChargeID: chargeID, UserID: userID, ChatID: userID, Stars: stars, Credits: tier.Credits, Payload: BuildBoostPayload(tier, userID, chatID), BoostChatID: chatID}
+
+	if _, err := RecordSupportPayment(payment); err != nil {
+		t.Fatalf("record boost: %v", err)
+	}
+}
+
+func TestBoostCreditsTheGroupNotThePayer(t *testing.T) {
+	setupGatedFetchTestDB(t)
+	recordTestBoost(t, "boost-a", 211, -211, 50)
+
+	groupBalance, _ := GetGroupFetchCredits(-211)
+	userBalance, _ := GetGatedFetchCredits(211)
+	payment, isFound, _ := GetSupportPayment("boost-a")
+
+	if (groupBalance != 25) || (userBalance != 0) || (isFound == false) || (payment.BoostChatID != -211) {
+		t.Fatalf("expected the group credited, got group=%d user=%d payment=%+v", groupBalance, userBalance, payment)
+	}
+}
+
+func TestGroupBonusIsUsedBeforeTheSendersOwn(t *testing.T) {
+	setupGatedFetchTestDB(t)
+	t.Setenv("GATED_FETCH_CHAT_MONTHLY_CAP", "1")
+	recordTestPayment(t, "charge-own", 212, 25)
+	recordTestBoost(t, "boost-b", 213, -212, 25)
+	sd := &SmartDownloader{gated: succeedingGatedProvider{}}
+	gatedErr := &InstagramGatedError{Gate: InstagramGate{Restricted: true}}
+
+	sd.FetchGatedPost(gatedTestPostURL, gatedErr, -212, 212, false)
+	media, err := sd.FetchGatedPost(gatedTestPostURL, gatedErr, -212, 212, false)
+	groupBalance, _ := GetGroupFetchCredits(-212)
+	userBalance, _ := GetGatedFetchCredits(212)
+
+	if (err != nil) || (groupBalance != 9) || (userBalance != 10) {
+		t.Fatalf("expected the group's credit used first, got %v group=%d user=%d", err, groupBalance, userBalance)
+	}
+
+	if strings.Contains(media[0].Caption, "Group bonus downloads left: 9") == false {
+		t.Fatalf("expected the group note, got %q", media[0].Caption)
+	}
+}
+
+func TestRefundingABoostRemovesTheGroupsUnusedCredits(t *testing.T) {
+	setupGatedFetchTestDB(t)
+	recordTestBoost(t, "boost-c", 214, -214, 25)
+
+	refund, err := MarkSupportPaymentRefunded(214, "boost-c")
+	groupBalance, _ := GetGroupFetchCredits(-214)
+
+	if (err != nil) || (refund.CreditsRemoved != 10) || (refund.BoostChatID != -214) || (groupBalance != 0) {
+		t.Fatalf("expected the group's credits removed, got %+v %v group=%d", refund, err, groupBalance)
+	}
+}
+
+func TestBoostNeedsAGroupThatIsNotTurnedOff(t *testing.T) {
+	setupGatedFetchTestDB(t)
+
+	if CanUseGroupFetchCredits(-215) == false {
+		t.Fatalf("a group with the default cap can be boosted")
+	}
+
+	if err := SetGatedFetchEnabled(GatedFetchScopeChat, -215, false); err != nil {
+		t.Fatalf("off: %v", err)
+	}
+
+	if (CanUseGroupFetchCredits(-215) == true) || (CanUseGroupFetchCredits(215) == true) {
+		t.Fatalf("a group turned off, or a private chat, can't be boosted")
+	}
+}
+
+func TestSupportStatsCountGroupCredits(t *testing.T) {
+	setupGatedFetchTestDB(t)
+	recordTestPayment(t, "charge-s", 216, 25)
+	recordTestBoost(t, "boost-s", 217, -216, 25)
+
+	stats, err := GetSupportStats()
+
+	if (err != nil) || (stats.OutstandingCredits != 20) {
+		t.Fatalf("expected personal and group credits counted, got %+v %v", stats, err)
+	}
+}
+
+func TestFailedFetchReturnsAGroupCreditOnlyToTheGroup(t *testing.T) {
+	setupGatedFetchTestDB(t)
+	t.Setenv("GATED_FETCH_CHAT_MONTHLY_CAP", "1")
+	recordTestBoost(t, "boost-d", 218, -218, 25)
+	sd := &SmartDownloader{gated: succeedingGatedProvider{}}
+	gatedErr := &InstagramGatedError{Gate: InstagramGate{Restricted: true}}
+	sd.FetchGatedPost(gatedTestPostURL, gatedErr, -218, 219, false)
+	sd.gated = failingGatedProvider{}
+
+	sd.FetchGatedPost(gatedTestPostURL, gatedErr, -218, 219, false)
+
+	groupBalance, _ := GetGroupFetchCredits(-218)
+	userBalance, _ := GetGatedFetchCredits(219)
+
+	if (groupBalance != 10) || (userBalance != 0) {
+		t.Fatalf("expected the credit back in the group only, got group=%d user=%d", groupBalance, userBalance)
+	}
+}
+
+func TestGroupCreditsWaitForTheGroupsOwnCap(t *testing.T) {
+	setupGatedFetchTestDB(t)
+	t.Setenv("GATED_FETCH_GLOBAL_MONTHLY_CAP", "1")
+	recordTestBoost(t, "boost-e", 220, -220, 25)
+	sd := &SmartDownloader{gated: succeedingGatedProvider{}}
+	gatedErr := &InstagramGatedError{Gate: InstagramGate{Restricted: true}}
+
+	sd.FetchGatedPost(gatedTestPostURL, gatedErr, -221, 221, false)
+	_, err := sd.FetchGatedPost(gatedTestPostURL, gatedErr, -220, 222, false)
+	groupBalance, _ := GetGroupFetchCredits(-220)
+
+	if (err == nil) || (groupBalance != 10) {
+		t.Fatalf("the bot-wide cap must not spend group credits while the group has free ones, got %v group=%d", err, groupBalance)
+	}
+}
+
+func TestUnlimitedGroupsCantBeBoosted(t *testing.T) {
+	setupGatedFetchTestDB(t)
+
+	if err := SetGatedFetchMonthlyLimit(GatedFetchScopeChat, -223, sql.NullInt64{Int64: GatedFetchUnlimited, Valid: true}); err != nil {
+		t.Fatalf("unlimited: %v", err)
+	}
+
+	if CanUseGroupFetchCredits(-223) == true {
+		t.Fatalf("an unlimited group never uses credits, so it can't be boosted")
+	}
+}
+
+func TestMoveGroupCreditsToTheSupergroup(t *testing.T) {
+	setupGatedFetchTestDB(t)
+	recordTestBoost(t, "boost-f", 224, -224, 25)
+
+	if err := SetGatedFetchMonthlyLimit(GatedFetchScopeChat, -224, sql.NullInt64{Int64: 5, Valid: true}); err != nil {
+		t.Fatalf("policy: %v", err)
+	}
+
+	if err := MoveGroupCredits(-224, -1000224); err != nil {
+		t.Fatalf("move: %v", err)
+	}
+
+	oldBalance, _ := GetGroupFetchCredits(-224)
+	newBalance, _ := GetGroupFetchCredits(-1000224)
+	policy, _ := GetGatedFetchPolicy(GatedFetchScopeChat, -1000224)
+	refund, err := MarkSupportPaymentRefunded(224, "boost-f")
+
+	if (oldBalance != 0) || (newBalance != 10) || (policy.MonthlyLimit.Int64 != 5) {
+		t.Fatalf("expected credits and policy moved, got old=%d new=%d policy=%+v", oldBalance, newBalance, policy)
+	}
+
+	if (err != nil) || (refund.BoostChatID != -1000224) || (refund.CreditsRemoved != 10) {
+		t.Fatalf("a refund must find the moved credits, got %+v %v", refund, err)
+	}
+}
+
+func TestGroupCreditsApplyWhenBothCapsAreUsedUp(t *testing.T) {
+	setupGatedFetchTestDB(t)
+	t.Setenv("GATED_FETCH_GLOBAL_MONTHLY_CAP", "1")
+	t.Setenv("GATED_FETCH_CHAT_MONTHLY_CAP", "1")
+	recordTestBoost(t, "boost-g", 225, -225, 25)
+	sd := &SmartDownloader{gated: succeedingGatedProvider{}}
+	gatedErr := &InstagramGatedError{Gate: InstagramGate{Restricted: true}}
+
+	sd.FetchGatedPost(gatedTestPostURL, gatedErr, -225, 226, false)
+	_, err := sd.FetchGatedPost(gatedTestPostURL, gatedErr, -225, 227, false)
+	groupBalance, _ := GetGroupFetchCredits(-225)
+
+	if (err != nil) || (groupBalance != 9) {
+		t.Fatalf("a full bot-wide cap must not strand a used-up group's credits, got %v group=%d", err, groupBalance)
+	}
+}

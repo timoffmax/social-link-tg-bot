@@ -151,7 +151,7 @@ Instagram posts whose author limited them by age or region can't be downloaded r
 
 // startBonusStarsText adds bonus downloads to the restricted section while
 // Stars support is on.
-const startBonusStarsText = "\nUsed them all? Supporting the bot with Telegram Stars (/donate) adds bonus downloads for you."
+const startBonusStarsText = "\nUsed them all? Supporting the bot with Telegram Stars (/donate) adds bonus downloads for you, and anyone in a group can raise the group's limit for everyone with 🚀 /boost."
 
 // startGuideText returns the "how it works" part of /start: private chats,
 // groups, free and restricted content, with the default limits from the

@@ -37,11 +37,18 @@ var supportTiers = []SupportTier{
 // SupportPayloadPrefix starts the invoice payload of a support payment.
 const SupportPayloadPrefix = "support"
 
-// supportPayloadSeparator splits "support:<stars>:<user_id>".
+// BoostPayloadPrefix starts the invoice payload of a group boost.
+const BoostPayloadPrefix = "boost"
+
+// supportPayloadSeparator splits "support:<stars>:<user_id>" and
+// "boost:<stars>:<user_id>:<chat_id>".
 const supportPayloadSeparator = ":"
 
-// supportPayloadParts is the number of parts of a valid payload.
-const supportPayloadParts = 3
+// Part counts of valid payloads.
+const (
+	supportPayloadParts = 3
+	boostPayloadParts   = 4
+)
 
 // gatedFetchCreditUnit is the number of credits one restricted-post fetch uses.
 const gatedFetchCreditUnit = 1
@@ -56,10 +63,12 @@ var ErrSupportPayloadInvalid = errors.New("invalid support payload")
 // that charge id belongs to the user.
 var ErrSupportPaymentNotRefundable = errors.New("no unrefunded support payment with this charge id for this user")
 
-// SupportInvoice is a parsed support invoice payload.
+// SupportInvoice is a parsed support invoice payload; BoostChatID is the
+// group a boost credits (0 for personal support).
 type SupportInvoice struct {
-	Tier   SupportTier
-	UserID int64
+	Tier        SupportTier
+	UserID      int64
+	BoostChatID int64
 }
 
 // SupportPayment is one received support payment.
@@ -72,6 +81,8 @@ type SupportPayment struct {
 	Payload    string
 	RefundedAt sql.NullTime
 	CreatedAt  time.Time
+	// BoostChatID is the group a boost credited; 0 for personal support.
+	BoostChatID int64
 }
 
 // SupportPaymentRecord is the outcome of recording a payment: IsNew is false
@@ -81,10 +92,12 @@ type SupportPaymentRecord struct {
 	Balance int
 }
 
-// SupportRefund is the outcome of marking a payment refunded.
+// SupportRefund is the outcome of marking a payment refunded: the credits
+// removed from the payer, or from the boosted group (BoostChatID).
 type SupportRefund struct {
 	CreditsRemoved int
 	Balance        int
+	BoostChatID    int64
 }
 
 // sqlRowQueryer is implemented by both *sql.DB and *sql.Tx.
@@ -122,27 +135,45 @@ func BuildSupportPayload(tier SupportTier, userID int64) string {
 	return result
 }
 
-// ParseSupportPayload parses "support:<stars>:<user_id>" of a known tier.
+// BuildBoostPayload returns the invoice payload
+// "boost:<stars>:<user_id>:<chat_id>" of a group boost.
+func BuildBoostPayload(tier SupportTier, userID int64, chatID int64) string {
+	result := fmt.Sprintf("%s%s%d%s%d%s%d", BoostPayloadPrefix, supportPayloadSeparator, tier.Stars, supportPayloadSeparator, userID, supportPayloadSeparator, chatID)
+
+	return result
+}
+
+// ParseSupportPayload parses "support:<stars>:<user_id>" or a group boost
+// "boost:<stars>:<user_id>:<chat_id>" (a group id is negative) of a known
+// tier.
 func ParseSupportPayload(payload string) (SupportInvoice, error) {
 	result := SupportInvoice{}
 	err := fmt.Errorf("%w: %q", ErrSupportPayloadInvalid, payload)
 	parts := strings.Split(payload, supportPayloadSeparator)
-	isShaped := (len(parts) == supportPayloadParts) && (parts[0] == SupportPayloadPrefix)
+	isSupport := (len(parts) == supportPayloadParts) && (parts[0] == SupportPayloadPrefix)
+	isBoost := (len(parts) == boostPayloadParts) && (parts[0] == BoostPayloadPrefix)
 	stars := 0
 	userID := int64(0)
+	chatID := int64(0)
 	starsErr := ErrSupportPayloadInvalid
 	userErr := ErrSupportPayloadInvalid
+	var chatErr error
 
-	if isShaped == true {
+	if (isSupport == true) || (isBoost == true) {
 		stars, starsErr = strconv.Atoi(parts[1])
 		userID, userErr = strconv.ParseInt(parts[2], 10, 64)
 	}
 
+	if isBoost == true {
+		chatID, chatErr = strconv.ParseInt(parts[3], 10, 64)
+	}
+
 	tier, isKnown := FindSupportTier(stars)
-	isValid := (starsErr == nil) && (userErr == nil) && (isKnown == true) && (userID > 0)
+	isChatValid := (isBoost == false) || ((chatErr == nil) && (chatID < 0))
+	isValid := (starsErr == nil) && (userErr == nil) && (isKnown == true) && (userID > 0) && (isChatValid == true)
 
 	if isValid == true {
-		result = SupportInvoice{Tier: tier, UserID: userID}
+		result = SupportInvoice{Tier: tier, UserID: userID, BoostChatID: chatID}
 		err = nil
 	}
 
@@ -170,12 +201,14 @@ func RecordSupportPayment(payment SupportPayment) (SupportPaymentRecord, error) 
 		result.IsNew, err = insertSupportPayment(ctx, tx, payment)
 	}
 
+	pool, ownerID := paymentCreditPool(payment.UserID, payment.BoostChatID)
+
 	if (err == nil) && (result.IsNew == true) {
-		result.Balance, err = addGatedFetchCredits(ctx, tx, payment.UserID, payment.Credits)
+		result.Balance, err = pool.add(ctx, tx, ownerID, payment.Credits)
 	}
 
 	if (err == nil) && (result.IsNew == false) {
-		result.Balance, err = getGatedFetchCredits(ctx, tx, payment.UserID)
+		result.Balance, err = pool.get(ctx, tx, ownerID)
 	}
 
 	err = finishSupportTx(tx, err)
@@ -188,11 +221,11 @@ func insertSupportPayment(ctx context.Context, tx *sql.Tx, payment SupportPaymen
 	result := false
 	chargeID := ""
 	query := `
-		INSERT INTO support_payments (telegram_payment_charge_id, user_id, chat_id, stars, credits, payload)
-		VALUES ($1, $2, $3, $4, $5, $6)
+		INSERT INTO support_payments (telegram_payment_charge_id, user_id, chat_id, stars, credits, payload, boosted_chat_id)
+		VALUES ($1, $2, $3, $4, $5, $6, NULLIF($7, 0))
 		ON CONFLICT (telegram_payment_charge_id) DO NOTHING
 		RETURNING telegram_payment_charge_id`
-	row := tx.QueryRowContext(ctx, query, payment.ChargeID, payment.UserID, payment.ChatID, payment.Stars, payment.Credits, payment.Payload)
+	row := tx.QueryRowContext(ctx, query, payment.ChargeID, payment.UserID, payment.ChatID, payment.Stars, payment.Credits, payment.Payload, payment.BoostChatID)
 	err := row.Scan(&chargeID)
 
 	if errors.Is(err, sql.ErrNoRows) == true {
@@ -214,12 +247,12 @@ func GetSupportPayment(chargeID string) (SupportPayment, bool, error) {
 	db := GetDB()
 	err := errGatedFetchNoDatabase
 	query := `
-		SELECT telegram_payment_charge_id, user_id, chat_id, stars, credits, payload, refunded_at
+		SELECT telegram_payment_charge_id, user_id, chat_id, stars, credits, payload, refunded_at, COALESCE(boosted_chat_id, 0)
 		FROM support_payments WHERE telegram_payment_charge_id = $1`
 
 	if db != nil {
 		row := db.QueryRow(query, chargeID)
-		err = row.Scan(&result.ChargeID, &result.UserID, &result.ChatID, &result.Stars, &result.Credits, &result.Payload, &result.RefundedAt)
+		err = row.Scan(&result.ChargeID, &result.UserID, &result.ChatID, &result.Stars, &result.Credits, &result.Payload, &result.RefundedAt, &result.BoostChatID)
 	}
 
 	if err == nil {
@@ -235,7 +268,7 @@ func GetSupportPayment(chargeID string) (SupportPayment, bool, error) {
 
 // recentSupportPaymentsQuery lists payments newest first; a row without a
 // creation time (the column is nullable) sorts last as the Unix epoch.
-const recentSupportPaymentsQuery = `SELECT telegram_payment_charge_id, user_id, chat_id, stars, credits, payload, refunded_at, COALESCE(created_at, to_timestamp(0)) FROM support_payments ORDER BY created_at DESC NULLS LAST LIMIT $1`
+const recentSupportPaymentsQuery = `SELECT telegram_payment_charge_id, user_id, chat_id, stars, credits, payload, refunded_at, COALESCE(created_at, to_timestamp(0)), COALESCE(boosted_chat_id, 0) FROM support_payments ORDER BY created_at DESC NULLS LAST LIMIT $1`
 
 // ListRecentSupportPayments returns the newest payments first, at most
 // limit of them, refunded ones included.
@@ -269,7 +302,7 @@ func scanSupportPayments(rows *sql.Rows) ([]SupportPayment, error) {
 
 	for (err == nil) && (rows.Next() == true) {
 		payment := SupportPayment{}
-		err = rows.Scan(&payment.ChargeID, &payment.UserID, &payment.ChatID, &payment.Stars, &payment.Credits, &payment.Payload, &payment.RefundedAt, &payment.CreatedAt)
+		err = rows.Scan(&payment.ChargeID, &payment.UserID, &payment.ChatID, &payment.Stars, &payment.Credits, &payment.Payload, &payment.RefundedAt, &payment.CreatedAt, &payment.BoostChatID)
 
 		if err == nil {
 			result = append(result, payment)
@@ -302,12 +335,17 @@ func MarkSupportPaymentRefunded(userID int64, chargeID string) (SupportRefund, e
 		tx, err = db.BeginTx(ctx, nil)
 	}
 
-	if err == nil {
-		granted, err = markSupportPaymentRefunded(ctx, tx, userID, chargeID)
-	}
+	boostChatID := int64(0)
 
 	if err == nil {
-		result, err = removeGatedFetchCredits(ctx, tx, userID, granted)
+		granted, boostChatID, err = markSupportPaymentRefunded(ctx, tx, userID, chargeID)
+	}
+
+	pool, ownerID := paymentCreditPool(userID, boostChatID)
+
+	if err == nil {
+		result, err = pool.remove(ctx, tx, ownerID, granted)
+		result.BoostChatID = boostChatID
 	}
 
 	err = finishSupportTx(tx, err)
@@ -316,31 +354,87 @@ func MarkSupportPaymentRefunded(userID int64, chargeID string) (SupportRefund, e
 }
 
 // markSupportPaymentRefunded sets refunded_at and returns the payment's
-// granted credits.
-func markSupportPaymentRefunded(ctx context.Context, tx *sql.Tx, userID int64, chargeID string) (int, error) {
+// granted credits and the group it boosted (0 for personal support).
+func markSupportPaymentRefunded(ctx context.Context, tx *sql.Tx, userID int64, chargeID string) (int, int64, error) {
 	result := 0
+	boostChatID := int64(0)
 	query := `
 		UPDATE support_payments SET refunded_at = CURRENT_TIMESTAMP
 		WHERE telegram_payment_charge_id = $1 AND user_id = $2 AND refunded_at IS NULL
-		RETURNING credits`
+		RETURNING credits, COALESCE(boosted_chat_id, 0)`
 	row := tx.QueryRowContext(ctx, query, chargeID, userID)
-	err := row.Scan(&result)
+	err := row.Scan(&result, &boostChatID)
 
 	if errors.Is(err, sql.ErrNoRows) == true {
 		err = ErrSupportPaymentNotRefundable
 	}
 
+	return result, boostChatID, err
+}
+
+// creditPool is a balance table of bonus restricted-post credits: one for
+// users, one for groups. Its names are constants, never user input.
+type creditPool struct {
+	table     string
+	keyColumn string
+}
+
+// Credit pools of users and groups.
+var (
+	userCreditPool  = creditPool{table: "gated_fetch_credits", keyColumn: "user_id"}
+	groupCreditPool = creditPool{table: "gated_fetch_chat_credits", keyColumn: "chat_id"}
+)
+
+// paymentCreditPool returns the pool and owner a payment credits: the
+// boosted group, or the payer.
+func paymentCreditPool(userID int64, boostChatID int64) (creditPool, int64) {
+	result := userCreditPool
+	ownerID := userID
+
+	if boostChatID != 0 {
+		result = groupCreditPool
+		ownerID = boostChatID
+	}
+
+	return result, ownerID
+}
+
+// get reads a balance; an owner without a row has none.
+func (pool creditPool) get(ctx context.Context, queryer sqlRowQueryer, ownerID int64) (int, error) {
+	result := 0
+	query := fmt.Sprintf(`SELECT credits FROM %s WHERE %s = $1`, pool.table, pool.keyColumn)
+	row := queryer.QueryRowContext(ctx, query, ownerID)
+	err := row.Scan(&result)
+
+	if errors.Is(err, sql.ErrNoRows) == true {
+		err = nil
+	}
+
 	return result, err
 }
 
-// removeGatedFetchCredits takes up to amount credits from the user, locking
-// the row so a concurrent use or top-up isn't lost.
-func removeGatedFetchCredits(ctx context.Context, tx *sql.Tx, userID int64, amount int) (SupportRefund, error) {
+// add atomically adds credits and returns the new balance.
+func (pool creditPool) add(ctx context.Context, queryer sqlRowQueryer, ownerID int64, amount int) (int, error) {
+	result := 0
+	query := fmt.Sprintf(`
+		INSERT INTO %s (%s, credits)
+		VALUES ($1, $2)
+		ON CONFLICT (%s) DO UPDATE SET credits = %s.credits + EXCLUDED.credits
+		RETURNING credits`, pool.table, pool.keyColumn, pool.keyColumn, pool.table)
+	row := queryer.QueryRowContext(ctx, query, ownerID, amount)
+	err := row.Scan(&result)
+
+	return result, err
+}
+
+// remove takes up to amount credits, locking the row so a concurrent use or
+// top-up isn't lost.
+func (pool creditPool) remove(ctx context.Context, tx *sql.Tx, ownerID int64, amount int) (SupportRefund, error) {
 	result := SupportRefund{}
-	selectQuery := `SELECT credits FROM gated_fetch_credits WHERE user_id = $1 FOR UPDATE`
-	updateQuery := `UPDATE gated_fetch_credits SET credits = credits - $2 WHERE user_id = $1 RETURNING credits`
+	selectQuery := fmt.Sprintf(`SELECT credits FROM %s WHERE %s = $1 FOR UPDATE`, pool.table, pool.keyColumn)
+	updateQuery := fmt.Sprintf(`UPDATE %s SET credits = credits - $2 WHERE %s = $1 RETURNING credits`, pool.table, pool.keyColumn)
 	balance := 0
-	row := tx.QueryRowContext(ctx, selectQuery, userID)
+	row := tx.QueryRowContext(ctx, selectQuery, ownerID)
 	err := row.Scan(&balance)
 
 	if errors.Is(err, sql.ErrNoRows) == true {
@@ -354,7 +448,7 @@ func removeGatedFetchCredits(ctx context.Context, tx *sql.Tx, userID int64, amou
 	}
 
 	if (err == nil) && (result.CreditsRemoved > 0) {
-		updateRow := tx.QueryRowContext(ctx, updateQuery, userID, result.CreditsRemoved)
+		updateRow := tx.QueryRowContext(ctx, updateQuery, ownerID, result.CreditsRemoved)
 		err = updateRow.Scan(&balance)
 	}
 
@@ -363,69 +457,24 @@ func removeGatedFetchCredits(ctx context.Context, tx *sql.Tx, userID int64, amou
 	return result, err
 }
 
-// GetGatedFetchCredits returns the user's bonus credit balance.
-func GetGatedFetchCredits(userID int64) (int, error) {
-	result := 0
-	db := GetDB()
-	err := errGatedFetchNoDatabase
-	background := context.Background()
-	ctx, cancel := context.WithTimeout(background, supportStoreTimeout)
-
-	defer cancel()
-
-	if db != nil {
-		result, err = getGatedFetchCredits(ctx, db, userID)
-	}
-
-	return result, err
-}
-
-// getGatedFetchCredits reads a balance; a user without a row has none.
-func getGatedFetchCredits(ctx context.Context, queryer sqlRowQueryer, userID int64) (int, error) {
-	result := 0
-	query := `SELECT credits FROM gated_fetch_credits WHERE user_id = $1`
-	row := queryer.QueryRowContext(ctx, query, userID)
-	err := row.Scan(&result)
-
-	if errors.Is(err, sql.ErrNoRows) == true {
-		err = nil
-	}
-
-	return result, err
-}
-
-// addGatedFetchCredits atomically adds credits and returns the new balance.
-func addGatedFetchCredits(ctx context.Context, queryer sqlRowQueryer, userID int64, amount int) (int, error) {
-	result := 0
-	query := `
-		INSERT INTO gated_fetch_credits (user_id, credits)
-		VALUES ($1, $2)
-		ON CONFLICT (user_id) DO UPDATE SET credits = gated_fetch_credits.credits + EXCLUDED.credits
-		RETURNING credits`
-	row := queryer.QueryRowContext(ctx, query, userID, amount)
-	err := row.Scan(&result)
-
-	return result, err
-}
-
-// TakeGatedFetchCredit atomically uses one of the user's credits. It returns
-// false when the user has none, and the balance left after taking one.
-func TakeGatedFetchCredit(userID int64) (bool, int, error) {
+// take atomically uses one credit. It returns false when there is none, and
+// the balance left after taking one.
+func (pool creditPool) take(ownerID int64) (bool, int, error) {
 	result := false
 	remaining := 0
 	db := GetDB()
 	err := errGatedFetchNoDatabase
-	query := `
-		UPDATE gated_fetch_credits SET credits = credits - $2
-		WHERE user_id = $1 AND credits >= $2
-		RETURNING credits`
+	query := fmt.Sprintf(`
+		UPDATE %s SET credits = credits - $2
+		WHERE %s = $1 AND credits >= $2
+		RETURNING credits`, pool.table, pool.keyColumn)
 	background := context.Background()
 	ctx, cancel := context.WithTimeout(background, supportStoreTimeout)
 
 	defer cancel()
 
 	if db != nil {
-		row := db.QueryRowContext(ctx, query, userID, gatedFetchCreditUnit)
+		row := db.QueryRowContext(ctx, query, ownerID, gatedFetchCreditUnit)
 		err = row.Scan(&remaining)
 	}
 
@@ -440,8 +489,8 @@ func TakeGatedFetchCredit(userID int64) (bool, int, error) {
 	return result, remaining, err
 }
 
-// ReturnGatedFetchCredit gives back a credit taken for a fetch that failed.
-func ReturnGatedFetchCredit(userID int64) error {
+// giveBack returns a credit taken for a fetch that failed.
+func (pool creditPool) giveBack(ownerID int64) error {
 	db := GetDB()
 	err := errGatedFetchNoDatabase
 	background := context.Background()
@@ -450,8 +499,69 @@ func ReturnGatedFetchCredit(userID int64) error {
 	defer cancel()
 
 	if db != nil {
-		_, err = addGatedFetchCredits(ctx, db, userID, gatedFetchCreditUnit)
+		_, err = pool.add(ctx, db, ownerID, gatedFetchCreditUnit)
 	}
+
+	return err
+}
+
+// balance reads an owner's balance outside a transaction.
+func (pool creditPool) balance(ownerID int64) (int, error) {
+	result := 0
+	db := GetDB()
+	err := errGatedFetchNoDatabase
+	background := context.Background()
+	ctx, cancel := context.WithTimeout(background, supportStoreTimeout)
+
+	defer cancel()
+
+	if db != nil {
+		result, err = pool.get(ctx, db, ownerID)
+	}
+
+	return result, err
+}
+
+// GetGatedFetchCredits returns the user's bonus credit balance.
+func GetGatedFetchCredits(userID int64) (int, error) {
+	result, err := userCreditPool.balance(userID)
+
+	return result, err
+}
+
+// TakeGatedFetchCredit atomically uses one of the user's credits. It returns
+// false when the user has none, and the balance left after taking one.
+func TakeGatedFetchCredit(userID int64) (bool, int, error) {
+	isTaken, remaining, err := userCreditPool.take(userID)
+
+	return isTaken, remaining, err
+}
+
+// ReturnGatedFetchCredit gives back a credit taken for a fetch that failed.
+func ReturnGatedFetchCredit(userID int64) error {
+	err := userCreditPool.giveBack(userID)
+
+	return err
+}
+
+// GetGroupFetchCredits returns the group's bonus credit balance.
+func GetGroupFetchCredits(chatID int64) (int, error) {
+	result, err := groupCreditPool.balance(chatID)
+
+	return result, err
+}
+
+// TakeGroupFetchCredit atomically uses one of the group's credits.
+func TakeGroupFetchCredit(chatID int64) (bool, int, error) {
+	isTaken, remaining, err := groupCreditPool.take(chatID)
+
+	return isTaken, remaining, err
+}
+
+// ReturnGroupFetchCredit gives back a group credit taken for a fetch that
+// failed.
+func ReturnGroupFetchCredit(chatID int64) error {
+	err := groupCreditPool.giveBack(chatID)
 
 	return err
 }
@@ -475,9 +585,92 @@ func finishSupportTx(tx *sql.Tx, err error) error {
 // which runs within Telegram's 10-second pre-checkout deadline.
 const creditsCheckTimeout = 3 * time.Second
 
+// CanUseGroupFetchCredits reports whether bonus credits bought for a group
+// could ever be used: the paid fetch is configured, and the group isn't
+// turned off (an explicit off, or a monthly cap of 0) or unlimited (it never
+// runs out, so credits would never apply). Boosts are declined otherwise.
+func CanUseGroupFetchCredits(chatID int64) bool {
+	isConfigured := (IsGatedFetchConfigured() == true) && (IsDBInitialized() == true) && (chatID < 0)
+	result := false
+
+	if isConfigured == true {
+		result = isGroupOpenForCredits(chatID)
+	}
+
+	return result
+}
+
+// isGroupOpenForCredits reports whether the group's policy lets credits be
+// used; a failed read counts as no.
+func isGroupOpenForCredits(chatID int64) bool {
+	background := context.Background()
+	ctx, cancel := context.WithTimeout(background, creditsCheckTimeout)
+
+	defer cancel()
+
+	policy, err := getGatedFetchPolicy(ctx, GatedFetchScopeChat, chatID)
+	defaultCap := config.GetGatedFetchChatMonthlyCap()
+	limit := effectiveGatedFetchLimit(policy, defaultCap)
+	result := (err == nil) && (policy.Enabled == true) && (limit > 0)
+
+	return result
+}
+
+// MoveGroupCredits moves a group's bonus credits, its paid-fetch policy and
+// its boosts to the new id Telegram gives it when it becomes a supergroup,
+// so paid credits and the owner's settings aren't left on the old id.
+func MoveGroupCredits(oldChatID int64, newChatID int64) error {
+	db := GetDB()
+	err := errGatedFetchNoDatabase
+	var tx *sql.Tx
+	background := context.Background()
+	ctx, cancel := context.WithTimeout(background, supportStoreTimeout)
+
+	defer cancel()
+
+	if db != nil {
+		tx, err = db.BeginTx(ctx, nil)
+	}
+
+	if err == nil {
+		err = moveGroupRows(ctx, tx, oldChatID, newChatID)
+	}
+
+	err = finishSupportTx(tx, err)
+
+	return err
+}
+
+// groupMoveStatements move a group's rows to its new id: credits are added
+// to any the new id has, a policy is copied unless the new id has one, and
+// boosts point at the new id for refunds.
+var groupMoveStatements = []string{
+	`INSERT INTO gated_fetch_chat_credits (chat_id, credits)
+		SELECT $2, credits FROM gated_fetch_chat_credits WHERE chat_id = $1
+		ON CONFLICT (chat_id) DO UPDATE SET credits = gated_fetch_chat_credits.credits + EXCLUDED.credits`,
+	`DELETE FROM gated_fetch_chat_credits WHERE chat_id = $1 AND chat_id <> $2`,
+	`INSERT INTO gated_fetch_policies (scope, scope_id, enabled, monthly_limit)
+		SELECT scope, $2, enabled, monthly_limit FROM gated_fetch_policies WHERE scope = 'chat' AND scope_id = $1
+		ON CONFLICT (scope, scope_id) DO NOTHING`,
+	`UPDATE support_payments SET boosted_chat_id = $2 WHERE boosted_chat_id = $1`,
+}
+
+// moveGroupRows runs the move statements in the transaction.
+func moveGroupRows(ctx context.Context, tx *sql.Tx, oldChatID int64, newChatID int64) error {
+	var err error
+
+	for _, statement := range groupMoveStatements {
+		if err == nil {
+			_, err = tx.ExecContext(ctx, statement, oldChatID, newChatID)
+		}
+	}
+
+	return err
+}
+
 // CanUseGatedFetchCredits reports whether bonus credits bought by a user could
 // ever be used: the paid fetch is configured (Apify token, a bot-wide cap
-// above 0, a database) and the user's effective allowance (the owner's
+// that isn't 0, a database) and the user's effective allowance (the owner's
 // override, else the default) isn't 0, which blocks credits too. Credits work
 // in the user's private chat, so a group turned off doesn't make them
 // unusable. Payments are declined otherwise, so nobody pays for unusable
