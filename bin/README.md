@@ -6,12 +6,8 @@ Scripts for deploying and operating the Social Link Telegram Bot.
 
 | Script | Purpose |
 |---|---|
-| `deploy` | Build locally, upload, and restart the service on the server |
+| `deploy` | Pull the latest code on the server, build it there, and restart the service |
 | `deploy.conf.sample` | Template for deployment settings — copy to `deploy.conf` (gitignored) |
-| `manage-bot` | Server-side management: `status` / `logs` / `follow` / `restart` |
-| `extract-firefox-cookies` | Extract platform cookies from the server's Firefox profile |
-| `quick-vnc-setup` | Set up a VNC desktop on the server for cookie extraction |
-| `fix-vnc-fonts` | Fix font rendering in the VNC session |
 | `install-chrome` | Install Chrome/Chromium for headless-browser extraction |
 | `install-ffmpeg` | Install a static ffmpeg build without system dependencies |
 
@@ -21,21 +17,20 @@ Scripts for deploying and operating the Social Link Telegram Bot.
 cp bin/deploy.conf.sample bin/deploy.conf
 # edit deploy.conf: SERVER_IP, SERVER_USER, SERVER_SSH_KEY, REMOTE_DIR, SERVICE_NAME
 
-./bin/deploy                 # full deploy: build, upload, restart
-./bin/deploy --restart-only  # restart without rebuilding
+./bin/deploy                 # full deploy: git pull, build on the server, restart
+./bin/deploy --restart-only  # restart without pulling or rebuilding
 ```
+
+`bin/deploy` builds nothing locally: over SSH it runs `git pull origin master` in `REMOTE_DIR`, builds with `/usr/local/go/bin/go build` there (avoids GLIBC mismatches), restarts `SERVICE_NAME` with `sudo systemctl`, then prints the service status and the last log lines. Push your commits first.
 
 ## Server Management
 
-```bash
-ssh -i ~/.ssh/your_deploy_key deploy-user@your-server
+All targets read `bin/deploy.conf`:
 
-# On the server:
-cd /path/to/bot
-./manage-bot status    # Check if the bot is running
-./manage-bot logs      # Show recent logs
-./manage-bot follow    # Follow logs in real-time
-./manage-bot restart   # Restart the bot
+```bash
+make status                  # systemd status of the bot service
+make logs                    # follow the bot log in real time
+./bin/deploy --restart-only  # restart the bot
 ```
 
 ## One-time Server Setup
@@ -48,21 +43,9 @@ cd /path/to/bot
    sudo chmod 440 /etc/sudoers.d/social-link-bot
    ```
 
-3. **Enable the systemd service:**
+3. **Clone the repository into `REMOTE_DIR`** as the service user, install Go at `/usr/local/go`, and create the `.env` there.
+
+4. **Enable the systemd service:**
    ```bash
    sudo systemctl enable social-link-bot
    ```
-
-## Cookie Extraction (server-IP authenticated)
-
-Many platforms bind cookies to the IP that created them, so extract cookies from the server itself:
-
-```bash
-./bin/quick-vnc-setup                      # 1. VNC desktop on the server
-ssh -L 5901:localhost:5901 user@server     # 2. Tunnel from your machine
-# 3. Connect a VNC client to localhost:5901, log in to platforms in Firefox
-./bin/extract-firefox-cookies              # 4. Extract all platforms
-./bin/extract-firefox-cookies youtube      #    ...or a single platform
-```
-
-Cookie files are written to `cookies/<platform>_cookies.txt` and are gitignored.

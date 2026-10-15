@@ -50,10 +50,6 @@ docker stop gated-fetch-test-pg
 
 ## Anti-Blocking Configuration
 
-### Cookies (recommended)
-
-Export cookies from a logged-in browser session into Netscape format files named `<platform>_cookies.txt` (see `*_cookies.txt.example` templates). For production, cookies must be extracted from the server's own IP — see the Cookies section in [README.md](README.md).
-
 ### Proxies (optional fallback)
 
 ```bash
@@ -78,7 +74,6 @@ ENABLE_PROXIES="true"   # global kill switch
 ├── migrations/      # PostgreSQL schema migrations
 ├── scripts/         # Auxiliary helper scripts
 ├── bin/             # Deployment and server tooling
-├── cookies/         # Cookie files (gitignored)
 ├── .env             # Local environment (gitignored)
 └── Makefile         # Development commands
 ```
@@ -97,4 +92,4 @@ ENABLE_PROXIES="true"   # global kill switch
 
 **A single platform failing**
 - Platforms depend on third-party fallback services; check the hourly health-monitor alerts (sent to `ADMIN_USER_ID`)
-- Refresh that platform's cookies if logs show authentication errors
+- Run the failing link through yt-dlp by hand to see the platform's error: `yt-dlp --dump-json <url>`

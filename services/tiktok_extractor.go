@@ -43,28 +43,16 @@ type tikwmResponse struct {
 }
 
 type TikTokExtractor struct {
-	client      *http.Client
-	cookiesPath string
-	tempDir     string
-	workingDir  string
-}
-
-type TikTokMediaItem struct {
-	URL  string `json:"url"`
-	Type string `json:"type"` // "photo" or "video"
-}
-
-type TikTokPostData struct {
-	Text  string            `json:"text"`
-	Media []TikTokMediaItem `json:"media"`
+	client     *http.Client
+	tempDir    string
+	workingDir string
 }
 
 func NewTikTokExtractor(workingDir, tempDir string) *TikTokExtractor {
 	return &TikTokExtractor{
-		client:      SharedHTTPClient,
-		cookiesPath: filepath.Join(workingDir, "tiktok_cookies.txt"),
-		tempDir:     tempDir,
-		workingDir:  workingDir,
+		client:     SharedHTTPClient,
+		tempDir:    tempDir,
+		workingDir: workingDir,
 	}
 }
 
@@ -175,9 +163,6 @@ func (te *TikTokExtractor) extractViaDirectScraping(tiktokURL string, postID str
 		return nil, fmt.Errorf("failed to create TikTok request: %v", err)
 	}
 
-	// Add cookies if available
-	te.addCookiesToRequest(req)
-
 	// Add headers to mimic a real mobile browser
 	req.Header.Set("User-Agent", "Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.0 Mobile/15E148 Safari/604.1")
 	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8")
@@ -262,9 +247,6 @@ func (te *TikTokExtractor) extractViaSlideshowAPI(tiktokURL string, postID strin
 		req.Header.Set("User-Agent", "Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X) AppleWebKit/605.1.15")
 		req.Header.Set("Accept", "application/json, text/plain, */*")
 		req.Header.Set("Referer", tiktokURL)
-
-		// Add cookies if available
-		te.addCookiesToRequest(req)
 
 		resp, err := te.client.Do(req)
 		if err != nil {
@@ -1587,60 +1569,6 @@ func (te *TikTokExtractor) getFileExtension(rawURL, contentType string) string {
 	default:
 		return ".bin"
 	}
-}
-
-func (te *TikTokExtractor) addCookiesToRequest(req *http.Request) {
-	// Read cookies file if it exists
-	if _, err := os.Stat(te.cookiesPath); os.IsNotExist(err) {
-		log.Printf("⚠️ No TikTok cookies file found at %s", te.cookiesPath)
-		return
-	}
-
-	cookiesData, err := os.ReadFile(te.cookiesPath)
-	if err != nil {
-		log.Printf("⚠️ Failed to read TikTok cookies file: %v", err)
-		return
-	}
-
-	// Parse Netscape cookie format and add to request
-	lines := strings.Split(string(cookiesData), "\n")
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-
-		parts := strings.Split(line, "\t")
-		if len(parts) >= 7 {
-			domain := parts[0]
-			name := parts[5]
-			value := parts[6]
-
-			// Only add cookies for tiktok domains
-			if strings.Contains(domain, "tiktok.com") {
-				// Clean up cookie value
-				value = strings.Trim(value, `"`)
-				value = strings.ReplaceAll(value, `\"`, `"`)
-				value = strings.ReplaceAll(value, `\n`, ``)
-				value = strings.ReplaceAll(value, `\r`, ``)
-				value = strings.ReplaceAll(value, `\t`, ``)
-
-				// Skip cookies with invalid characters
-				if strings.ContainsAny(value, "\n\r\t\"") {
-					log.Printf("⚠️ Skipping invalid TikTok cookie %s", name)
-					continue
-				}
-
-				cookie := &http.Cookie{
-					Name:  name,
-					Value: value,
-				}
-				req.AddCookie(cookie)
-			}
-		}
-	}
-
-	log.Printf("🍪 Added TikTok cookies to request")
 }
 
 // extractDisplayNameFromHTML extracts display name from TikTok HTML using similar patterns to universal browser extractor

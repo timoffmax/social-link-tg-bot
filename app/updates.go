@@ -997,29 +997,6 @@ func sendMediaFile(mediaInfo *services.MediaInfo, origChat *response.TgChat, ori
 	return nil
 }
 
-func sendFixedLinkFallback(originalUrl string, origChat *response.TgChat) {
-	fixedUrl := getFixedUrl(originalUrl)
-	if fixedUrl != "" {
-		log.Printf("Sending fixed link fallback: %s", fixedUrl)
-		fallbackMsg := payload.TgPlSendMessage{
-			ChatId:    origChat.Id,
-			ParseMode: payload.ParseModeHTML,
-			Text:      fmt.Sprintf("⚠️ Media upload failed, here's a fixed link:\n%s", fixedUrl),
-		}
-		message.NewSendMessage(fallbackMsg)
-	} else {
-		// If no fixed link available, send error
-		errorText := getErrorMessage(originalUrl)
-		if errorText != "" {
-			errorMsg := payload.TgPlSendMessage{
-				ChatId: origChat.Id,
-				Text:   errorText,
-			}
-			message.NewSendMessage(errorMsg)
-		}
-	}
-}
-
 func getFixedUrl(url string) string {
 	result := ""
 	isThreads := services.IsThreadsURL(url)
@@ -1177,27 +1154,6 @@ func getErrorMessage(url string) string {
 	}
 
 	return fmt.Sprintf("❌ Failed to download media from %s", url)
-}
-
-func tryGetTweetText(url string, downloader *services.YtDlpDownloader) string {
-	// Try to get tweet info using yt-dlp JSON dump
-	info, err := downloader.GetMediaInfo(url)
-	if err != nil {
-		log.Printf("Failed to get tweet info: %v", err)
-		return ""
-	}
-
-	// Return the description (tweet text) if available
-	if info.Description != "" {
-		return info.Description
-	}
-
-	// Fallback to title if description is empty
-	if info.Title != "" {
-		return info.Title
-	}
-
-	return ""
 }
 
 // isUpdateTooOld checks if an update is older than 1 minute
@@ -1407,57 +1363,6 @@ func sendThreadTextMessage(text string, origChat *response.TgChat, origMessage *
 	return nil
 }
 
-// cleanURLParams removes tracking parameters and UTM tags from URLs
-func cleanURLParams(originalURL string) string {
-	parsedURL, err := url.Parse(originalURL)
-	if err != nil {
-		// If parsing fails, return original URL
-		return originalURL
-	}
-
-	// List of common tracking parameters to remove
-	trackingParams := map[string]bool{
-		// UTM parameters
-		"utm_source":   true,
-		"utm_medium":   true,
-		"utm_campaign": true,
-		"utm_term":     true,
-		"utm_content":  true,
-		"utm_id":       true,
-
-		// Social media tracking
-		"t":       true, // Twitter sharing parameter
-		"s":       true, // Twitter sharing parameter
-		"fbclid":  true, // Facebook click ID
-		"gclid":   true, // Google click ID
-		"msclkid": true, // Microsoft click ID
-		"igshid":  true, // Instagram share ID
-
-		// General tracking
-		"ref":      true,
-		"ref_src":  true,
-		"source":   true,
-		"campaign": true,
-		"_hsenc":   true, // HubSpot
-		"_hsmi":    true, // HubSpot
-		"mc_cid":   true, // MailChimp
-		"mc_eid":   true, // MailChimp
-	}
-
-	// Get query parameters
-	values := parsedURL.Query()
-
-	// Remove tracking parameters
-	for param := range trackingParams {
-		values.Del(param)
-	}
-
-	// Set cleaned query parameters
-	parsedURL.RawQuery = values.Encode()
-
-	return parsedURL.String()
-}
-
 // discoverTwitterThreads automatically finds follow-up tweets by fetching the original tweet's page
 func discoverTwitterThreads(urls []string, downloader *services.SmartDownloader) []TwitterThread {
 	// Regex to extract Twitter/X URLs
@@ -1547,7 +1452,6 @@ func fetchTwitterThreadWithBrowser(tweetURL, authorUsername, originalTweetID str
 	log.Printf("🌐 [AUTO-THREAD] Using browser rendering for thread discovery")
 
 	// Use the existing CLI browser extractor that's already integrated
-	// Get working directory for proper cookie path resolution
 	workingDir := downloader.GetWorkingDir()
 	tempDir := downloader.GetTempDir()
 	cliBrowser := services.NewCliBrowserExtractor(workingDir, tempDir)

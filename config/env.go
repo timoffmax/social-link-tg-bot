@@ -31,31 +31,6 @@ func GetTgBotToken() string {
 	return os.Getenv(tgBotTokenKey)
 }
 
-// Social media authentication configuration
-func GetInstagramUsername() string {
-	return os.Getenv("INSTAGRAM_USERNAME")
-}
-
-func GetInstagramPassword() string {
-	return os.Getenv("INSTAGRAM_PASSWORD")
-}
-
-func GetTikTokUsername() string {
-	return os.Getenv("TIKTOK_USERNAME")
-}
-
-func GetTikTokPassword() string {
-	return os.Getenv("TIKTOK_PASSWORD")
-}
-
-func GetTwitterUsername() string {
-	return os.Getenv("TWITTER_USERNAME")
-}
-
-func GetTwitterPassword() string {
-	return os.Getenv("TWITTER_PASSWORD")
-}
-
 // Proxy configuration with global and per-platform disable options
 func IsProxyEnabled() bool {
 	return getBoolEnv("ENABLE_PROXIES", true)
@@ -75,8 +50,8 @@ func IsProxyEnabledForPlatform(platform string) bool {
 		return getBoolEnv("ENABLE_TWITTER_PROXY", true)
 	case "tiktok":
 		return getBoolEnv("ENABLE_TIKTOK_PROXY", true)
-	case "instagram":
-		return getBoolEnv("ENABLE_INSTAGRAM_PROXY", true)
+	case "9gag":
+		return getBoolEnv("ENABLE_9GAG_PROXY", true)
 	case "facebook":
 		return getBoolEnv("ENABLE_FACEBOOK_PROXY", true)
 	case "reddit":
@@ -87,7 +62,7 @@ func IsProxyEnabledForPlatform(platform string) bool {
 }
 
 // Unified proxy configuration for all platforms except YouTube
-// YouTube uses direct connection with server-IP authenticated cookies
+// YouTube uses a direct connection unless ENABLE_YOUTUBE_PROXY is set
 func GetYtDlpProxies() []string {
 	proxiesStr := os.Getenv("YTDLP_PROXIES")
 	if proxiesStr == "" {
@@ -150,28 +125,6 @@ func IsThreadsEnabled() bool {
 	result := getBoolEnv("ENABLE_THREADS", true)
 
 	return result
-}
-
-// Cookie usage configuration per platform
-func IsCookiesEnabledForPlatform(platform string) bool {
-	switch platform {
-	case "youtube":
-		return getBoolEnv("ENABLE_YOUTUBE_COOKIES", true)
-	case "twitter":
-		return getBoolEnv("ENABLE_TWITTER_COOKIES", true)
-	case "tiktok":
-		return getBoolEnv("ENABLE_TIKTOK_COOKIES", true)
-	case "instagram":
-		return getBoolEnv("ENABLE_INSTAGRAM_COOKIES", false) // Default to false for Instagram
-	case "facebook":
-		return getBoolEnv("ENABLE_FACEBOOK_COOKIES", true)
-	case "reddit":
-		return getBoolEnv("ENABLE_REDDIT_COOKIES", true)
-	case "9gag":
-		return getBoolEnv("ENABLE_9GAG_COOKIES", true)
-	default:
-		return true // Default to enabled for unknown platforms
-	}
 }
 
 // Database configuration functions
@@ -251,20 +204,6 @@ func GetAdminUserID() int64 {
 		return 0
 	}
 	return id
-}
-
-// RapidAPI configuration
-func GetRapidAPIKey() string {
-	return os.Getenv("RAPIDAPI_KEY")
-}
-
-func GetRapidAPIInstagramHost() string {
-	host := os.Getenv("RAPIDAPI_INSTAGRAM_HOST")
-	if host == "" {
-		return "instagram120.p.rapidapi.com"
-	}
-
-	return host
 }
 
 // GetKKInstagramHost returns the kkinstagram-style redirector host used to

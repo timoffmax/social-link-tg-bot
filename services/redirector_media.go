@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -143,4 +144,30 @@ func classifyRedirectorMedia(contentType, finalURL string) (string, string) {
 	}
 
 	return classifyMediaURL(finalURL)
+}
+
+// classifyMediaURL infers the media type (photo/video) and file extension from
+// the URL path. CDN URLs carry the extension before the query string, so this
+// avoids an extra HEAD request.
+func classifyMediaURL(mediaURL string) (string, string) {
+	path := mediaURL
+	queryStart := strings.Index(path, "?")
+
+	if queryStart != -1 {
+		path = path[:queryStart]
+	}
+
+	ext := strings.ToLower(filepath.Ext(path))
+	mediaType := MediaTypePhoto
+	fileExt := ".jpg"
+
+	switch ext {
+	case ".mp4", ".mov", ".webm", ".m4v":
+		mediaType = MediaTypeVideo
+		fileExt = ".mp4"
+	case ".png", ".webp", ".heic":
+		fileExt = ext
+	}
+
+	return mediaType, fileExt
 }

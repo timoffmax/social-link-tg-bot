@@ -1,27 +1,15 @@
 # Deploy Configuration for Social Link Telegram Bot
 # =================================================
-# Copy this file to deploy.conf and update with your values
+# Copy this file to deploy.conf and update with your values.
+# Read by bin/deploy and by `make status` / `make logs`.
 
 # Server Configuration
 SERVER_IP="your.server.ip.address"
 SERVER_USER="your-username"
-SERVER_SSH_KEY="" # Optional: path to specific SSH key
+SERVER_SSH_KEY="/home/your-local-user/.ssh/your_deploy_key" # Required: bin/deploy passes it to every ssh call
 
-# Deployment Paths
+# Git checkout of this repository on the server (bin/deploy runs git pull and go build there)
 REMOTE_DIR="/var/www/social-link-tg-bot"
-REMOTE_BIN_NAME="social-link-bot"
 
-# Service Configuration
-SERVICE_TYPE="system" # system or user
-SERVICE_NAME="tg-social-link-bot"
-SERVICE_USER="tgbot" # User that runs the service
-
-# Build Configuration
-GO_PATH="/usr/local/go/bin/go"
-
-# Dependencies
-INSTALL_FFMPEG=true
-INSTALL_YTDLP=true
-
-# Notification (optional)
-SLACK_WEBHOOK="" # Optional: Slack webhook for deployment notifications
+# systemd service restarted by bin/deploy
+SERVICE_NAME="social-link-bot"

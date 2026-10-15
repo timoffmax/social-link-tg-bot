@@ -16,8 +16,6 @@ import (
 type SmartDownloader struct {
 	ytdlp        *YtDlpDownloader
 	browser      *UniversalBrowserExtractor
-	rapidAPI     *InstagramRapidAPIExtractor
-	instafix     *InstagramInstafixExtractor
 	kk           *InstagramKKInstagramExtractor
 	instagramOG  *InstagramOGExtractor
 	reddit       *RedditExtractor
@@ -45,8 +43,6 @@ func NewSmartDownloader() *SmartDownloader {
 	return &SmartDownloader{
 		ytdlp:        NewYtDlpDownloader(),
 		browser:      NewUniversalBrowserExtractor(workingDir, tempDir),
-		rapidAPI:     NewInstagramRapidAPIExtractor(tempDir),
-		instafix:     NewInstagramInstafixExtractor(tempDir),
 		kk:           NewInstagramKKInstagramExtractor(tempDir),
 		instagramOG:  NewInstagramOGExtractor(tempDir),
 		reddit:       NewRedditExtractor(tempDir),
@@ -295,46 +291,6 @@ func (sd *SmartDownloader) executeStrategy(
 		LogExtraction(strategy.Platform, mediaURL, "vxreddit", false, 0, methodDuration)
 		return nil, err
 
-	case MethodRapidAPILinks:
-		if ctx.Err() != nil {
-			return nil, ctx.Err()
-		}
-
-		log.Printf("🎞️ Trying RapidAPI /links extraction for %s", strategy.Platform)
-		mediaInfos, err := sd.rapidAPI.ExtractMedia(mediaURL)
-		methodDuration := time.Since(methodStartTime)
-
-		if err == nil && len(mediaInfos) > 0 {
-			log.Printf("✅ RapidAPI extraction succeeded with %d items", len(mediaInfos))
-			LogExtraction(strategy.Platform, mediaURL, "rapidapi-links", true, len(mediaInfos), time.Since(overallStart))
-			appendOriginalURL(mediaInfos, mediaURL)
-			return mediaInfos, nil
-		}
-
-		log.Printf("❌ RapidAPI extraction failed: %v", err)
-		LogExtraction(strategy.Platform, mediaURL, "rapidapi-links", false, 0, methodDuration)
-		return nil, err
-
-	case MethodInstaFix:
-		if ctx.Err() != nil {
-			return nil, ctx.Err()
-		}
-
-		log.Printf("📷 Trying InstaFix /images/ extraction")
-		mediaInfos, err := sd.instafix.ExtractPhotos(mediaURL)
-		methodDuration := time.Since(methodStartTime)
-
-		if err == nil && len(mediaInfos) > 0 {
-			log.Printf("✅ InstaFix extraction succeeded with %d items", len(mediaInfos))
-			LogExtraction(strategy.Platform, mediaURL, "instafix", true, len(mediaInfos), time.Since(overallStart))
-			appendOriginalURL(mediaInfos, mediaURL)
-			return mediaInfos, nil
-		}
-
-		log.Printf("❌ InstaFix extraction failed: %v", err)
-		LogExtraction(strategy.Platform, mediaURL, "instafix", false, 0, methodDuration)
-		return nil, err
-
 	case MethodKKInstagram:
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
@@ -401,72 +357,29 @@ func (sd *SmartDownloader) executeStrategy(
 		return nil, err
 
 	case MethodFixedLink:
-		return sd.executeFixedLinkStrategy(ctx, mediaURL, strategy, overallStart, methodStartTime)
+		return sd.executeFixedLinkStrategy(mediaURL, strategy, overallStart)
 	}
 
 	return nil, nil
 }
 
-// executeFixedLinkStrategy handles the MethodFixedLink strategy.
+// executeFixedLinkStrategy returns the platform's fixed link as a text
+// message; platforms without a fixed link get no result.
 func (sd *SmartDownloader) executeFixedLinkStrategy(
-	ctx context.Context,
 	mediaURL string,
 	strategy *ExtractionStrategy,
 	overallStart time.Time,
-	methodStartTime time.Time,
 ) ([]*MediaInfo, error) {
-	if !strategy.HasFixedLink {
-		return nil, nil
+	var result []*MediaInfo
+	fixedURL := strategy.GetFixedURL(mediaURL)
+
+	if fixedURL != "" {
+		log.Printf("🔗 Returning fixed link for %s", strategy.Platform)
+		LogExtraction(strategy.Platform, mediaURL, "fixed-link", true, 1, time.Since(overallStart))
+		result = []*MediaInfo{{Type: MediaTypeText, URL: mediaURL, Caption: fixedURL, Filename: ""}}
 	}
 
-	log.Printf("🔗 Trying fixed link approach for %s", strategy.Platform)
-	internalFixedURL := strategy.GetInternalFixedURL(mediaURL)
-	userFixedURL := strategy.GetFixedURL(mediaURL)
-	methodDuration := time.Since(methodStartTime)
-
-	if internalFixedURL == "" {
-		return nil, nil
-	}
-
-	// For Instagram, check if we should skip download attempts
-	if strategy.Platform == "instagram" {
-		return sd.executeInstagramFixedLink(ctx, mediaURL, strategy, internalFixedURL, userFixedURL, methodDuration)
-	}
-
-	// For other platforms, return fixed link as text
-	LogExtraction(strategy.Platform, mediaURL, "fixed-link", true, 1, time.Since(overallStart))
-
-	return []*MediaInfo{{
-		Type:     "text",
-		URL:      mediaURL,
-		Caption:  userFixedURL,
-		Filename: "",
-	}}, nil
-}
-
-// executeInstagramFixedLink returns the Instagram preview link as a text message.
-// Primary extractors (RapidAPI, InstaFix) run before this method, so by the time
-// we reach here the goal is simply to give the user a Telegram-previewable link.
-func (sd *SmartDownloader) executeInstagramFixedLink(
-	ctx context.Context,
-	mediaURL string,
-	strategy *ExtractionStrategy,
-	internalFixedURL string,
-	userFixedURL string,
-	methodDuration time.Duration,
-) ([]*MediaInfo, error) {
-	_ = ctx
-	_ = internalFixedURL
-
-	log.Printf("📎 Returning Instagram preview link: %s", userFixedURL)
-	LogExtraction(strategy.Platform, mediaURL, "fixed-link-text", true, 1, methodDuration)
-
-	return []*MediaInfo{{
-		Type:     "text",
-		URL:      mediaURL,
-		Caption:  userFixedURL,
-		Filename: "",
-	}}, nil
+	return result, nil
 }
 
 // tryYtDlpExtraction attempts to extract media using yt-dlp with platform-specific logic
@@ -475,8 +388,6 @@ func (sd *SmartDownloader) tryYtDlpExtraction(url string, platform string) ([]*M
 	switch platform {
 	case "twitter":
 		return sd.ytdlp.DownloadTwitterMedia(url)
-	case "instagram":
-		return sd.ytdlp.DownloadInstagramMedia(url)
 	case "tiktok":
 		return sd.ytdlp.DownloadTikTokMedia(url)
 	case "youtube":

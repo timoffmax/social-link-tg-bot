@@ -27,11 +27,6 @@ func NewUniversalBrowserExtractor(workingDir, tempDir string) *UniversalBrowserE
 	}
 }
 
-// ExtractMedia is the universal fallback method for all social media platforms
-func (ube *UniversalBrowserExtractor) ExtractMedia(mediaURL string) ([]*MediaInfo, error) {
-	return ube.ExtractMediaWithContext(context.Background(), mediaURL)
-}
-
 // ExtractMediaWithContext performs browser extraction respecting the parent context deadline.
 // If the parent context is cancelled or expires, extraction will be aborted.
 func (ube *UniversalBrowserExtractor) ExtractMediaWithContext(ctx context.Context, mediaURL string) ([]*MediaInfo, error) {
@@ -46,8 +41,6 @@ func (ube *UniversalBrowserExtractor) ExtractMediaWithContext(ctx context.Contex
 	log.Printf("🔍 Detected platform: %s", platform)
 
 	switch platform {
-	case "instagram":
-		return ube.extractInstagramMedia(mediaURL)
 	case "twitter":
 		return ube.extractTwitterMedia(mediaURL)
 	case "tiktok":
@@ -57,107 +50,18 @@ func (ube *UniversalBrowserExtractor) ExtractMediaWithContext(ctx context.Contex
 	}
 }
 
+// detectPlatform names the platform whose extraction branch handles the URL.
 func (ube *UniversalBrowserExtractor) detectPlatform(mediaURL string) string {
-	if strings.Contains(mediaURL, "instagram.com") {
-		return "instagram"
-	} else if strings.Contains(mediaURL, "twitter.com") || strings.Contains(mediaURL, "x.com") {
-		return "twitter"
-	} else if strings.Contains(mediaURL, "tiktok.com") {
-		return "tiktok"
-	}
-	return "generic"
-}
+	result := "generic"
 
-func (ube *UniversalBrowserExtractor) extractInstagramMedia(mediaURL string) ([]*MediaInfo, error) {
-	log.Printf("📸 Extracting Instagram media with headless browser")
-
-	// Extract username from URL
-	username := ExtractInstagramUsername(mediaURL)
-
-	// Use longer timeout for Instagram carousels
-	html, err := ube.renderPageWithBrowserTimeout(mediaURL, 15*time.Second, 45*time.Second)
-	if err != nil {
-		return nil, err
+	switch {
+	case (strings.Contains(mediaURL, "twitter.com") || strings.Contains(mediaURL, "x.com")):
+		result = "twitter"
+	case strings.Contains(mediaURL, "tiktok.com"):
+		result = "tiktok"
 	}
 
-	// Extract Instagram author info from HTML
-	displayName, detectedUsername := ube.extractInstagramAuthorInfo(html)
-	if detectedUsername != "" {
-		username = detectedUsername
-	}
-
-	var mediaInfos []*MediaInfo
-
-	// Instagram image patterns (photos and carousels)
-	imagePatterns := []string{
-		// Modern Instagram image patterns with query parameters
-		`<img[^>]*src="(https://scontent[^"]*\.cdninstagram\.com/v/t51\.2885-15/[^"]+)"[^>]*>`,
-		`<img[^>]*src="(https://[^"]*\.cdninstagram\.com/v/t51\.2885-15/[^"]+)"[^>]*>`,
-		// Patterns with alt text (carousel images often have these)
-		`<img[^>]*alt="[^"]*"[^>]*src="(https://scontent[^"]*\.cdninstagram\.com/[^"]+)"`,
-		`<img[^>]*src="(https://scontent[^"]*\.cdninstagram\.com/[^"]+)"[^>]*alt="[^"]*"`,
-		// Legacy patterns with .jpg extension
-		`<img[^>]*src="(https://[^"]*\.cdninstagram\.com/[^"]*\.jpg[^"]*)"[^>]*alt="[^"]*"`,
-		`<img[^>]*alt="[^"]*"[^>]*src="(https://[^"]*\.cdninstagram\.com/[^"]*\.jpg[^"]*)"`,
-		// Alternative CDN patterns
-		`<img[^>]*src="(https://[^"]*instagram[^"]*\.com/[^"]*\.jpg[^"]*)"`,
-	}
-
-	imageURLs := ube.extractURLsWithPatterns(html, imagePatterns)
-	log.Printf("🖼️ Found %d Instagram images", len(imageURLs))
-
-	// Download images
-	for i, imageURL := range imageURLs {
-		cleanURL := ube.cleanInstagramURL(imageURL)
-		filename, err := ube.downloadMediaFile(cleanURL, "instagram", "photo", i)
-		if err != nil {
-			log.Printf("❌ Failed to download Instagram image %d: %v", i+1, err)
-			continue
-		}
-
-		originalCaption := ube.extractInstagramCaption(html)
-		mediaInfo := &MediaInfo{
-			Type:     "photo",
-			URL:      mediaURL,
-			Caption:  FormatAuthorCaption("instagram", displayName, username, originalCaption),
-			Filename: filename,
-		}
-		mediaInfos = append(mediaInfos, mediaInfo)
-	}
-
-	// Instagram video patterns
-	videoPatterns := []string{
-		`<video[^>]*src="(https://[^"]*\.cdninstagram\.com/[^"]*\.mp4[^"]*)"`,
-		`<source[^>]*src="(https://[^"]*\.cdninstagram\.com/[^"]*\.mp4[^"]*)"`,
-	}
-
-	videoURLs := ube.extractURLsWithPatterns(html, videoPatterns)
-	log.Printf("🎥 Found %d Instagram videos", len(videoURLs))
-
-	// Download videos
-	for i, videoURL := range videoURLs {
-		cleanURL := ube.cleanInstagramURL(videoURL)
-		filename, err := ube.downloadMediaFile(cleanURL, "instagram", "video", i)
-		if err != nil {
-			log.Printf("❌ Failed to download Instagram video %d: %v", i+1, err)
-			continue
-		}
-
-		originalCaption := ube.extractInstagramCaption(html)
-		mediaInfo := &MediaInfo{
-			Type:     "video",
-			URL:      mediaURL,
-			Caption:  FormatAuthorCaption("instagram", displayName, username, originalCaption),
-			Filename: filename,
-		}
-		mediaInfos = append(mediaInfos, mediaInfo)
-	}
-
-	if len(mediaInfos) == 0 {
-		return nil, fmt.Errorf("no Instagram media found")
-	}
-
-	return mediaInfos, nil
+	return result
 }
 
 func (ube *UniversalBrowserExtractor) extractTwitterMedia(mediaURL string) ([]*MediaInfo, error) {
@@ -545,12 +449,6 @@ func (ube *UniversalBrowserExtractor) deduplicateTikTokImages(imageURLs []string
 }
 
 // URL cleaning methods
-func (ube *UniversalBrowserExtractor) cleanInstagramURL(rawURL string) string {
-	// For Instagram carousel images, we need to keep all parameters
-	// These parameters are often required for the image to load correctly
-	return rawURL
-}
-
 func (ube *UniversalBrowserExtractor) cleanTwitterURL(rawURL string) string {
 	// Upgrade Twitter image quality
 	cleanURL := strings.ReplaceAll(rawURL, "?format=", "?format=")
@@ -564,26 +462,6 @@ func (ube *UniversalBrowserExtractor) cleanTwitterURL(rawURL string) string {
 }
 
 // Caption extraction methods
-func (ube *UniversalBrowserExtractor) extractInstagramCaption(html string) string {
-	patterns := []string{
-		`<meta[^>]*property="og:description"[^>]*content="([^"]*)"`,
-		`"caption":"([^"]*)"`,
-		`<title>([^<]*)</title>`,
-	}
-
-	for _, pattern := range patterns {
-		re := regexp.MustCompile(pattern)
-		if match := re.FindStringSubmatch(html); len(match) > 1 {
-			caption := strings.TrimSpace(match[1])
-			if caption != "" && !strings.Contains(caption, "Instagram") {
-				return caption
-			}
-		}
-	}
-
-	return ""
-}
-
 func (ube *UniversalBrowserExtractor) extractTwitterCaption(html string) string {
 	// Try to extract the main tweet text content first
 	patterns := []string{
@@ -787,20 +665,6 @@ func (ube *UniversalBrowserExtractor) addPlatformHeaders(req *http.Request, plat
 	req.Header.Set("Accept-Language", "en-US,en;q=0.9")
 
 	switch platform {
-	case "instagram":
-		req.Header.Set("Referer", "https://www.instagram.com/")
-		req.Header.Set("sec-fetch-dest", "image")
-		req.Header.Set("sec-fetch-mode", "no-cors")
-		req.Header.Set("sec-fetch-site", "cross-site")
-		req.Header.Set("x-ig-app-id", "936619743392459")
-		req.Header.Set("x-ig-www-claim", "0")
-		req.Header.Set("x-requested-with", "XMLHttpRequest")
-
-		// Add Instagram cookies if available
-		if cookiesPath := filepath.Join(ube.workingDir, "cookies.txt"); ube.fileExists(cookiesPath) {
-			ube.addInstagramCookiesFromFile(req, cookiesPath)
-		}
-
 	case "twitter":
 		req.Header.Set("Referer", "https://twitter.com/")
 		req.Header.Set("sec-fetch-dest", "image")
@@ -815,89 +679,6 @@ func (ube *UniversalBrowserExtractor) addPlatformHeaders(req *http.Request, plat
 	}
 }
 
-// fileExists checks if a file exists
-func (ube *UniversalBrowserExtractor) fileExists(filepath string) bool {
-	_, err := os.Stat(filepath)
-	return !os.IsNotExist(err)
-}
-
-// addInstagramCookiesFromFile adds Instagram cookies from cookies.txt to the request
-func (ube *UniversalBrowserExtractor) addInstagramCookiesFromFile(req *http.Request, cookiesPath string) {
-	file, err := os.Open(cookiesPath)
-	if err != nil {
-		return
-	}
-	defer file.Close()
-
-	content, err := io.ReadAll(file)
-	if err != nil {
-		return
-	}
-
-	lines := strings.Split(string(content), "\n")
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-
-		parts := strings.Fields(line)
-		if len(parts) >= 7 && strings.Contains(parts[0], "instagram.com") {
-			cookieName := parts[5]
-			cookieValue := parts[6]
-
-			// Add important Instagram cookies
-			if cookieName == "sessionid" || cookieName == "csrftoken" || cookieName == "ds_user_id" {
-				cookie := &http.Cookie{
-					Name:  cookieName,
-					Value: cookieValue,
-				}
-				req.AddCookie(cookie)
-			}
-		}
-	}
-}
-
-// extractInstagramAuthorInfo extracts author display name and username from Instagram HTML
-func (ube *UniversalBrowserExtractor) extractInstagramAuthorInfo(html string) (displayName, username string) {
-	// Instagram author patterns
-	patterns := []string{
-		// Meta tag patterns
-		`<meta[^>]*property="og:title"[^>]*content="([^"]+) \(@([^)]+)\)`,
-		`<meta[^>]*name="twitter:title"[^>]*content="([^"]+) \(@([^)]+)\)`,
-		// JSON-LD patterns
-		`"author":\s*{\s*"@type":\s*"Person",\s*"name":\s*"([^"]+)",\s*"alternateName":\s*"@?([^"]+)"`,
-		// Profile link patterns
-		`href="/([^/]+)/"[^>]*>([^<]+)</a>.*?Verified`,
-	}
-
-	for _, pattern := range patterns {
-		re := regexp.MustCompile(pattern)
-		matches := re.FindStringSubmatch(html)
-
-		if len(matches) >= 3 {
-			if strings.Contains(pattern, "og:title") || strings.Contains(pattern, "twitter:title") {
-				displayName = strings.TrimSpace(matches[1])
-				username = strings.TrimSpace(matches[2])
-			} else if strings.Contains(pattern, "author") {
-				displayName = strings.TrimSpace(matches[1])
-				username = strings.TrimSpace(matches[2])
-			} else {
-				username = strings.TrimSpace(matches[1])
-				displayName = strings.TrimSpace(matches[2])
-			}
-
-			if displayName != "" || username != "" {
-				log.Printf("✅ Extracted Instagram author: %s (@%s)", displayName, username)
-				return displayName, username
-			}
-		}
-	}
-
-	return "", ""
-}
-
-// extractTikTokAuthorInfo extracts author display name and username from TikTok HTML
 func (ube *UniversalBrowserExtractor) extractTikTokAuthorInfo(html string) (displayName, username string) {
 	// TikTok author patterns - ordered by reliability
 	patterns := []string{

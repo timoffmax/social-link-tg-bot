@@ -238,3 +238,13 @@ func TestApifyBudgetFailsClosedOnAMalformedAnswer(t *testing.T) {
 		t.Fatalf("expected a lookup failure, got %v", err)
 	}
 }
+
+func TestYtDlpPlatformMatchesTwitterByHostOnly(t *testing.T) {
+	if (ytDlpPlatform("https://x.com/user/status/1") != "twitter") || (ytDlpPlatform("https://mobile.twitter.com/u/status/1") != "twitter") {
+		t.Fatalf("twitter hosts must match")
+	}
+
+	if ytDlpPlatform("https://www.netflix.com/watch/1") == "twitter" {
+		t.Fatalf("a URL containing x.com must not count as Twitter")
+	}
+}

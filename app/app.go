@@ -73,7 +73,7 @@ func runStartupChecks() {
 		log.Printf("⚠️ Warning: Failed to set bot commands: %v", err)
 	}
 
-	log.Printf("✅ Startup complete. Use services.NewRealLinkTester().RunQuickTest() for on-demand testing")
+	log.Printf("✅ Startup complete")
 }
 
 func loadEnvFile() {

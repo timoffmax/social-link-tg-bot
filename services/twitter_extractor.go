@@ -15,30 +15,18 @@ import (
 )
 
 type TwitterExtractor struct {
-	client      *http.Client
-	cookiesPath string
-	tempDir     string
-	workingDir  string
+	client     *http.Client
+	tempDir    string
+	workingDir string
 	// Cache extracted tweet text from successful methods to use in fallbacks
 	cachedTweetText string
 }
 
-type TwitterMediaItem struct {
-	URL  string `json:"url"`
-	Type string `json:"type"` // "photo" or "video"
-}
-
-type TwitterTweetData struct {
-	Text  string             `json:"text"`
-	Media []TwitterMediaItem `json:"media"`
-}
-
 func NewTwitterExtractor(workingDir, tempDir string) *TwitterExtractor {
 	return &TwitterExtractor{
-		client:      SharedDownloadClient,
-		cookiesPath: filepath.Join(workingDir, "cookies", "twitter_cookies.txt"),
-		tempDir:     tempDir,
-		workingDir:  workingDir,
+		client:     SharedDownloadClient,
+		tempDir:    tempDir,
+		workingDir: workingDir,
 	}
 }
 
@@ -159,9 +147,6 @@ func (te *TwitterExtractor) extractViaWebInterface(tweetID string, username stri
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %v", err)
 	}
-
-	// Add cookies if available
-	te.addCookiesToRequest(req)
 
 	// Add headers to mimic a real browser
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
@@ -674,8 +659,6 @@ func (te *TwitterExtractor) extractViaDirectScraping(tweetID string, username st
 	req.Header.Set("User-Agent", "Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.0 Mobile/15E148 Safari/604.1")
 	req.Header.Set("Accept-Encoding", "gzip, deflate")
 
-	te.addCookiesToRequest(req)
-
 	resp, err := te.client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch mobile tweet: %v", err)
@@ -851,10 +834,6 @@ func (te *TwitterExtractor) extractViaSimpleTextFallback(tweetID string, usernam
 	return []*MediaInfo{textMediaInfo}, nil
 }
 
-func (te *TwitterExtractor) parseHTMLForMedia(html, tweetID, username string) ([]*MediaInfo, error) {
-	return te.parseHTMLForMediaWithAuthor(html, tweetID, username, "")
-}
-
 func (te *TwitterExtractor) parseHTMLForMediaWithAuthor(html, tweetID, username, displayName string) ([]*MediaInfo, error) {
 	var mediaInfos []*MediaInfo
 
@@ -1004,37 +983,6 @@ func (te *TwitterExtractor) parseEmbedResponse(response, tweetID string) ([]*Med
 	mediaInfos = append(mediaInfos, textMedia)
 
 	return mediaInfos, nil
-}
-
-// isTextTruncated checks if tweet text appears to be truncated
-func (te *TwitterExtractor) isTextTruncated(text string) bool {
-	if text == "" {
-		return false
-	}
-
-	// Common truncation indicators
-	truncationIndicators := []string{
-		"…",
-		"...",
-		"pic.twitter.com",
-		"...Read more",
-		"...Show this thread",
-	}
-
-	for _, indicator := range truncationIndicators {
-		if strings.Contains(text, indicator) {
-			return true
-		}
-	}
-
-	// If text is very long but doesn't end with punctuation, might be truncated
-	if len(text) > 200 && !strings.HasSuffix(strings.TrimSpace(text), ".") &&
-		!strings.HasSuffix(strings.TrimSpace(text), "!") &&
-		!strings.HasSuffix(strings.TrimSpace(text), "?") {
-		return true
-	}
-
-	return false
 }
 
 // extractAndResolveQuotedTweets finds quoted tweet URLs and resolves their content
@@ -1776,64 +1724,6 @@ func (te *TwitterExtractor) getFileExtension(url, contentType string) string {
 	}
 }
 
-func (te *TwitterExtractor) addCookiesToRequest(req *http.Request) {
-	// Read cookies file if it exists
-	if _, err := os.Stat(te.cookiesPath); os.IsNotExist(err) {
-		log.Printf("⚠️ No Twitter cookies file found at %s", te.cookiesPath)
-		return
-	}
-
-	cookiesData, err := os.ReadFile(te.cookiesPath)
-	if err != nil {
-		log.Printf("⚠️ Failed to read cookies file: %v", err)
-		return
-	}
-
-	// Parse Netscape cookie format and add to request
-	lines := strings.Split(string(cookiesData), "\n")
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-
-		parts := strings.Split(line, "\t")
-		if len(parts) >= 7 {
-			domain := parts[0]
-			name := parts[5]
-			value := parts[6]
-
-			// Only add cookies for twitter/x domains
-			if strings.Contains(domain, "twitter.com") || strings.Contains(domain, "x.com") {
-				// Clean up cookie value - remove quotes and invalid characters
-				value = strings.Trim(value, `"`)
-				value = strings.ReplaceAll(value, `\"`, `"`)
-				value = strings.ReplaceAll(value, `\n`, ``)
-				value = strings.ReplaceAll(value, `\r`, ``)
-				value = strings.ReplaceAll(value, `\t`, ``)
-
-				// Skip cookies with invalid characters
-				if strings.ContainsAny(value, "\n\r\t\"") {
-					log.Printf("⚠️ Skipping invalid cookie %s", name)
-					continue
-				}
-
-				cookie := &http.Cookie{
-					Name:  name,
-					Value: value,
-				}
-				req.AddCookie(cookie)
-			}
-		}
-	}
-
-	log.Printf("🍪 Added Twitter cookies to request")
-}
-
-func (te *TwitterExtractor) parseFixupxMetaTags(html string, tweetID string, username string) ([]*MediaInfo, error) {
-	return te.parseFixupxMetaTagsWithAuthor(html, tweetID, username, "")
-}
-
 func (te *TwitterExtractor) parseFixupxMetaTagsWithAuthor(html string, tweetID string, username string, displayName string) ([]*MediaInfo, error) {
 	var mediaInfos []*MediaInfo
 
@@ -1970,206 +1860,4 @@ func (te *TwitterExtractor) parseFixupxMetaTagsWithAuthor(html string, tweetID s
 	}
 
 	return mediaInfos, nil
-}
-
-func (te *TwitterExtractor) parseFixupxHTML(html string, tweetID string, username string) ([]*MediaInfo, error) {
-	// Extract display name from fixupx HTML
-	displayName := ""
-	titlePattern := regexp.MustCompile(`<meta[^>]*property="og:title"[^>]*content="([^"]+)"`)
-	if matches := titlePattern.FindStringSubmatch(html); len(matches) > 1 {
-		title := matches[1]
-		if idx := strings.Index(title, " (@"); idx > 0 {
-			displayName = title[:idx]
-		}
-	}
-
-	return te.parseFixupxHTMLWithAuthor(html, tweetID, username, displayName)
-}
-
-func (te *TwitterExtractor) parseFixupxHTMLWithAuthor(html string, tweetID string, username string, displayName string) ([]*MediaInfo, error) {
-	var mediaInfos []*MediaInfo
-
-	log.Printf("📝 Parsing fixupx HTML for tweet %s by @%s", tweetID, username)
-
-	// Extract tweet text from fixupx page
-	tweetText := te.extractFixupxTweetText(html)
-	log.Printf("📝 Extracted tweet text from fixupx: %.200s", tweetText)
-
-	// Look for quoted tweets in the fixupx HTML and resolve them
-	quotedTweetText, quotedTweetMedia := te.extractAndResolveQuotedTweets(html, tweetText)
-	if quotedTweetText != "" {
-		// Merge main tweet text with quoted tweet content
-		tweetText = te.mergeMainAndQuotedContent(tweetText, quotedTweetText)
-		log.Printf("📝 Merged with quoted tweet content from fixupx: %s", tweetText)
-	}
-
-	// Extract media URLs from fixupx page
-	mediaURLs := te.extractFixupxMediaURLs(html)
-	log.Printf("📸 Extracted %d media URLs from fixupx: %v", len(mediaURLs), mediaURLs)
-
-	// Add quoted tweet media first (if any)
-	for _, quotedMedia := range quotedTweetMedia {
-		mediaInfos = append(mediaInfos, quotedMedia)
-	}
-
-	// Download each media item from main tweet
-	for i, mediaURL := range mediaURLs {
-		mediaInfo, err := te.downloadMedia(mediaURL, tweetID, i)
-		if err != nil {
-			log.Printf("⚠️ Failed to download media %d from fixupx: %v", i, err)
-			continue
-		}
-
-		// Format caption with author info
-		mediaInfo.Caption = te.formatTweetCaption(displayName, username, tweetText)
-
-		mediaInfos = append(mediaInfos, mediaInfo)
-	}
-
-	// If no media found but we have text, return text-only
-	if len(mediaInfos) == 0 && tweetText != "" {
-		log.Printf("📝 No media found on fixupx, returning text content")
-		textMedia := &MediaInfo{
-			Type:     "text",
-			URL:      fmt.Sprintf("https://x.com/%s/status/%s", username, tweetID),
-			Caption:  te.formatTweetCaption(displayName, username, tweetText),
-			Filename: "",
-		}
-		mediaInfos = append(mediaInfos, textMedia)
-	}
-
-	return mediaInfos, nil
-}
-
-func (te *TwitterExtractor) extractFixupxTweetText(html string) string {
-	// Fixupx-specific patterns for tweet text
-	patterns := []string{
-		// Look for the main tweet content in fixupx
-		`<div[^>]*class="[^"]*tweet-text[^"]*"[^>]*>(.*?)</div>`,
-		`<p[^>]*class="[^"]*tweet-content[^"]*"[^>]*>(.*?)</p>`,
-		`<div[^>]*class="[^"]*content[^"]*"[^>]*>(.*?)</div>`,
-
-		// Generic content patterns
-		`<article[^>]*>.*?<p[^>]*>(.*?)</p>`,
-		`<main[^>]*>.*?<p[^>]*>(.*?)</p>`,
-
-		// Meta tag fallbacks
-		`<meta[^>]*property="og:description"[^>]*content="([^"]*)"`,
-		`<meta[^>]*name="description"[^>]*content="([^"]*)"`,
-		`<title[^>]*>([^<]*?)(?: / Twitter| - Twitter|$)</title>`,
-	}
-
-	for _, pattern := range patterns {
-		re := regexp.MustCompile(`(?s)` + pattern)
-		matches := re.FindStringSubmatch(html)
-		if len(matches) > 1 {
-			// Clean up HTML tags and decode entities
-			text := strings.ReplaceAll(matches[1], "<br>", "\n")
-			text = strings.ReplaceAll(text, "<br/>", "\n")
-			text = strings.ReplaceAll(text, "<br />", "\n")
-			text = regexp.MustCompile(`<[^>]*>`).ReplaceAllString(text, "")
-
-			// Decode HTML entities
-			text = strings.ReplaceAll(text, "&amp;", "&")
-			text = strings.ReplaceAll(text, "&lt;", "<")
-			text = strings.ReplaceAll(text, "&gt;", ">")
-			text = strings.ReplaceAll(text, "&quot;", "\"")
-			text = strings.ReplaceAll(text, "&#39;", "'")
-
-			text = strings.TrimSpace(text)
-			if text != "" && text != "null" && !strings.Contains(text, "fixupx") {
-				return text
-			}
-		}
-	}
-
-	return ""
-}
-
-func (te *TwitterExtractor) extractFixupxMediaURLs(html string) []string {
-	var urls []string
-
-	// Fixupx-specific patterns for media URLs
-	patterns := []string{
-		// Direct image/video URLs with specific CSS patterns (2025 X/Twitter structure)
-		`<img[^>]*class="[^"]*css-9pa8cd[^"]*"[^>]*src="([^"]*pbs\.twimg\.com[^"]*)"`,
-		`<img[^>]*src="([^"]*pbs\.twimg\.com[^"]*)"[^>]*class="[^"]*css-9pa8cd[^"]*"`,
-		`<img[^>]*src="([^"]*(?:pbs\.twimg\.com|twimg\.com)[^"]*)"`,
-		`<video[^>]*src="([^"]*(?:video\.twimg\.com|twimg\.com)[^"]*)"`,
-		`<source[^>]*src="([^"]*(?:video\.twimg\.com|twimg\.com)[^"]*)"`,
-
-		// Look for download links or media containers
-		`href="([^"]*(?:pbs\.twimg\.com|video\.twimg\.com)[^"]*)"`,
-		`data-src="([^"]*(?:pbs\.twimg\.com|video\.twimg\.com)[^"]*)"`,
-
-		// Generic Twitter media URL patterns
-		`(https://pbs\.twimg\.com/media/[A-Za-z0-9_-]+\?format=(?:jpg|jpeg|png|gif|webp)[^"\s]*)`,
-		`(https://pbs\.twimg\.com/media/[A-Za-z0-9_-]+\.(?:jpg|jpeg|png|gif|webp))`,
-		`(https://video\.twimg\.com/[^"\s]+\.(?:mp4|m3u8))`,
-
-		// Any pbs.twimg.com or video.twimg.com references
-		`(https://[^"\s]*(?:pbs|video)\.twimg\.com[^"\s]*)`,
-	}
-
-	for _, pattern := range patterns {
-		re := regexp.MustCompile(pattern)
-		if strings.Contains(pattern, "(") {
-			// Pattern has capture group
-			matches := re.FindAllStringSubmatch(html, -1)
-			for _, match := range matches {
-				if len(match) > 1 {
-					urls = append(urls, match[1])
-				}
-			}
-		} else {
-			// Pattern matches full URL
-			matches := re.FindAllString(html, -1)
-			urls = append(urls, matches...)
-		}
-	}
-
-	// Clean up URLs and add format params for images without extensions
-	var cleanURLs []string
-	for _, url := range urls {
-		// Add format parameter if missing for pbs.twimg.com URLs
-		if strings.Contains(url, "pbs.twimg.com/media/") && !strings.Contains(url, "format=") && !strings.Contains(url, ".jpg") && !strings.Contains(url, ".png") {
-			if strings.Contains(url, "?") {
-				url += "&format=jpg&name=large"
-			} else {
-				url += "?format=jpg&name=large"
-			}
-		}
-		cleanURLs = append(cleanURLs, url)
-	}
-
-	// Remove duplicates based on media ID
-	seenMediaIDs := make(map[string]string)
-	for _, url := range cleanURLs {
-		mediaID := te.extractMediaID(url)
-		if mediaID == "" {
-			mediaID = url
-		}
-		if existingURL, exists := seenMediaIDs[mediaID]; exists {
-			if te.getURLQualityScore(url) > te.getURLQualityScore(existingURL) {
-				seenMediaIDs[mediaID] = url
-			}
-		} else {
-			seenMediaIDs[mediaID] = url
-		}
-	}
-
-	seen := make(map[string]bool)
-	var uniqueURLs []string
-	for _, url := range cleanURLs {
-		mediaID := te.extractMediaID(url)
-		if mediaID == "" {
-			mediaID = url
-		}
-		if !seen[mediaID] {
-			seen[mediaID] = true
-			uniqueURLs = append(uniqueURLs, seenMediaIDs[mediaID])
-		}
-	}
-
-	return uniqueURLs
 }

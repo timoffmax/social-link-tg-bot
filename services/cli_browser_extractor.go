@@ -406,15 +406,6 @@ func (cbe *CliBrowserExtractor) RenderPageForTwitterThread(twitterURL string) (s
 		"--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
 	}
 
-	// Add Twitter cookies if available for better authentication and thread loading
-	twitterCookiesPath := filepath.Join(cbe.workingDir, "cookies", "twitter_cookies.txt")
-	if _, err := os.Stat(twitterCookiesPath); err == nil {
-		args = append(args, "--cookie-file="+twitterCookiesPath)
-		log.Printf("🍪 [AUTO-THREAD] Using Twitter cookies: %s", twitterCookiesPath)
-	} else {
-		log.Printf("⚠️ [AUTO-THREAD] Twitter cookies not found at %s", twitterCookiesPath)
-	}
-
 	// Try to modify URL to get better thread loading
 	// Sometimes adding specific parameters helps load the full conversation
 	enhancedURL := twitterURL

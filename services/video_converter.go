@@ -143,34 +143,3 @@ func (vc *VideoConverter) ConvertWebMToMP4(webmPath string) (string, error) {
 
 	return mp4Path, nil
 }
-
-// ConvertVideoToMP4 converts any supported video format to MP4
-func (vc *VideoConverter) ConvertVideoToMP4(inputPath string) (string, error) {
-	if !vc.IsAvailable() {
-		return "", fmt.Errorf("ffmpeg not available for conversion")
-	}
-
-	ext := strings.ToLower(filepath.Ext(inputPath))
-
-	// Only convert if it's not already MP4
-	if ext == ".mp4" {
-		log.Printf("📹 File is already MP4, no conversion needed: %s", inputPath)
-		return inputPath, nil
-	}
-
-	// For now, focus on WebM conversion, but this can be extended
-	switch ext {
-	case ".webm":
-		return vc.ConvertWebMToMP4(inputPath)
-	default:
-		return "", fmt.Errorf("conversion not supported for format: %s", ext)
-	}
-}
-
-// CleanupFile removes a temporary file
-func (vc *VideoConverter) CleanupFile(filePath string) error {
-	if filePath != "" {
-		return os.Remove(filePath)
-	}
-	return nil
-}

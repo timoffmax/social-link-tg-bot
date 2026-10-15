@@ -170,27 +170,6 @@ func IsDBInitialized() bool {
 	return dbService != nil && dbService.db != nil
 }
 
-type MediaStat struct {
-	ID        int64     `json:"id"`
-	UserID    int64     `json:"user_id"`
-	Username  string    `json:"username"`
-	ChatID    int64     `json:"chat_id"`
-	ChatTitle string    `json:"chat_title"`
-	Platform  string    `json:"platform"`
-	MediaType string    `json:"media_type"`
-	URL       string    `json:"url"`
-	CreatedAt time.Time `json:"created_at"`
-}
-
-type UserMediaLimit struct {
-	ID         int64     `json:"id"`
-	ChatID     int64     `json:"chat_id"`
-	UserID     int64     `json:"user_id"`
-	DailyLimit int       `json:"daily_limit"`
-	CreatedAt  time.Time `json:"created_at"`
-	UpdatedAt  time.Time `json:"updated_at"`
-}
-
 // RecordMediaStat records a media send event
 func RecordMediaStat(userID int64, username string, chatID int64, chatTitle string, platform string, mediaType string, url string) error {
 	if !IsDBInitialized() {
@@ -618,20 +597,6 @@ func GetUserMediaStats(chatID int64, period string) ([]UserStats, error) {
 	}
 
 	return users, nil
-}
-
-// GetTopUsersMediaStats gets top N users by media count for a specific period
-func GetTopUsersMediaStats(chatID int64, period string, limit int) ([]UserStats, error) {
-	allUsers, err := GetUserMediaStats(chatID, period)
-	if err != nil {
-		return nil, err
-	}
-
-	// Return top N users
-	if len(allUsers) > limit {
-		return allUsers[:limit], nil
-	}
-	return allUsers, nil
 }
 
 // AdminGlobalStats represents global bot statistics for admin

@@ -212,41 +212,6 @@ func GetChatPlatformSettings(chatID int64) (map[string]bool, error) {
 	return platformSettings, nil
 }
 
-// GetAllChatPlatformStats returns platform usage statistics
-func GetAllChatPlatformStats() (map[string]int, error) {
-	db := GetDB()
-	if db == nil {
-		return nil, fmt.Errorf("database not available")
-	}
-
-	stats := make(map[string]int)
-
-	rows, err := db.Query(`
-		SELECT setting_key, COUNT(*) as chat_count
-		FROM chat_settings 
-		WHERE setting_type = 'platform' AND enabled = true
-		GROUP BY setting_key
-		ORDER BY setting_key
-	`)
-
-	if err != nil {
-		return nil, fmt.Errorf("failed to query platform stats: %v", err)
-	}
-	defer rows.Close()
-
-	for rows.Next() {
-		var platform string
-		var count int
-		if err := rows.Scan(&platform, &count); err != nil {
-			log.Printf("Error scanning platform stats: %v", err)
-			continue
-		}
-		stats[platform] = count
-	}
-
-	return stats, nil
-}
-
 // InitializeChatSettings creates default settings for a new chat
 func InitializeChatSettings(chatID int64) error {
 	db := GetDB()

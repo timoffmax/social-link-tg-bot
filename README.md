@@ -96,7 +96,6 @@ go build -o social-link-bot .
 | `ADMIN_USER_ID` | Your Telegram user ID for owner commands and outage alerts |
 | `DB_*` | PostgreSQL connection (optional) |
 | `ENABLE_<PLATFORM>` | Per-platform kill switches (`ENABLE_TIKTOK`, `ENABLE_REDDIT`, ...) |
-| `ENABLE_<PLATFORM>_COOKIES` | Per-platform cookie usage toggles |
 | `ENABLE_PROXIES` / `YTDLP_PROXIES` | Global proxy kill switch + comma-separated proxy list (fallback only) |
 | `APIFY_TOKEN`, `GATED_FETCH_*` | Paid fetch of author-gated Instagram posts and its monthly quotas (see `.env.example`, owner command `/gated`) |
 | `APIFY_MONTHLY_BUDGET_USD`, `APIFY_YOUTUBE_ACTOR`, `APIFY_STORIES_ACTOR` | Shared monthly Apify spend limit and the YouTube / Instagram stories actors |
@@ -108,16 +107,12 @@ See `.env.example` for the full annotated list.
 ## Deployment
 
 ```bash
-cp bin/deploy.conf.sample bin/deploy.conf   # set SERVER_IP, SERVER_USER, SERVER_SSH_KEY, paths
-./bin/deploy                                # build, upload, restart
-./bin/deploy --restart-only                 # restart without rebuilding
+cp bin/deploy.conf.sample bin/deploy.conf   # set SERVER_IP, SERVER_USER, SERVER_SSH_KEY, REMOTE_DIR, SERVICE_NAME
+./bin/deploy                                # git pull and build on the server, then restart
+./bin/deploy --restart-only                 # restart without pulling or rebuilding
 ```
 
-On the server, `bin/manage-bot` (uploaded by deploy) provides `status`/`logs`/`follow`/`restart`. `make logs` and `make status` read the same `bin/deploy.conf`. See [bin/README.md](bin/README.md) for the full deployment and one-time server setup guide.
-
-### Cookies
-
-Several platforms validate cookies against the IP that created them, so cookies must be extracted **from the server itself**: set up a throwaway desktop with `./bin/quick-vnc-setup`, log in to the platforms in Firefox over VNC, then run `./bin/extract-firefox-cookies [platform]`. Cookie files live in `cookies/<platform>_cookies.txt` and should be refreshed when authentication errors appear in the logs.
+`make status` and `make logs` read the same `bin/deploy.conf`. See [bin/README.md](bin/README.md) for the full deployment and one-time server setup guide.
 
 ## Development
 

@@ -32,9 +32,6 @@ func (sc *StartupChecker) RunStartupChecks() {
 	sc.checkFfmpeg()
 	sc.checkChrome()
 
-	// Check authentication files
-	sc.checkAuthFiles()
-
 	// Check directories
 	sc.checkDirectories()
 
@@ -137,30 +134,6 @@ func (sc *StartupChecker) checkChrome() {
 	}
 }
 
-// checkAuthFiles checks for authentication cookie files
-func (sc *StartupChecker) checkAuthFiles() {
-	log.Printf("\n🍪 Checking authentication files...")
-
-	authFiles := map[string]string{
-		"Instagram": "cookies/instagram_cookies.txt",
-		"Twitter/X": "cookies/twitter_cookies.txt",
-		"TikTok":    "cookies/tiktok_cookies.txt",
-		"YouTube":   "cookies/youtube_cookies.txt",
-		"Reddit":    "cookies/reddit_cookies.txt",
-		"Facebook":  "cookies/facebook_cookies.txt",
-		"9GAG":      "cookies/9gag_cookies.txt",
-	}
-
-	for platform, filename := range authFiles {
-		path := filepath.Join(sc.workingDir, filename)
-		if stat, err := os.Stat(path); err == nil {
-			log.Printf("  ✅ %s: Found (%d bytes)", platform, stat.Size())
-		} else {
-			log.Printf("  ⚠️ %s: Not found (reduced functionality)", platform)
-		}
-	}
-}
-
 // checkDirectories checks required directories
 func (sc *StartupChecker) checkDirectories() {
 	log.Printf("\n📁 Checking directories...")
@@ -201,7 +174,7 @@ func (sc *StartupChecker) printPlatformSupport() {
 	}{
 		{
 			Name:      "📷 Instagram",
-			Supported: []string{"Photos", "Videos", "Albums", "Stories"},
+			Supported: []string{"Posts and Reels (kkinstagram, page preview)", "Restricted posts and Stories (paid, per-chat quota)"},
 			FixedLink: instagramFixedLink,
 		},
 		{
@@ -211,18 +184,18 @@ func (sc *StartupChecker) printPlatformSupport() {
 		},
 		{
 			Name:      "🐦 Twitter/X",
-			Supported: []string{"Photos", "Videos", "GIFs"},
+			Supported: []string{"Photos", "Videos", "GIFs", "Threads of tweets"},
 			FixedLink: "fixupx.com",
 		},
 		{
 			Name:      "📺 YouTube",
-			Supported: []string{"Videos", "Shorts"},
+			Supported: []string{"Shorts", "Community posts"},
 			FixedLink: "none",
 		},
 		{
 			Name:      "🔴 Reddit",
 			Supported: []string{"Videos", "Images", "Galleries", "Text Posts"},
-			FixedLink: "none",
+			FixedLink: "vxreddit.com",
 		},
 		{
 			Name:      "👥 Facebook",
@@ -233,6 +206,11 @@ func (sc *StartupChecker) printPlatformSupport() {
 			Name:      "😂 9GAG",
 			Supported: []string{"Videos", "Images", "GIFs"},
 			FixedLink: "none",
+		},
+		{
+			Name:      "🧵 Threads",
+			Supported: []string{"Text", "Photos", "Videos"},
+			FixedLink: "vxthreads.com",
 		},
 	}
 
