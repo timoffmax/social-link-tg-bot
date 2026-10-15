@@ -33,9 +33,28 @@ func NewInstagramOGExtractor(tempDir string) *InstagramOGExtractor {
 	return &InstagramOGExtractor{tempDir: tempDir}
 }
 
-// ExtractMedia scrapes the og:image thumbnail and caption and downloads the
-// thumbnail as a photo.
+// ExtractMedia first asks Instagram whether the author gated the post: a gated
+// post yields an InstagramGatedError (its og tags would be a login wall or an
+// unrelated image). Otherwise it downloads the og:image thumbnail as a photo.
 func (e *InstagramOGExtractor) ExtractMedia(instagramURL string) ([]*MediaInfo, error) {
+	var result []*MediaInfo
+	var err error
+	gate := CheckInstagramGate(instagramURL)
+
+	if gate.Restricted == true {
+		err = &InstagramGatedError{Gate: gate}
+	}
+
+	if gate.Restricted == false {
+		result, err = e.extractPreview(instagramURL)
+	}
+
+	return result, err
+}
+
+// extractPreview scrapes the og:image thumbnail and caption and downloads the
+// thumbnail as a photo.
+func (e *InstagramOGExtractor) extractPreview(instagramURL string) ([]*MediaInfo, error) {
 	htmlBody, err := e.fetchHTML(instagramURL)
 
 	if err != nil {

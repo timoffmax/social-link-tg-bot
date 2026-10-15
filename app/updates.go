@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html"
 	"log"
@@ -444,6 +445,12 @@ func processMediaDownload(url string, origChat *response.TgChat, origMessage *re
 
 			log.Printf("🤐 Skipping error notification for %s link", platformName)
 			services.LogTelegramMessage(origChat.Id, "error-skipped", false, "")
+			return
+		}
+
+		// Instagram posts gated by their author can't be fetched logged out, and a
+		// fixed link can't show them either: explain instead.
+		if replyInstagramGate(err, origMessage, origChat) == true {
 			return
 		}
 
@@ -1052,6 +1059,34 @@ func buildVxRedditURL(originalURL string) string {
 
 	parsed.Host = "www.vxreddit.com"
 	result = parsed.String()
+
+	return result
+}
+
+// instagramGatedLogType is the Telegram message log key of a gated-post reply.
+const instagramGatedLogType = "instagram-gated"
+
+// replyInstagramGate replies to an Instagram link whose author limited its
+// audience (e.g. "People under 15 can't see this content") with an explanation.
+// It reports whether that reply was sent, so a failed send keeps the fallbacks.
+func replyInstagramGate(downloadErr error, origMessage *response.TgMessage, origChat *response.TgChat) bool {
+	result := false
+	var gatedErr *services.InstagramGatedError
+	isGated := errors.As(downloadErr, &gatedErr)
+
+	if isGated == true {
+		log.Printf("🔞 Instagram post gated by its author: %s", gatedErr.Gate.Title)
+
+		gateMsg := payload.TgPlSendMessage{
+			ChatId:              origChat.Id,
+			Text:                services.InstagramGateMessage(gatedErr.Gate),
+			ReplyToMessageId:    origMessage.MessageId,
+			DisableNotification: true,
+		}
+		sent := message.NewSendMessage(gateMsg)
+		result = (sent != nil)
+		services.LogTelegramMessage(origChat.Id, instagramGatedLogType, result, "")
+	}
 
 	return result
 }

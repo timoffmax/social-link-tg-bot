@@ -4,9 +4,9 @@ A Telegram bot that downloads and sends actual media files from social media lin
 
 ## Features
 
-- **Real media, not links** — downloads photos, videos, carousels, galleries, slideshows, and stories, and sends them as native Telegram media
+- **Real media, not links** — downloads photos, videos, galleries, slideshows, and stories (Instagram carousels: first item only), and sends them as native Telegram media
 - **Layered extraction chains with automatic fallbacks** — every platform has multiple extraction methods tried in order, so a single dead third-party service never silently kills a platform:
-  - **Instagram**: FastSaverAPI → kkinstagram redirector → cobalt instance(s) → OG-preview fallback
+  - **Instagram**: kkinstagram redirector → OG-preview fallback; posts gated by their author (e.g. age limits) get an explanation instead
   - **Reddit**: direct JSON API (with inline JS-challenge solving) → vxreddit → yt-dlp → headless browser; `/s/` share links resolved; text posts sent as formatted messages
   - **TikTok**: direct scraping → slideshow API → tikwm.com → kktiktok redirector → headless browser; handles both videos and photo slideshows
   - **Twitter/X**: hybrid extraction — full tweet text (with author display name and recursive quote resolution) via FxTwitter + media via yt-dlp
@@ -86,8 +86,7 @@ go build -o social-link-bot .
 | `ENABLE_<PLATFORM>` | Per-platform kill switches (`ENABLE_TIKTOK`, `ENABLE_REDDIT`, ...) |
 | `ENABLE_<PLATFORM>_COOKIES` | Per-platform cookie usage toggles |
 | `ENABLE_PROXIES` / `YTDLP_PROXIES` | Global proxy kill switch + comma-separated proxy list (fallback only) |
-| `FASTSAVER_API_KEY` | Optional keyed primary for the Instagram chain |
-| `KKINSTAGRAM_HOST`, `KKTIKTOK_HOST`, `VXREDDIT_HOST`, `COBALT_INSTANCES` | Override third-party fallback hosts |
+| `KKINSTAGRAM_HOST`, `KKTIKTOK_HOST`, `VXREDDIT_HOST` | Override third-party fallback hosts |
 | `DEFAULT_DAILY_MEDIA_LIMIT` | Default per-user daily limit (0 = unlimited) |
 
 See `.env.example` for the full annotated list.

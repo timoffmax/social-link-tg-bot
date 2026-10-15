@@ -20,8 +20,6 @@ type SmartDownloader struct {
 	rapidAPI    *InstagramRapidAPIExtractor
 	instafix    *InstagramInstafixExtractor
 	kk          *InstagramKKInstagramExtractor
-	cobalt      *InstagramCobaltExtractor
-	fastsaver   *InstagramFastSaverExtractor
 	instagramOG *InstagramOGExtractor
 	reddit      *RedditExtractor
 	redditVx    *RedditVxredditExtractor
@@ -47,8 +45,6 @@ func NewSmartDownloader() *SmartDownloader {
 		rapidAPI:    NewInstagramRapidAPIExtractor(tempDir),
 		instafix:    NewInstagramInstafixExtractor(tempDir),
 		kk:          NewInstagramKKInstagramExtractor(tempDir),
-		cobalt:      NewInstagramCobaltExtractor(tempDir),
-		fastsaver:   NewInstagramFastSaverExtractor(tempDir),
 		instagramOG: NewInstagramOGExtractor(tempDir),
 		reddit:      NewRedditExtractor(tempDir),
 		redditVx:    NewRedditVxredditExtractor(tempDir),
@@ -123,7 +119,7 @@ func (sd *SmartDownloader) downloadMediaWithContext(ctx context.Context, mediaUR
 	totalDuration := time.Since(startTime)
 	LogExtraction(strategy.Platform, mediaURL, "all-methods", false, 0, totalDuration)
 
-	return nil, fmt.Errorf("all extraction methods failed for %s: %v", mediaURL, lastErr)
+	return nil, fmt.Errorf("all extraction methods failed for %s: %w", mediaURL, lastErr)
 }
 
 // getConcurrentCount returns how many of the first strategies can run concurrently.
@@ -351,26 +347,6 @@ func (sd *SmartDownloader) executeStrategy(
 		LogExtraction(strategy.Platform, mediaURL, "instafix", false, 0, methodDuration)
 		return nil, err
 
-	case MethodFastSaver:
-		if ctx.Err() != nil {
-			return nil, ctx.Err()
-		}
-
-		log.Printf("⚡ Trying FastSaverAPI extraction for %s", strategy.Platform)
-		mediaInfos, err := sd.fastsaver.ExtractMedia(mediaURL)
-		methodDuration := time.Since(methodStartTime)
-
-		if (err == nil) && (len(mediaInfos) > 0) {
-			log.Printf("✅ FastSaverAPI extraction succeeded with %d items", len(mediaInfos))
-			LogExtraction(strategy.Platform, mediaURL, "fastsaver", true, len(mediaInfos), time.Since(overallStart))
-			appendOriginalURL(mediaInfos, mediaURL)
-			return mediaInfos, nil
-		}
-
-		log.Printf("❌ FastSaverAPI extraction failed: %v", err)
-		LogExtraction(strategy.Platform, mediaURL, "fastsaver", false, 0, methodDuration)
-		return nil, err
-
 	case MethodKKInstagram:
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
@@ -389,26 +365,6 @@ func (sd *SmartDownloader) executeStrategy(
 
 		log.Printf("❌ kkinstagram extraction failed: %v", err)
 		LogExtraction(strategy.Platform, mediaURL, "kkinstagram", false, 0, methodDuration)
-		return nil, err
-
-	case MethodCobalt:
-		if ctx.Err() != nil {
-			return nil, ctx.Err()
-		}
-
-		log.Printf("🐦 Trying cobalt.tools extraction")
-		mediaInfos, err := sd.cobalt.ExtractMedia(mediaURL)
-		methodDuration := time.Since(methodStartTime)
-
-		if (err == nil) && (len(mediaInfos) > 0) {
-			log.Printf("✅ cobalt extraction succeeded with %d items", len(mediaInfos))
-			LogExtraction(strategy.Platform, mediaURL, "cobalt", true, len(mediaInfos), time.Since(overallStart))
-			appendOriginalURL(mediaInfos, mediaURL)
-			return mediaInfos, nil
-		}
-
-		log.Printf("❌ cobalt extraction failed: %v", err)
-		LogExtraction(strategy.Platform, mediaURL, "cobalt", false, 0, methodDuration)
 		return nil, err
 
 	case MethodInstagramOG:

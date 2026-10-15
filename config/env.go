@@ -293,42 +293,6 @@ func GetVxredditHost() string {
 	return host
 }
 
-// GetCobaltInstances returns the ordered list of cobalt.tools instance base URLs.
-func GetCobaltInstances() []string {
-	raw := strings.TrimSpace(os.Getenv("COBALT_INSTANCES"))
-	if raw == "" {
-		raw = "https://co.eepy.today"
-	}
-
-	parts := strings.Split(raw, ",")
-	result := make([]string, 0, len(parts))
-
-	for _, part := range parts {
-		trimmed := strings.TrimSpace(part)
-
-		if trimmed != "" {
-			result = append(result, trimmed)
-		}
-	}
-
-	return result
-}
-
-// GetFastSaverAPIKey returns the FastSaverAPI key for the keyed Instagram method.
-func GetFastSaverAPIKey() string {
-	return strings.TrimSpace(os.Getenv("FASTSAVER_API_KEY"))
-}
-
-// GetFastSaverAPIHost returns the FastSaverAPI host.
-func GetFastSaverAPIHost() string {
-	host := strings.TrimSpace(os.Getenv("FASTSAVER_API_HOST"))
-	if host == "" {
-		return "api.fastsaver.io"
-	}
-
-	return host
-}
-
 // Helper function to parse boolean environment variables
 func getBoolEnv(key string, defaultValue bool) bool {
 	value := strings.ToLower(strings.TrimSpace(os.Getenv(key)))

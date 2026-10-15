@@ -12,25 +12,10 @@ func getInstagramFixedDomain() string {
 }
 
 // instagramExtractionMethods builds the ordered Instagram method chain: the
-// keyed FastSaver primary (only when a key is configured), the free IP-robust
-// redirectors (cobalt first when photoFirst, for full carousel coverage), and
-// the OG-thumbnail preview as a last resort. Methods run sequentially.
-func instagramExtractionMethods(photoFirst bool) []ExtractionMethod {
-	methods := make([]ExtractionMethod, 0, 4)
-
-	if config.GetFastSaverAPIKey() != "" {
-		methods = append(methods, MethodFastSaver)
-	}
-
-	if photoFirst == true {
-		methods = append(methods, MethodCobalt, MethodKKInstagram)
-	} else {
-		methods = append(methods, MethodKKInstagram, MethodCobalt)
-	}
-
-	methods = append(methods, MethodInstagramOG)
-
-	return methods
+// free IP-robust kkinstagram redirector, then the OG-thumbnail preview as a
+// last resort. Methods run sequentially.
+func instagramExtractionMethods() []ExtractionMethod {
+	return []ExtractionMethod{MethodKKInstagram, MethodInstagramOG}
 }
 
 // ExtractionMethod represents a method for extracting media
@@ -46,8 +31,6 @@ const (
 	MethodRapidAPILinks
 	MethodInstaFix
 	MethodKKInstagram
-	MethodCobalt
-	MethodFastSaver
 	MethodInstagramOG
 	MethodNone
 )
@@ -75,24 +58,7 @@ func GetExtractionStrategy(url string) *ExtractionStrategy {
 				HasFixedLink: false,
 			}
 		}
-		// Instagram videos (reels, IGTV): FastSaver (keyed) first, then free redirectors.
-		if strings.Contains(url, "/reel/") || strings.Contains(url, "/tv/") || strings.Contains(url, "/reels/") {
-			return &ExtractionStrategy{
-				Platform:   "instagram",
-				Methods:    instagramExtractionMethods(false),
-				Sequential: true,
-			}
-		}
 
-		// Instagram photos (/p/ URLs): may be carousels, so prefer cobalt (picker) among the free methods.
-		if strings.Contains(url, "/p/") {
-			log.Printf("📸 Instagram photo - FastSaver, then cobalt/kkinstagram")
-			return &ExtractionStrategy{
-				Platform:   "instagram",
-				Methods:    instagramExtractionMethods(true),
-				Sequential: true,
-			}
-		}
 		// Instagram stories: use RapidAPI stories endpoint first
 		if strings.Contains(url, "/stories/") {
 			log.Printf("📖 Instagram story - will use Stories API with fallback")
@@ -107,10 +73,10 @@ func GetExtractionStrategy(url string) *ExtractionStrategy {
 			}
 		}
 
-		// Instagram other content: FastSaver first, then free redirectors.
+		// Instagram posts, reels and other content: kkinstagram, then OG preview.
 		return &ExtractionStrategy{
 			Platform:   "instagram",
-			Methods:    instagramExtractionMethods(false),
+			Methods:    instagramExtractionMethods(),
 			Sequential: true,
 		}
 	}
@@ -352,10 +318,6 @@ func (es *ExtractionStrategy) LogStrategy() {
 			methodNames[i] = "instafix"
 		case MethodKKInstagram:
 			methodNames[i] = "kkinstagram"
-		case MethodCobalt:
-			methodNames[i] = "cobalt"
-		case MethodFastSaver:
-			methodNames[i] = "fastsaver"
 		case MethodInstagramOG:
 			methodNames[i] = "instagram-og"
 		default:
