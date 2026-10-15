@@ -71,6 +71,7 @@ type SupportPayment struct {
 	Credits    int
 	Payload    string
 	RefundedAt sql.NullTime
+	CreatedAt  time.Time
 }
 
 // SupportPaymentRecord is the outcome of recording a payment: IsNew is false
@@ -230,6 +231,56 @@ func GetSupportPayment(chargeID string) (SupportPayment, bool, error) {
 	}
 
 	return result, isFound, err
+}
+
+// recentSupportPaymentsQuery lists payments newest first; a row without a
+// creation time (the column is nullable) sorts last as the Unix epoch.
+const recentSupportPaymentsQuery = `SELECT telegram_payment_charge_id, user_id, chat_id, stars, credits, payload, refunded_at, COALESCE(created_at, to_timestamp(0)) FROM support_payments ORDER BY created_at DESC NULLS LAST LIMIT $1`
+
+// ListRecentSupportPayments returns the newest payments first, at most
+// limit of them, refunded ones included.
+func ListRecentSupportPayments(limit int) ([]SupportPayment, error) {
+	var result []SupportPayment
+	var rows *sql.Rows
+	db := GetDB()
+	err := errGatedFetchNoDatabase
+	background := context.Background()
+	ctx, cancel := context.WithTimeout(background, supportStoreTimeout)
+	query := recentSupportPaymentsQuery
+
+	defer cancel()
+
+	if db != nil {
+		rows, err = db.QueryContext(ctx, query, limit)
+	}
+
+	if err == nil {
+		defer rows.Close()
+		result, err = scanSupportPayments(rows)
+	}
+
+	return result, err
+}
+
+// scanSupportPayments reads the rows of ListRecentSupportPayments.
+func scanSupportPayments(rows *sql.Rows) ([]SupportPayment, error) {
+	var result []SupportPayment
+	var err error
+
+	for (err == nil) && (rows.Next() == true) {
+		payment := SupportPayment{}
+		err = rows.Scan(&payment.ChargeID, &payment.UserID, &payment.ChatID, &payment.Stars, &payment.Credits, &payment.Payload, &payment.RefundedAt, &payment.CreatedAt)
+
+		if err == nil {
+			result = append(result, payment)
+		}
+	}
+
+	if err == nil {
+		err = rows.Err()
+	}
+
+	return result, err
 }
 
 // MarkSupportPaymentRefunded marks the user's payment refunded and removes

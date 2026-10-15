@@ -90,8 +90,8 @@ const (
 	supportRepeatTemplate    = "⭐ Thank you! This payment was already counted. Bonus downloads left: %d."
 	supportNoTierText        = "⭐ Thank you for your support! This payment didn't match a support tier, so no bonus downloads were added. If that's wrong, see /paysupport."
 	supportRecordFailedText  = "⭐ Thank you! Your payment arrived, but the bonus downloads couldn't be added right now. The owner has been told and will fix it; see /paysupport."
-	supportPaymentAlertText  = "⭐ Stars payment: %d Stars from user %d in chat %d (charge %s, %d credits)"
-	supportRecordAlertText   = "⚠️ Stars payment of %d Stars from user %d (charge %s) could not be recorded: %v"
+	supportPaymentAlertText  = "⭐ Stars payment: %d Stars from user %d in chat %d (charge %s, %d credits)\n\nTo refund: /owner → ⭐ Stars Payments"
+	supportRecordAlertText   = "⚠️ Stars payment of %d Stars from user %d (charge %s) could not be recorded: %v\n\nIt isn't in the payments list. To refund: /starsrefund %d %s"
 	supportGatedHintTemplate = "Get bonus downloads by supporting the bot: %s"
 )
 
@@ -300,7 +300,7 @@ func handleSuccessfulPayment(origMessage *response.TgMessage, origChat *response
 
 	if err != nil {
 		log.Printf("❌ [stars] recording charge %s failed: %v", payment.ChargeID, err)
-		alert = fmt.Sprintf(supportRecordAlertText, payment.Stars, userID, payment.ChargeID, err)
+		alert = fmt.Sprintf(supportRecordAlertText, payment.Stars, userID, payment.ChargeID, err, userID, payment.ChargeID)
 	}
 
 	if (err == nil) && (record.IsNew == true) {

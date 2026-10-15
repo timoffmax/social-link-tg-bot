@@ -294,3 +294,31 @@ func TestGatedFetchOwnerBlockIsNotOverriddenByCredits(t *testing.T) {
 		t.Fatalf("an owner block must not be overridden by credits: err=%v balance=%d", err, balance)
 	}
 }
+
+func TestListRecentSupportPaymentsReturnsNewestFirstWithRefunds(t *testing.T) {
+	setupGatedFetchTestDB(t)
+
+	for _, chargeID := range []string{"old", "new"} {
+		payment := SupportPayment{ChargeID: chargeID, UserID: 42, ChatID: 42, Stars: 25, Credits: 10, Payload: "support:25:42"}
+
+		if _, err := RecordSupportPayment(payment); err != nil {
+			t.Fatalf("record: %v", err)
+		}
+	}
+
+	mustExec(t, GetDB(), "UPDATE support_payments SET created_at = created_at - INTERVAL '1 hour' WHERE telegram_payment_charge_id = 'old'")
+
+	if _, err := MarkSupportPaymentRefunded(42, "old"); err != nil {
+		t.Fatalf("refund: %v", err)
+	}
+
+	payments, err := ListRecentSupportPayments(10)
+
+	if (err != nil) || (len(payments) != 2) || (payments[0].ChargeID != "new") {
+		t.Fatalf("expected the newest first, got %+v (%v)", payments, err)
+	}
+
+	if (payments[1].RefundedAt.Valid == false) || (payments[0].CreatedAt.IsZero() == true) {
+		t.Fatalf("expected the refund mark and creation time, got %+v", payments)
+	}
+}

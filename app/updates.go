@@ -4150,6 +4150,7 @@ func createOwnerMenuKeyboard() *api.TgInlineKeyboardMarkup {
 			},
 			{
 				{Text: "🐛 Reports", CallbackData: "/owner_reports"},
+				{Text: starsPaymentsButtonText, CallbackData: starsPaymentsCallback},
 			},
 			{
 				{Text: "📊 Admin Stats", CallbackData: "/owner_adminstats"},
@@ -4168,7 +4169,16 @@ func handleOwnerCallback(callbackQuery *response.TgCallbackQuery) {
 	chatID := callbackQuery.Message.Chat.Id
 	messageID := callbackQuery.Message.MessageId
 
-	switch callbackQuery.Data {
+	ownerAction := callbackQuery.Data
+
+	// The Stars payments screens carry a payment key; one case handles them.
+	if isStarsPaymentsCallback(ownerAction) == true {
+		ownerAction = starsPaymentsCallback
+	}
+
+	switch ownerAction {
+	case starsPaymentsCallback:
+		handleStarsPaymentsCallback(callbackQuery)
 	case "/owner":
 		text := "🔧 <b>Owner Panel</b>\n\nChoose an action:"
 
