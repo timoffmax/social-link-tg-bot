@@ -121,7 +121,7 @@ func canManageGroup(chat *response.TgChat, userID int) bool {
 // isSelfAnsweredCallback reports a callback whose handler answers it with a
 // toast, so the dispatcher doesn't answer it again.
 func isSelfAnsweredCallback(data string) bool {
-	result := (data == reportPostCallback) || (isPostButtonToggleCallback(data) == true)
+	result := (data == reportPostCallback) || (isReportPromptCallback(data) == true) || (isPostButtonToggleCallback(data) == true)
 
 	return result
 }

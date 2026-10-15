@@ -3107,6 +3107,8 @@ func dispatchCallbackQuery(callbackQuery *response.TgCallbackQuery) {
 		handleReportFailedCallback(callbackQuery)
 	case callbackQuery.Data == reportPostCallback:
 		handleReportPostCallback(callbackQuery)
+	case isReportPromptCallback(callbackQuery.Data) == true:
+		handleReportPromptCallback(callbackQuery)
 	case isPostButtonToggleCallback(callbackQuery.Data) == true:
 		handlePostButtonToggleCallback(callbackQuery)
 	case strings.HasPrefix(callbackQuery.Data, "/help"):

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/timoffmax/social-link-bot/model/api/response"
 )
@@ -19,8 +20,10 @@ func startReportTest(t *testing.T) *botAPIRecorder {
 	previousCreate := createReport
 	previousClaims := reportClaims
 	previousReplies := reportReplies
+	previousNext := reportNextMessages
 	reportClaims = newTTLStore(reportClaimTTL)
 	reportReplies = newTTLStore(reportReplyTTL)
+	reportNextMessages = newTTLStore(reportReplyTTL)
 	nextReportID := 0
 	createReport = func(int64, string, string, int64, string, string) (int, error) {
 		nextReportID++
@@ -31,6 +34,7 @@ func startReportTest(t *testing.T) *botAPIRecorder {
 		createReport = previousCreate
 		reportClaims = previousClaims
 		reportReplies = previousReplies
+		reportNextMessages = previousNext
 	})
 
 	return recorder
@@ -68,37 +72,211 @@ func TestBareReportOpensAForcedReplyPrompt(t *testing.T) {
 	}
 }
 
-func TestReplyToThePromptIsAReportEvenWithALink(t *testing.T) {
-	recorder := startReportTest(t)
-	reply := &response.TgMessage{MessageId: 6, Text: "this reel fails https://www.instagram.com/reel/ABC/", ReplyToMessage: reportBotMessage(5, reportPromptTitle+"\n\nReply to this message")}
-	rememberReportReply(42, reportBotMessage(5, ""), 42, 0)
+// sentMessageID returns the id the fake Bot API gave the n-th call (a
+// sendMessage), 0-based.
+func sentMessageID(index int) int {
+	result := index + 1 + 1000
 
-	isReport := handleReportPromptReply(reply, &response.TgChat{Id: 42, Type: chatTypePrivate}, &response.TgUser{Id: 42, FirstName: "Ann"})
+	return result
+}
 
-	calls := recorder.all()
-	ownerCalls := callsTo(calls, 1)
-	userCalls := callsTo(calls, 42)
-	ownerText, _ := ownerCalls[0].body["text"].(string)
+// lastSendIndex returns the index of the last sendMessage call to the chat.
+func lastSendIndex(calls []botAPICall, chatID float64) int {
+	result := -1
 
-	if (isReport == false) || (len(ownerCalls) != 1) || (len(userCalls) != 1) {
-		t.Fatalf("expected a report and a thank-you, got %+v", calls)
+	for index, call := range calls {
+		if (call.method == "sendMessage") && (call.body["chat_id"] == chatID) {
+			result = index
+		}
 	}
 
-	if strings.Contains(ownerText, "https://www.instagram.com/reel/ABC/") == false {
-		t.Fatalf("expected the link in the report, got %q", ownerText)
+	return result
+}
+
+// tapReportUnderPost taps 🐛 Report under a post and returns the prompt.
+func tapReportUnderPost(t *testing.T, recorder *botAPIRecorder, chat response.TgChat, user response.TgUser, postID int) *response.TgMessage {
+	original := &response.TgMessage{MessageId: postID - 1, Text: "https://www.tiktok.com/@a/video/2"}
+	post := response.TgMessage{MessageId: postID, Date: 1, Caption: "🎵 Author", Chat: chat, ReplyToMessage: original}
+	post.CaptionEntities = []response.TgMessageEntity{{Type: "text_link", URL: "https://www.tiktok.com/@a/video/2"}}
+
+	handleReportPostCallback(&response.TgCallbackQuery{Id: "c1", From: user, Message: post, Data: reportPostCallback})
+
+	index := lastSendIndex(recorder.all(), float64(chat.Id))
+
+	if index < 0 {
+		t.Fatalf("expected a prompt, got %+v", recorder.all())
+	}
+
+	prompt := reportBotMessage(sentMessageID(index), reportPostPromptTitle)
+	prompt.Chat = chat
+	prompt.ReplyToMessage = &post
+
+	return prompt
+}
+
+func TestReportUnderPostAsksFirstAndSendsNothingYet(t *testing.T) {
+	recorder := startReportTest(t)
+	tapReportUnderPost(t, recorder, response.TgChat{Id: 42, Type: chatTypePrivate}, response.TgUser{Id: 42}, 10)
+
+	calls := recorder.all()
+	prompt := calls[lastSendIndex(calls, 42)]
+	markup, _ := prompt.body["reply_markup"].(map[string]interface{})
+
+	if (len(callsTo(calls, 1)) != 0) || (markup == nil) {
+		t.Fatalf("expected a prompt with buttons and no report yet, got %+v", calls)
 	}
 }
 
-func TestReplyToAnotherBotMessageIsNotAReport(t *testing.T) {
+func TestNextPrivateMessageIsSentTogetherWithThePost(t *testing.T) {
 	recorder := startReportTest(t)
-	reply := &response.TgMessage{MessageId: 6, Text: "nice", ReplyToMessage: reportBotMessage(5, "🎬 a video caption")}
+	chat := response.TgChat{Id: 42, Type: chatTypePrivate}
+	tapReportUnderPost(t, recorder, chat, response.TgUser{Id: 42}, 10)
+	note := &response.TgMessage{MessageId: 30, Text: "the video has no sound"}
 
-	if handleReportPromptReply(reply, &response.TgChat{Id: 42, Type: chatTypePrivate}, &response.TgUser{Id: 42}) == true {
-		t.Fatalf("a reply to a normal bot message must not be a report")
+	if handleReportPromptReply(note, &chat, &response.TgUser{Id: 42}) == false {
+		t.Fatalf("expected the next message to answer the prompt")
 	}
 
-	if calls := recorder.all(); len(calls) != 0 {
-		t.Fatalf("expected no calls, got %+v", calls)
+	ownerCalls := callsTo(recorder.all(), 1)
+	ownerText, _ := ownerCalls[0].body["text"].(string)
+
+	if (len(ownerCalls) != 1) || (strings.Contains(ownerText, "the video has no sound") == false) || (strings.Contains(ownerText, "Links: https://www.tiktok.com/@a/video/2") == false) {
+		t.Fatalf("expected one report with the note and the post, got %+v", ownerCalls)
+	}
+
+	later := &response.TgMessage{MessageId: 31, Text: "https://www.instagram.com/reel/ABC/"}
+
+	if handleReportPromptReply(later, &chat, &response.TgUser{Id: 42}) == true {
+		t.Fatalf("only the first message after the prompt belongs to the report")
+	}
+}
+
+func TestSendWithoutDetailsSendsThePostAlone(t *testing.T) {
+	recorder := startReportTest(t)
+	chat := response.TgChat{Id: 42, Type: chatTypePrivate}
+	prompt := tapReportUnderPost(t, recorder, chat, response.TgUser{Id: 42}, 10)
+
+	handleReportPromptCallback(&response.TgCallbackQuery{Id: "c2", From: response.TgUser{Id: 42}, Message: *prompt, Data: reportSendCallback})
+
+	ownerCalls := callsTo(recorder.all(), 1)
+	ownerText, _ := ownerCalls[0].body["text"].(string)
+
+	if (len(ownerCalls) != 1) || (strings.Contains(ownerText, reportNoDescriptionText) == false) {
+		t.Fatalf("expected one report without a note, got %+v", ownerCalls)
+	}
+
+	note := &response.TgMessage{MessageId: 30, Text: "late note"}
+
+	if handleReportPromptReply(note, &chat, &response.TgUser{Id: 42}) == true {
+		t.Fatalf("a sent report doesn't take more messages")
+	}
+}
+
+func TestCancelSendsNothingAndAllowsReportingAgain(t *testing.T) {
+	recorder := startReportTest(t)
+	chat := response.TgChat{Id: 42, Type: chatTypePrivate}
+	prompt := tapReportUnderPost(t, recorder, chat, response.TgUser{Id: 42}, 10)
+
+	handleReportPromptCallback(&response.TgCallbackQuery{Id: "c2", From: response.TgUser{Id: 42}, Message: *prompt, Data: reportCancelCallback})
+
+	if len(callsTo(recorder.all(), 1)) != 0 {
+		t.Fatalf("a canceled report must not be sent")
+	}
+
+	tapReportUnderPost(t, recorder, chat, response.TgUser{Id: 42}, 10)
+}
+
+func TestInAGroupOnlyTheReportersReplyIsTheNote(t *testing.T) {
+	recorder := startReportTest(t)
+	group := response.TgChat{Id: -110, Type: "supergroup", Title: "G"}
+	prompt := tapReportUnderPost(t, recorder, group, response.TgUser{Id: 42, Username: "ann"}, 10)
+	other := &response.TgMessage{MessageId: 21, Text: "https://www.tiktok.com/@a/video/3", ReplyToMessage: prompt}
+	notReply := &response.TgMessage{MessageId: 22, Text: "chatting"}
+	answer := &response.TgMessage{MessageId: 23, Text: "no sound", ReplyToMessage: prompt}
+
+	if handleReportPromptReply(other, &group, &response.TgUser{Id: 43}) == true {
+		t.Fatalf("another member's reply must be handled normally")
+	}
+
+	if handleReportPromptReply(notReply, &group, &response.TgUser{Id: 42}) == true {
+		t.Fatalf("in a group only a reply to the prompt counts")
+	}
+
+	handleReportPostCallback(&response.TgCallbackQuery{Id: "c3", From: response.TgUser{Id: 43}, Message: *prompt.ReplyToMessage, Data: reportPostCallback})
+	handleReportPromptCallback(&response.TgCallbackQuery{Id: "c4", From: response.TgUser{Id: 43}, Message: *prompt, Data: reportSendCallback})
+
+	if handleReportPromptReply(answer, &group, &response.TgUser{Id: 42}) == false {
+		t.Fatalf("expected the reporter's reply to be the note")
+	}
+
+	ownerCalls := callsTo(recorder.all(), 1)
+
+	if len(ownerCalls) != 1 {
+		t.Fatalf("expected only the reporter's report, got %+v", ownerCalls)
+	}
+
+	groupCalls := callsTo(recorder.all(), float64(group.Id))
+	promptText, _ := groupCalls[0].body["text"].(string)
+
+	if strings.Contains(promptText, "@ann: ") == false {
+		t.Fatalf("expected the prompt to mention the reporter, got %q", promptText)
+	}
+}
+
+func TestUndeliveredNoteKeepsThePromptWaiting(t *testing.T) {
+	recorder := startReportTest(t)
+	t.Setenv("ADMIN_USER_ID", "")
+	createReport = func(int64, string, string, int64, string, string) (int, error) {
+		return 0, errors.New("db down")
+	}
+	chat := response.TgChat{Id: 42, Type: chatTypePrivate}
+	tapReportUnderPost(t, recorder, chat, response.TgUser{Id: 42}, 10)
+	note := &response.TgMessage{MessageId: 30, Text: "broken"}
+
+	handleReportPromptReply(note, &chat, &response.TgUser{Id: 42})
+
+	calls := recorder.all()
+	answer, _ := calls[len(calls)-1].body["text"].(string)
+
+	if answer != reportSaveFailedText {
+		t.Fatalf("expected the failure answer, got %q", answer)
+	}
+
+	retry := &response.TgMessage{MessageId: 31, Text: "broken again"}
+
+	if handleReportPromptReply(retry, &chat, &response.TgUser{Id: 42}) == false {
+		t.Fatalf("the prompt must keep waiting for a retry")
+	}
+}
+
+func TestReplyToAPromptFromBeforeARestartIsAnswered(t *testing.T) {
+	recorder := startReportTest(t)
+	reply := &response.TgMessage{MessageId: 41, Text: "broken", ReplyToMessage: reportBotMessage(40, reportPromptTitle+"\n\nDescribe the problem")}
+
+	if handleReportPromptReply(reply, &response.TgChat{Id: 42, Type: chatTypePrivate}, &response.TgUser{Id: 42}) == false {
+		t.Fatalf("a reply to an untracked prompt must not be lost in silence")
+	}
+
+	userCalls := callsTo(recorder.all(), 42)
+	answer, _ := userCalls[0].body["text"].(string)
+
+	if (answer != reportPromptExpiredText) || (len(callsTo(recorder.all(), 1)) != 0) {
+		t.Fatalf("expected the expired answer and no report, got %+v", recorder.all())
+	}
+}
+
+func TestBareReportPromptTakesTheNextPrivateMessage(t *testing.T) {
+	recorder := startReportTest(t)
+	chat := response.TgChat{Id: 42, Type: chatTypePrivate}
+
+	handleReportCommand(&response.TgMessage{MessageId: 5, Text: "/report"}, &chat, &response.TgUser{Id: 42})
+	handleReportPromptReply(&response.TgMessage{MessageId: 6, Text: "stories never load"}, &chat, &response.TgUser{Id: 42})
+
+	ownerCalls := callsTo(recorder.all(), 1)
+	ownerText, _ := ownerCalls[0].body["text"].(string)
+
+	if (len(ownerCalls) != 1) || (strings.Contains(ownerText, "stories never load") == false) {
+		t.Fatalf("expected the next message as the report, got %+v", ownerCalls)
 	}
 }
 
@@ -179,191 +357,61 @@ func TestMenuReportPromptMentionsTheUserOnlyInGroups(t *testing.T) {
 	}
 }
 
-func TestReplyToThePromptCountsWithoutTheBotUsername(t *testing.T) {
+func TestALinkAfterThePromptIsDownloadedNotFiled(t *testing.T) {
 	recorder := startReportTest(t)
-	botUsername = ""
-	reply := &response.TgMessage{MessageId: 6, Text: "broken", ReplyToMessage: reportBotMessage(5, reportPromptTitle)}
-	rememberReportReply(42, reportBotMessage(5, ""), 42, 0)
+	chat := response.TgChat{Id: 42, Type: chatTypePrivate}
+	tapReportUnderPost(t, recorder, chat, response.TgUser{Id: 42}, 10)
+	link := &response.TgMessage{MessageId: 30, Text: "https://www.tiktok.com/@a/video/9"}
+	sticker := &response.TgMessage{MessageId: 31}
 
-	if handleReportPromptReply(reply, &response.TgChat{Id: 42, Type: chatTypePrivate}, &response.TgUser{Id: 42}) == false {
-		t.Fatalf("expected a report while the bot username is unknown")
+	if handleReportPromptReply(link, &chat, &response.TgUser{Id: 42}) == true {
+		t.Fatalf("a bare link must be downloaded, not filed")
 	}
 
-	if ownerCalls := callsTo(recorder.all(), 1); len(ownerCalls) != 1 {
-		t.Fatalf("expected the report to reach the owner, got %+v", ownerCalls)
+	if handleReportPromptReply(sticker, &chat, &response.TgUser{Id: 42}) == true {
+		t.Fatalf("a message without text must not be filed")
+	}
+
+	note := &response.TgMessage{MessageId: 32, Text: "no sound"}
+
+	if handleReportPromptReply(note, &chat, &response.TgUser{Id: 42}) == false {
+		t.Fatalf("the prompt must still wait for words")
 	}
 }
 
-func TestReportPostButtonReportsThePostOnceAndAsksForDetails(t *testing.T) {
+func TestReplyToThePostAnswersThePrivatePrompt(t *testing.T) {
 	recorder := startReportTest(t)
-	original := &response.TgMessage{MessageId: 3, Text: "https://www.tiktok.com/@a/video/2"}
-	post := response.TgMessage{MessageId: 9, Date: 1, Caption: "🎵 Author", Chat: response.TgChat{Id: 42, Type: chatTypePrivate}, ReplyToMessage: original}
-	post.CaptionEntities = []response.TgMessageEntity{{Type: "text_link", URL: "https://www.tiktok.com/@a/video/2"}}
-	query := &response.TgCallbackQuery{Id: "c1", From: response.TgUser{Id: 42}, Message: post, Data: reportPostCallback}
+	chat := response.TgChat{Id: 42, Type: chatTypePrivate}
+	prompt := tapReportUnderPost(t, recorder, chat, response.TgUser{Id: 42}, 10)
+	post := reportBotMessage(prompt.ReplyToMessage.MessageId, "🎵 Author")
+	reply := &response.TgMessage{MessageId: 30, Text: "no sound", ReplyToMessage: post}
 
-	handleReportPostCallback(query)
-	handleReportPostCallback(query)
-
-	calls := recorder.all()
-	ownerCalls := callsTo(calls, 1)
-	userCalls := callsTo(calls, 42)
-	ownerText, _ := ownerCalls[0].body["text"].(string)
-	followUp, _ := userCalls[0].body["text"].(string)
-
-	if (len(ownerCalls) != 1) || (strings.Contains(ownerText, reportPostTitle) == false) || (strings.Contains(ownerText, "Links: https://www.tiktok.com/@a/video/2") == false) {
-		t.Fatalf("expected one report with the post's link, got %+v", ownerCalls)
+	if handleReportPromptReply(reply, &chat, &response.TgUser{Id: 42}) == false {
+		t.Fatalf("a reply to the post must answer the open prompt")
 	}
 
-	if (len(userCalls) != 1) || (strings.Contains(followUp, reportFollowUpTitle) == false) {
-		t.Fatalf("expected one follow-up, got %+v", userCalls)
+	if len(callsTo(recorder.all(), 1)) != 1 {
+		t.Fatalf("expected one report")
 	}
 }
 
-func TestReplyToTheFollowUpIsFiledAsAReport(t *testing.T) {
+func TestAnsweringAnOlderPromptKeepsTheNewestAsNextMessage(t *testing.T) {
 	recorder := startReportTest(t)
-	reply := &response.TgMessage{MessageId: 11, Text: "no sound", ReplyToMessage: reportBotMessage(10, reportFollowUpTitle+"\n\nAnything to add?")}
-	rememberReportReply(42, reportBotMessage(10, ""), 42, 3)
+	chat := response.TgChat{Id: 42, Type: chatTypePrivate}
+	older := tapReportUnderPost(t, recorder, chat, response.TgUser{Id: 42}, 10)
+	tapReportUnderPost(t, recorder, chat, response.TgUser{Id: 42}, 20)
 
-	if handleReportPromptReply(reply, &response.TgChat{Id: 42, Type: chatTypePrivate}, &response.TgUser{Id: 42}) == false {
-		t.Fatalf("expected the details to be filed")
-	}
+	handleReportPromptCallback(&response.TgCallbackQuery{Id: "c2", From: response.TgUser{Id: 42}, Message: *older, Data: reportSendCallback})
 
-	if ownerCalls := callsTo(recorder.all(), 1); len(ownerCalls) != 1 {
-		t.Fatalf("expected the details to reach the owner, got %+v", ownerCalls)
+	note := &response.TgMessage{MessageId: 30, Text: "second post has no sound"}
+
+	if handleReportPromptReply(note, &chat, &response.TgUser{Id: 42}) == false {
+		t.Fatalf("the newest prompt must still take the next message")
 	}
 }
 
-func TestReportPostFollowUpMentionsTheReporterInGroups(t *testing.T) {
-	recorder := startReportTest(t)
-	post := response.TgMessage{MessageId: 12, Date: 1, Caption: "x", Chat: response.TgChat{Id: -100, Type: "supergroup", Title: "G"}}
-
-	handleReportPostCallback(&response.TgCallbackQuery{Id: "c1", From: response.TgUser{Id: 42, Username: "ann"}, Message: post, Data: reportPostCallback})
-
-	groupCalls := callsTo(recorder.all(), -100)
-	followUp, _ := groupCalls[0].body["text"].(string)
-
-	if (len(groupCalls) != 1) || (strings.Contains(followUp, "@ann: ") == false) {
-		t.Fatalf("expected a follow-up mentioning the reporter, got %+v", groupCalls)
-	}
-}
-
-func TestDetailsRepliedToTheFollowUpNameTheReport(t *testing.T) {
-	recorder := startReportTest(t)
-	followUp := reportBotMessage(13, reportFollowUpTitle+"\n\nReport #57. Anything to add? Reply to this message.")
-	reply := &response.TgMessage{MessageId: 14, Text: "no sound", ReplyToMessage: followUp}
-	rememberReportReply(42, followUp, 42, 57)
-
-	handleReportPromptReply(reply, &response.TgChat{Id: 42, Type: chatTypePrivate}, &response.TgUser{Id: 42})
-
-	ownerCalls := callsTo(recorder.all(), 1)
-	ownerText, _ := ownerCalls[0].body["text"].(string)
-
-	if strings.Contains(ownerText, "Details for report #57") == false {
-		t.Fatalf("expected the details to name the report, got %q", ownerText)
-	}
-}
-
-func TestTwoUsersCanReportTheSamePost(t *testing.T) {
-	recorder := startReportTest(t)
-	post := response.TgMessage{MessageId: 15, Date: 1, Caption: "x", Chat: response.TgChat{Id: -103, Type: "supergroup"}}
-
-	handleReportPostCallback(&response.TgCallbackQuery{Id: "c1", From: response.TgUser{Id: 42}, Message: post, Data: reportPostCallback})
-	handleReportPostCallback(&response.TgCallbackQuery{Id: "c2", From: response.TgUser{Id: 43}, Message: post, Data: reportPostCallback})
-
-	if ownerCalls := callsTo(recorder.all(), 1); len(ownerCalls) != 2 {
-		t.Fatalf("expected a report from each user, got %+v", ownerCalls)
-	}
-}
-
-func TestOnlyTheReporterRepliesToTheirFollowUpOnce(t *testing.T) {
-	recorder := startReportTest(t)
-	followUp := reportBotMessage(20, reportFollowUpTitle)
-	group := &response.TgChat{Id: -110, Type: "supergroup"}
-	rememberReportReply(group.Id, followUp, 42, 9)
-	other := &response.TgMessage{MessageId: 21, Text: "https://www.tiktok.com/@a/video/3", ReplyToMessage: followUp}
-	first := &response.TgMessage{MessageId: 22, Text: "no sound", ReplyToMessage: followUp}
-	second := &response.TgMessage{MessageId: 23, Text: "lol", ReplyToMessage: followUp}
-
-	if handleReportPromptReply(other, group, &response.TgUser{Id: 43}) == true {
-		t.Fatalf("another member's reply must be handled normally")
-	}
-
-	if handleReportPromptReply(first, group, &response.TgUser{Id: 42}) == false {
-		t.Fatalf("expected the reporter's details to be filed")
-	}
-
-	handleReportPromptReply(second, group, &response.TgUser{Id: 42})
-
-	if ownerCalls := callsTo(recorder.all(), 1); len(ownerCalls) != 1 {
-		t.Fatalf("only one reply is filed as details, got %+v", ownerCalls)
-	}
-
-	for _, call := range callsTo(recorder.all(), float64(group.Id)) {
-		if call.body["text"] == reportPromptExpiredText {
-			t.Fatalf("group replies to an answered follow-up are handled normally, got %+v", call)
-		}
-	}
-}
-
-func TestUnsavedPostReportCanBeRetried(t *testing.T) {
-	recorder := startReportTest(t)
-	createReport = func(int64, string, string, int64, string, string) (int, error) {
-		return 0, errors.New("db down")
-	}
-	post := response.TgMessage{MessageId: 24, Date: 1, Caption: "x", Chat: response.TgChat{Id: 42, Type: chatTypePrivate}}
-	query := &response.TgCallbackQuery{Id: "c1", From: response.TgUser{Id: 42}, Message: post, Data: reportPostCallback}
-
-	handleReportPostCallback(query)
-	handleReportPostCallback(query)
-
-	toasts := 0
-
-	for _, call := range recorder.all() {
-		if (call.method == "answerCallbackQuery") && (call.body["text"] == reportPostFailedToast) {
-			toasts++
-		}
-	}
-
-	if toasts != 2 {
-		t.Fatalf("expected both taps to try again and report the failure, got %+v", recorder.all())
-	}
-}
-
-func TestUnsavedReplyKeepsThePromptWaiting(t *testing.T) {
-	recorder := startReportTest(t)
-	createReport = func(int64, string, string, int64, string, string) (int, error) {
-		return 0, errors.New("db down")
-	}
-	prompt := reportBotMessage(30, reportPromptTitle)
-	rememberReportReply(42, prompt, 42, 0)
-	reply := &response.TgMessage{MessageId: 31, Text: "broken", ReplyToMessage: prompt}
-
-	handleReportPromptReply(reply, &response.TgChat{Id: 42, Type: chatTypePrivate}, &response.TgUser{Id: 42})
-
-	userCalls := callsTo(recorder.all(), 42)
-	answer, _ := userCalls[0].body["text"].(string)
-
-	if answer != reportSaveFailedText {
-		t.Fatalf("expected the failure answer, got %q", answer)
-	}
-
-	if _, isWaiting := reportReplies.get(reportReplyKey(42, 30)); isWaiting == false {
-		t.Fatalf("the prompt must keep waiting for a retry")
-	}
-}
-
-func TestReplyToAPromptFromBeforeARestartIsAnswered(t *testing.T) {
-	recorder := startReportTest(t)
-	reply := &response.TgMessage{MessageId: 41, Text: "broken", ReplyToMessage: reportBotMessage(40, reportPromptTitle+"\n\nReply to this message")}
-
-	if handleReportPromptReply(reply, &response.TgChat{Id: 42, Type: chatTypePrivate}, &response.TgUser{Id: 42}) == false {
-		t.Fatalf("a reply to an untracked prompt must not be lost in silence")
-	}
-
-	userCalls := callsTo(recorder.all(), 42)
-	answer, _ := userCalls[0].body["text"].(string)
-
-	if (answer != reportPromptExpiredText) || (len(callsTo(recorder.all(), 1)) != 0) {
-		t.Fatalf("expected the expired answer and no report, got %+v", recorder.all())
+func TestNextMessageWindowIsShort(t *testing.T) {
+	if reportNextMessageTTL > 15*time.Minute {
+		t.Fatalf("the next-message window must stay short, got %v", reportNextMessageTTL)
 	}
 }

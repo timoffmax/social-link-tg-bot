@@ -2,6 +2,7 @@ package app
 
 import (
 	"encoding/json"
+	"fmt"
 	"io/ioutil"
 	"net/http"
 	"net/http/httptest"
@@ -62,10 +63,19 @@ func startTestBotAPI(t *testing.T, isStarsSupportEnabled bool) *botAPIRecorder {
 		json.Unmarshal(raw, &body)
 		parts := strings.Split(r.URL.Path, "/")
 		recorder.mu.Lock()
-		recorder.calls = append(recorder.calls, botAPICall{method: parts[len(parts)-1], body: body})
+		method := parts[len(parts)-1]
+		recorder.calls = append(recorder.calls, botAPICall{method: method, body: body})
+		messageID := len(recorder.calls) + 1000
 		recorder.mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"ok":true,"result":true}`))
+		answer := `{"ok":true,"result":true}`
+
+		// Sent messages come back with an id, like Telegram's.
+		if method == "sendMessage" {
+			answer = fmt.Sprintf(`{"ok":true,"result":{"message_id":%d,"date":1}}`, messageID)
+		}
+
+		w.Write([]byte(answer))
 	}))
 
 	enabled := "false"
