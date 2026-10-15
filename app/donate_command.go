@@ -30,7 +30,13 @@ const donateIntroCryptoText = "Support is optional: the bot stays free, with no 
 // donateStarsText describes the Stars tiers; only Stars support adds bonus
 // downloads, crypto donations unlock nothing.
 const donateStarsText = `⭐ <b>Telegram Stars:</b>
-Pick an amount with the buttons below. As a thank-you you get bonus downloads of restricted Instagram posts. They're used once your monthly free downloads, or the bot's monthly limit, run out. Card and crypto donations don't add bonus downloads.
+Pick an amount with the buttons below. As a thank-you you get bonus downloads of restricted Instagram posts: age- or region-limited posts the bot can only fetch through a paid service.
+
+<b>How bonus downloads work:</b>
+• They're yours: they work in any chat, but only for links you send. They aren't shared with the group.
+• Free downloads come first. A bonus download is used only once the free monthly limit (yours, the chat's or the bot's) runs out.
+• If the bot can't fetch the post, no bonus download is used. They don't expire.
+• Card and crypto donations don't add bonus downloads.
 
 By paying you agree to the /terms. Help with payments: /paysupport.`
 
@@ -97,6 +103,21 @@ func isStarsOfferedTo(userID int64) bool {
 
 	if result == true {
 		result = supportCreditsUsable(userID)
+	}
+
+	return result
+}
+
+// postSupportMarkup returns the button that opens /donate for a photo or
+// video that is a whole post (not an album item) in a private chat; groups
+// stay clean. Otherwise it is nil, so the message has no buttons.
+func postSupportMarkup(chat *response.TgChat, isWholePost bool) api.TgReplyMarkupInterface {
+	var result api.TgReplyMarkupInterface
+	isShown := (isWholePost == true) && (chat.Type == chatTypePrivate)
+
+	if isShown == true {
+		button := api.TgInlineKeyboardButton{Text: supportMenuButtonText, CallbackData: donateCommand}
+		result = &api.TgInlineKeyboardMarkup{InlineKeyboard: [][]api.TgInlineKeyboardButton{{button}}}
 	}
 
 	return result

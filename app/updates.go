@@ -589,7 +589,7 @@ func processMediaDownload(url string, origChat *response.TgChat, origMessage *re
 			log.Printf("Fallback: sending photos individually")
 			for i, photoInfo := range photos {
 				log.Printf("Sending photo %d/%d: %s", i+1, len(photos), photoInfo.Filename)
-				err := sendMediaFile(photoInfo, origChat, origMessage, url)
+				err := sendMediaFile(photoInfo, origChat, origMessage, url, false)
 				if err != nil {
 					log.Printf("Failed to send photo file %s: %v", photoInfo.Filename, err)
 				} else {
@@ -607,7 +607,8 @@ func processMediaDownload(url string, origChat *response.TgChat, origMessage *re
 	} else if len(photos) == 1 {
 		// Send single photo normally
 		log.Printf("Sending single photo: %s", photos[0].Filename)
-		err := sendMediaFile(photos[0], origChat, origMessage, url)
+		isWholePost := (len(otherMedia) == 0)
+		err := sendMediaFile(photos[0], origChat, origMessage, url, isWholePost)
 		if err != nil {
 			log.Printf("Failed to send photo file %s: %v", photos[0].Filename, err)
 		} else {
@@ -628,7 +629,8 @@ func processMediaDownload(url string, origChat *response.TgChat, origMessage *re
 			}
 		}
 
-		err := sendMediaFile(mediaInfo, origChat, origMessage, url)
+		isWholePost := ((len(photos) == 0) && (len(otherMedia) == 1))
+		err := sendMediaFile(mediaInfo, origChat, origMessage, url, isWholePost)
 		if err != nil {
 			log.Printf("Failed to send media file %s: %v", mediaInfo.Filename, err)
 
@@ -806,8 +808,11 @@ func extractOtherAuthorInfo(fullCaption, platform string) string {
 	return "📱 Social Media"
 }
 
-func sendMediaFile(mediaInfo *services.MediaInfo, origChat *response.TgChat, origMessage *response.TgMessage, url string) error {
+// sendMediaFile sends one media item; isWholePost marks the post's only
+// item, which may carry the support button (see postSupportMarkup).
+func sendMediaFile(mediaInfo *services.MediaInfo, origChat *response.TgChat, origMessage *response.TgMessage, url string, isWholePost bool) error {
 	log.Printf("Sending media to chat ID: %d", origChat.Id)
+	supportMarkup := postSupportMarkup(origChat, isWholePost)
 
 	// Captions are sent with ParseModeHTML: entities (&amp;/&lt;) render
 	// correctly as-is, while unescaping them here would produce raw '<'/'&'
@@ -878,6 +883,7 @@ func sendMediaFile(mediaInfo *services.MediaInfo, origChat *response.TgChat, ori
 			HasSpoiler:          mediaInfo.Spoiler,
 			ReplyToMessageId:    origMessage.MessageId,
 			DisableNotification: true,
+			ReplyMarkup:         supportMarkup,
 		}
 		response := message.NewSendPhoto(photoPayload)
 		// Check if the photo was sent successfully
@@ -974,6 +980,7 @@ func sendMediaFile(mediaInfo *services.MediaInfo, origChat *response.TgChat, ori
 			HasSpoiler:          mediaInfo.Spoiler,
 			ReplyToMessageId:    origMessage.MessageId,
 			DisableNotification: true,
+			ReplyMarkup:         supportMarkup,
 		}
 		message.NewSendVideo(videoPayload)
 		// Note: NewSendVideo automatically sends the message

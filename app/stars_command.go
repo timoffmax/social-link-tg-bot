@@ -48,7 +48,7 @@ const supportInvoiceTitle = "Support Fix Link Bot"
 
 // supportInvoiceDescriptionTemplate is the invoice description (1-255
 // characters); %d is the tier's bonus downloads.
-const supportInvoiceDescriptionTemplate = "Voluntary support for the developer. Thank-you: %d bonus downloads of restricted Instagram posts. By paying you agree to /terms."
+const supportInvoiceDescriptionTemplate = "Voluntary support for the developer. Thank-you: %d bonus downloads of restricted Instagram posts, for links you send, used after the free monthly limit. They don't expire. By paying you agree to /terms."
 
 // supportInvoicePriceLabel labels the invoice's single price.
 const supportInvoicePriceLabel = "Support"
@@ -73,7 +73,7 @@ Refunds: support is voluntary, so if you paid by mistake or changed your mind, a
 const termsText = `📄 <b>Terms of support</b>
 
 • Support payments in Telegram Stars are voluntary. The bot stays free without them.
-• Bonus downloads of restricted Instagram posts are a thank-you, not a guaranteed service. They're used once your monthly free downloads, or the bot's monthly limit, run out. The feature, its limits and the services behind it may change or stop.
+• Bonus downloads of restricted Instagram posts are a thank-you, not a guaranteed service. They belong to you, work for links you send in any chat (they aren't shared with a group), and are used only once the free monthly limit (yours, the chat's or the bot's) runs out. If the bot can't fetch the post, no bonus download is used. They don't expire. They can't be used where the owner turned restricted downloads off. The feature, its limits and the services behind it may change or stop.
 • Refunds: ask via /paysupport. The Stars are refunded in full and the unused bonus downloads of that payment are removed.
 • Telegram support can't help with purchases made in this bot; use /paysupport.`
 
@@ -86,7 +86,7 @@ const (
 
 // Successful payment replies.
 const (
-	supportThanksTemplate    = "⭐ Thank you for supporting Fix Link Bot!\n\nYou got %d bonus downloads of restricted posts. Bonus downloads left: %d.\nThey're used once your monthly free downloads, or the bot's monthly limit, run out."
+	supportThanksTemplate    = "⭐ Thank you for supporting Fix Link Bot!\n\nYou got %d bonus downloads of restricted Instagram posts. Bonus downloads left: %d.\n\nThey're yours: they work in any chat for links you send, once the free monthly limit runs out. If the bot can't fetch the post, no bonus download is used. They don't expire."
 	supportRepeatTemplate    = "⭐ Thank you! This payment was already counted. Bonus downloads left: %d."
 	supportNoTierText        = "⭐ Thank you for your support! This payment didn't match a support tier, so no bonus downloads were added. If that's wrong, see /paysupport."
 	supportRecordFailedText  = "⭐ Thank you! Your payment arrived, but the bonus downloads couldn't be added right now. The owner has been told and will fix it; see /paysupport."

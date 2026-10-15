@@ -244,23 +244,7 @@ func prepareMultipartRequest(r *AuthorizedRequest, requestURL string) (*http.Req
 		}
 
 		if !skipField && value != nil && fmt.Sprintf("%v", value) != "" {
-			var fieldValue string
-
-			// Special handling for chat_id to avoid scientific notation
-			if key == "chat_id" {
-				if floatVal, ok := value.(float64); ok {
-					fieldValue = fmt.Sprintf("%.0f", floatVal)
-				} else {
-					fieldValue = fmt.Sprintf("%v", value)
-				}
-			} else if key == "media" && isMediaGroupPayload {
-				// For media groups, we need to serialize the media array as JSON
-				mediaBytes, _ := json.Marshal(value)
-				fieldValue = string(mediaBytes)
-			} else {
-				fieldValue = fmt.Sprintf("%v", value)
-			}
-
+			fieldValue := multipartFieldValue(key, value)
 			writer.WriteField(key, fieldValue)
 		}
 	}
@@ -274,6 +258,53 @@ func prepareMultipartRequest(r *AuthorizedRequest, requestURL string) (*http.Req
 
 	request.Header.Set(HeaderContentType, writer.FormDataContentType())
 	return request, nil
+}
+
+// formFieldChatID is the multipart field written without scientific notation.
+const formFieldChatID = "chat_id"
+
+// multipartFieldValue returns a payload value as multipart text: objects and
+// arrays (reply_markup, a media group's media) as the JSON the Bot API
+// expects, chat_id as a plain integer, everything else as text.
+func multipartFieldValue(key string, value interface{}) string {
+	result := fmt.Sprintf("%v", value)
+	floatValue, isFloat := value.(float64)
+
+	if (key == formFieldChatID) && (isFloat == true) {
+		result = fmt.Sprintf("%.0f", floatValue)
+	}
+
+	if isJSONFormValue(value) == true {
+		result = jsonFormValue(key, value)
+	}
+
+	return result
+}
+
+// isJSONFormValue reports an object or array decoded from the payload JSON.
+func isJSONFormValue(value interface{}) bool {
+	result := false
+
+	switch value.(type) {
+	case map[string]interface{}, []interface{}:
+		result = true
+	}
+
+	return result
+}
+
+// jsonFormValue returns a multipart field value as JSON; an encoding failure
+// is logged, since the field would reach Telegram empty.
+func jsonFormValue(key string, value interface{}) string {
+	encoded, err := json.Marshal(value)
+
+	if err != nil {
+		log.Printf("❌ [TG-API] encoding multipart field %s failed: %v", key, err)
+	}
+
+	result := string(encoded)
+
+	return result
 }
 
 // SetAPIURLTemplate changes the Bot API URL template (with the {{token}} and

@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/timoffmax/social-link-bot/model/api"
 	"github.com/timoffmax/social-link-bot/model/api/response"
 )
 
@@ -129,5 +130,26 @@ func TestDonateHidesStarsFromUsersWhoCantUseBonusDownloads(t *testing.T) {
 
 	if (len(rows) != 3) || (strings.Contains(text, "Stars") == true) {
 		t.Fatalf("expected only the card and crypto options, got %q %+v", text, rows)
+	}
+}
+
+func TestPostSupportButtonOnlyUnderWholePostsInPrivateChats(t *testing.T) {
+	private := &response.TgChat{Id: 42, Type: chatTypePrivate}
+	markup, isKeyboard := postSupportMarkup(private, true).(*api.TgInlineKeyboardMarkup)
+
+	if (isKeyboard == false) || (len(markup.InlineKeyboard) != 1) || (len(markup.InlineKeyboard[0]) != 1) {
+		t.Fatalf("expected one button in a private chat, got %+v", markup)
+	}
+
+	if markup.InlineKeyboard[0][0].CallbackData != donateCommand {
+		t.Fatalf("expected the button to open /donate, got %+v", markup)
+	}
+
+	if postSupportMarkup(private, false) != nil {
+		t.Fatalf("album items must not get the support button")
+	}
+
+	if postSupportMarkup(&response.TgChat{Id: -100, Type: "supergroup"}, true) != nil {
+		t.Fatalf("groups must not get the support button")
 	}
 }
