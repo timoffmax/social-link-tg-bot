@@ -4276,7 +4276,7 @@ func createOwnerMenuKeyboard() *api.TgInlineKeyboardMarkup {
 				{Text: "📢 Broadcast", CallbackData: "/owner_broadcast"},
 			},
 			{
-				{Text: "🐛 Reports", CallbackData: "/owner_reports"},
+				{Text: "🐞 Reports", CallbackData: "/owner_reports"},
 				{Text: starsPaymentsButtonText, CallbackData: starsPaymentsCallback},
 			},
 			{
@@ -5006,7 +5006,7 @@ func handleReportsCallback(chatID int64, messageID int) {
 	}
 
 	var text strings.Builder
-	text.WriteString("🐛 <b>Open Reports</b>\n\n")
+	text.WriteString("🐞 <b>Open Reports</b>\n\n")
 
 	if len(reports) == 0 {
 		text.WriteString("<i>No open reports.</i>\n")

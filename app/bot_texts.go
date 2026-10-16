@@ -51,7 +51,7 @@ func startPlatformsText() string {
 // line.
 const startPrivateTemplate = `💬 <b>In a private chat</b>
 • Send me any supported link, and I reply with the media.
-%s• Under posts that arrive as a single message: 💚 Support and 🐛 Report, which tells the developer something went wrong.
+%s• Under posts that arrive as a single message: 💚 Support and 🐞 Report a bug, which tells the developer something went wrong.
 
 `
 
@@ -59,7 +59,7 @@ const startPrivateTemplate = `💬 <b>In a private chat</b>
 // support button rate.
 const startGroupTemplate = `👥 <b>In a group</b>
 • Add me to the group. I answer every supported link anyone posts, no commands needed.
-%s• Under posts that arrive as a single message: 🐛 Report, and 💚 Support under about 1 in %d, which opens a private chat.
+%s• Under posts that arrive as a single message: 🐞 Report a bug, and 💚 Support under about 1 in %d, which opens a private chat.
 • Group admins set daily limits from the menu, and choose platforms, descriptions, timezone and both buttons in Group Settings.
 
 `

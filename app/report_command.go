@@ -27,9 +27,9 @@ const reportPostCallback = "/report_post"
 
 // Report buttons.
 const (
-	reportMenuButtonText   = "🐛 Report a bug"
-	reportFailedButtonText = "🐛 Report problem"
-	reportPostButtonText   = "🐛 Report"
+	reportMenuButtonText   = "🐞 Report a bug"
+	reportFailedButtonText = "🐞 Report problem"
+	reportPostButtonText   = "🐞 Report a bug"
 )
 
 // reportPostTitle opens a report filed with the button under a post.
@@ -41,13 +41,13 @@ const (
 	reportCancelCallback    = "/report_cancel"
 	reportSendButtonText    = "📨 Send without details"
 	reportCancelButtonText  = "✖️ Cancel"
-	reportPostPromptTitle   = "🐛 What's wrong with this post?"
+	reportPostPromptTitle   = "🐞 What's wrong with this post?"
 	reportPostPromptPrivate = "<b>%s</b>\n\nType a few words in the next 10 minutes, and they go into the report together with the post. Or send it as is."
 	reportPostPromptGroup   = "<b>%s</b>\n\n%sreply to this message with a few words, and they go into the report together with the post. Or send it as is."
 	reportSentText          = "✅ Report sent. Thank you!"
 	reportCanceledText      = "Report canceled."
 	reportNotYoursToast     = "Only the person who started this report can use these buttons."
-	reportPromptGoneToast   = "This report is no longer open. Tap 🐛 Report under the post to start again."
+	reportPromptGoneToast   = "This report is no longer open. Tap 🐞 Report a bug under the post to start again."
 	reportPromptGoneText    = "This report is no longer open."
 	reportPromptFailedToast = "Couldn't start the report. Please try again later."
 )
@@ -61,11 +61,24 @@ const (
 )
 
 // reportPromptTitle starts the prompt.
-const reportPromptTitle = "🐛 What went wrong?"
+const reportPromptTitle = "🐞 What went wrong?"
 
-// reportLegacyFollowUpTitle started the follow-up of earlier versions;
-// replies to it get the expired note.
-const reportLegacyFollowUpTitle = "🐛 Reported, thank you!"
+// Titles of report prompts sent by earlier versions; replies to them get
+// the expired note.
+const (
+	reportLegacyFollowUpTitle   = "🐛 Reported, thank you!"
+	reportLegacyPromptTitle     = "🐛 What went wrong?"
+	reportLegacyPostPromptTitle = "🐛 What's wrong with this post?"
+)
+
+// reportPromptTitles start every report prompt the bot sends or has sent.
+var reportPromptTitles = []string{
+	reportPromptTitle,
+	reportPostPromptTitle,
+	reportLegacyFollowUpTitle,
+	reportLegacyPromptTitle,
+	reportLegacyPostPromptTitle,
+}
 
 // reportPromptTemplate asks for the report: the title, the user mention
 // (empty when the prompt replies to the user) and how to answer.
@@ -440,10 +453,20 @@ func isExpiredReportReply(origMessage *response.TgMessage, origChat *response.Tg
 	if (botMessage != nil) && (isPrivate == true) {
 		key := reportReplyKey(origChat.Id, botMessage.MessageId)
 		_, isTracked := reportReplies.get(key)
-		isPrompt := strings.HasPrefix(botMessage.Text, reportPromptTitle)
-		isPostPrompt := strings.HasPrefix(botMessage.Text, reportPostPromptTitle)
-		isLegacyFollowUp := strings.HasPrefix(botMessage.Text, reportLegacyFollowUpTitle)
-		result = (isTracked == false) && ((isPrompt == true) || (isPostPrompt == true) || (isLegacyFollowUp == true))
+		isPrompt := isReportPromptText(botMessage.Text)
+		result = (isTracked == false) && (isPrompt == true)
+	}
+
+	return result
+}
+
+// isReportPromptText reports a message that starts with a report prompt
+// title.
+func isReportPromptText(text string) bool {
+	result := false
+
+	for _, title := range reportPromptTitles {
+		result = result || strings.HasPrefix(text, title)
 	}
 
 	return result
@@ -504,7 +527,7 @@ func handleReportFailedCallback(callbackQuery *response.TgCallbackQuery) {
 	}
 
 	if isAccessible == false {
-		log.Printf("🐛 Report button on an inaccessible message by user %d, ignored", callbackQuery.From.Id)
+		log.Printf("🐞 Report button on an inaccessible message by user %d, ignored", callbackQuery.From.Id)
 	}
 }
 
@@ -812,7 +835,7 @@ func submitReport(chat *response.TgChat, user *response.TgUser, reportText strin
 		isSentToOwner = (sent.ResponsePayload != nil) && (sent.ResponsePayload.MessageId != 0)
 	}
 
-	log.Printf("🐛 Report #%d from user %d (sent to owner: %t): %s", reportID, user.Id, isSentToOwner, reportText)
+	log.Printf("🐞 Report #%d from user %d (sent to owner: %t): %s", reportID, user.Id, isSentToOwner, reportText)
 	result := reportOutcome{ID: reportID, IsDelivered: (reportID > 0) || (isSentToOwner == true)}
 
 	return result
@@ -822,7 +845,7 @@ func submitReport(chat *response.TgChat, user *response.TgUser, reportText strin
 func ownerReportText(chat *response.TgChat, user *response.TgUser, reportText string, reportID int, dbErr error) string {
 	var report strings.Builder
 	firstName := html.EscapeString(user.FirstName)
-	header := fmt.Sprintf("🐛 <b>New Report</b>\n\n👤 From: %s", firstName)
+	header := fmt.Sprintf("🐞 <b>New Report</b>\n\n👤 From: %s", firstName)
 	report.WriteString(header)
 
 	if user.LastName != "" {

@@ -220,7 +220,7 @@ const groupSettingsTitle = "🏢 Group Settings"
 
 // Group Settings toggles of the buttons under posts.
 const (
-	reportButtonToggleText      = "🐛 Report Button: On/Off"
+	reportButtonToggleText      = "🐞 Report Button: On/Off"
 	reportButtonToggleCallback  = "/toggle_report_button"
 	supportButtonToggleText     = "💚 Support Button: On/Off"
 	supportButtonToggleCallback = "/toggle_support_button"
@@ -228,16 +228,16 @@ const (
 
 // Group Settings lines and toggle confirmations of the buttons under posts.
 const (
-	reportButtonOnLine          = "\n🐛 <b>Report button:</b> on (under every post)\n"
-	reportButtonOffLine         = "\n🐛 <b>Report button:</b> off\n"
+	reportButtonOnLine          = "\n🐞 <b>Report button:</b> on (under every post)\n"
+	reportButtonOffLine         = "\n🐞 <b>Report button:</b> off\n"
 	supportButtonOnLine         = "💚 <b>Support button:</b> on (under about 1 in %d posts)\n"
 	supportButtonOffLine        = "💚 <b>Support button:</b> off\n"
-	reportButtonNowOnText       = "🐛 Report button on: it appears under every post."
-	reportButtonNowOffText      = "🐛 Report button off. Failed downloads still offer it, and /report always works."
+	reportButtonNowOnText       = "🐞 Report button on: it appears under every post."
+	reportButtonNowOffText      = "🐞 Report button off. Failed downloads still offer it, and /report always works."
 	supportButtonNowOnText      = "💚 Support button on: it appears under about 1 in %d posts."
 	supportButtonNowOffText     = "💚 Support button off in this chat."
 	postButtonFailedText        = "❌ Couldn't change the button setting. Please try again later."
-	postButtonsUnavailableLines = "\n🐛💚 <b>Buttons under posts:</b> <i>unavailable right now</i>\n"
+	postButtonsUnavailableLines = "\n🐞💚 <b>Buttons under posts:</b> <i>unavailable right now</i>\n"
 )
 
 // groupPostButtonsStatusLines are the Group Settings lines of the buttons.

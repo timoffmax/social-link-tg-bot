@@ -93,7 +93,7 @@ func lastSendIndex(calls []botAPICall, chatID float64) int {
 	return result
 }
 
-// tapReportUnderPost taps 🐛 Report under a post and returns the prompt.
+// tapReportUnderPost taps 🐞 Report a bug under a post and returns the prompt.
 func tapReportUnderPost(t *testing.T, recorder *botAPIRecorder, chat response.TgChat, user response.TgUser, postID int) *response.TgMessage {
 	original := &response.TgMessage{MessageId: postID - 1, Text: "https://www.tiktok.com/@a/video/2"}
 	post := response.TgMessage{MessageId: postID, Date: 1, Caption: "🎵 Author", Chat: chat, ReplyToMessage: original}
@@ -413,5 +413,27 @@ func TestAnsweringAnOlderPromptKeepsTheNewestAsNextMessage(t *testing.T) {
 func TestNextMessageWindowIsShort(t *testing.T) {
 	if reportNextMessageTTL > 15*time.Minute {
 		t.Fatalf("the next-message window must stay short, got %v", reportNextMessageTTL)
+	}
+}
+
+func TestReplyToUntrackedPromptIsExpired(t *testing.T) {
+	chat := response.TgChat{Id: 7, Type: chatTypePrivate}
+	titles := []string{reportPromptTitle, reportPostPromptTitle, "🐛 What went wrong?", "🐛 What's wrong with this post?", "🐛 Reported, thank you!"}
+
+	for index, title := range titles {
+		reply := &response.TgMessage{MessageId: 900 + index, Text: "broken", ReplyToMessage: reportBotMessage(800+index, title+"\n\nDescribe the problem")}
+
+		if isExpiredReportReply(reply, &chat) == false {
+			t.Fatalf("a reply to an untracked %q prompt must be expired", title)
+		}
+	}
+}
+
+func TestReplyToOtherBotMessageIsNotExpired(t *testing.T) {
+	chat := response.TgChat{Id: 7, Type: chatTypePrivate}
+	reply := &response.TgMessage{MessageId: 901, Text: "nice", ReplyToMessage: reportBotMessage(801, "🎬 Some video caption")}
+
+	if isExpiredReportReply(reply, &chat) == true {
+		t.Fatalf("a reply to a non-report message must not be expired")
 	}
 }
