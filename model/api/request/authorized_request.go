@@ -81,16 +81,18 @@ func (m *mediaAdapter) GetFileField() string {
 func (r *AuthorizedRequest) Send(respPayload interface{}) (ResponseInfo, error) {
 	var result ResponseInfo
 	request, err := prepareRequest(r)
+	err = WithoutRequestURL(r.ApiMethod, err)
 
 	if nil == err {
 		response, sendErr := sendRequest(request)
+		sendErr = WithoutRequestURL(r.ApiMethod, sendErr)
 
 		// A transport failure (timeout, dropped connection) has no response to
 		// parse: report it with StatusCode 0, since Telegram may or may not
 		// have received the request.
 		if nil != sendErr {
 			log.Printf("❌ [TG-API] %s failed without a response: %v", r.ApiMethod, sendErr)
-			err = fmt.Errorf("request failed: %w", sendErr)
+			err = sendErr
 		}
 
 		if nil != response {
@@ -125,7 +127,10 @@ func prepareRequest(r *AuthorizedRequest) (*http.Request, error) {
 
 	jsonPayload, _ := json.Marshal(r.Payload)
 	request, err := http.NewRequest(r.RequestMethod, requestURL, bytes.NewBuffer(jsonPayload))
-	request.Header.Set(HeaderContentType, r.RequestContentType)
+
+	if nil == err {
+		request.Header.Set(HeaderContentType, r.RequestContentType)
+	}
 
 	return request, err
 }

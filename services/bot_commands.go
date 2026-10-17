@@ -3,14 +3,13 @@ package services
 import (
 	"bytes"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log"
 	"net/http"
-	neturl "net/url"
 	"time"
 
 	"github.com/timoffmax/social-link-bot/config"
+	"github.com/timoffmax/social-link-bot/model/api/request"
 )
 
 // BotCommand represents a bot command for Telegram
@@ -178,7 +177,7 @@ func postBotAPI(method string, body map[string]interface{}) error {
 	if err == nil {
 		reader := bytes.NewReader(jsonBody)
 		resp, err = botAPIClient.Post(url, "application/json", reader)
-		err = withoutRequestURL(method, err)
+		err = request.WithoutRequestURL(method, err)
 	}
 
 	if err == nil {
@@ -192,17 +191,4 @@ func postBotAPI(method string, body map[string]interface{}) error {
 	}
 
 	return err
-}
-
-// withoutRequestURL replaces a transport error, whose *url.Error text holds
-// the request URL with the bot token, by its cause.
-func withoutRequestURL(method string, err error) error {
-	result := err
-	var urlErr *neturl.Error
-
-	if errors.As(err, &urlErr) == true {
-		result = fmt.Errorf("%s request failed: %w", method, urlErr.Err)
-	}
-
-	return result
 }

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/timoffmax/social-link-bot/config"
+	"github.com/timoffmax/social-link-bot/model/api/request"
 )
 
 // chatMemberMethod is the Bot API method that returns a member's status.
@@ -71,7 +72,7 @@ func getChatMemberAnswer(chatID int64, userID int64) (chatMemberAnswer, error) {
 	if err == nil {
 		reader := bytes.NewReader(jsonBody)
 		resp, err = botAPIClient.Post(url, "application/json", reader)
-		err = withoutRequestURL(chatMemberMethod, err)
+		err = request.WithoutRequestURL(chatMemberMethod, err)
 	}
 
 	if err == nil {
@@ -133,7 +134,7 @@ func getGroupTitle(client *http.Client, chatID int64) (string, error) {
 	if err == nil {
 		reader := bytes.NewReader(jsonBody)
 		resp, err = client.Post(url, "application/json", reader)
-		err = withoutRequestURL(chatInfoMethod, err)
+		err = request.WithoutRequestURL(chatInfoMethod, err)
 	}
 
 	if err == nil {

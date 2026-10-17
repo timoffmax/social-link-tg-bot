@@ -19,6 +19,7 @@ import (
 
 	"github.com/timoffmax/social-link-bot/config"
 	"github.com/timoffmax/social-link-bot/model/api"
+	"github.com/timoffmax/social-link-bot/model/api/request"
 	"github.com/timoffmax/social-link-bot/model/api/request/message"
 	"github.com/timoffmax/social-link-bot/model/api/request/payload"
 	"github.com/timoffmax/social-link-bot/model/api/response"
@@ -39,12 +40,17 @@ var (
 	updateWg sync.WaitGroup
 )
 
+// botInfoMethod is the Bot API method that returns the bot's own user.
+const botInfoMethod = "getMe"
+
 // fetchBotInfo fetches the bot's info using the getMe API and stores the username
 func fetchBotInfo() error {
 	token := config.GetTgBotToken()
-	url := fmt.Sprintf("https://api.telegram.org/bot%s/getMe", token)
+	url := fmt.Sprintf("https://api.telegram.org/bot%s/%s", token, botInfoMethod)
 
 	resp, err := (&http.Client{Timeout: 10 * time.Second}).Get(url)
+	err = request.WithoutRequestURL(botInfoMethod, err)
+
 	if err != nil {
 		return fmt.Errorf("failed to fetch bot info: %w", err)
 	}

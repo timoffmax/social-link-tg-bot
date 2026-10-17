@@ -11,6 +11,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/timoffmax/social-link-bot/config"
+	"github.com/timoffmax/social-link-bot/model/api/request"
 )
 
 // adminAlertInterval is the minimum time between admin alerts with the same key.
@@ -99,7 +100,7 @@ func sendAdminMessage(token string, adminID int64, label, text string) bool {
 	if err == nil {
 		reader := bytes.NewReader(body)
 		resp, err = SharedHTTPClient.Post(url, "application/json", reader)
-		err = withoutRequestURL(adminSendMethod, err)
+		err = request.WithoutRequestURL(adminSendMethod, err)
 	}
 
 	if err == nil {
