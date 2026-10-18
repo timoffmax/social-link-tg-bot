@@ -111,20 +111,14 @@ func handleGatedStatus(params []string, origMessage *response.TgMessage, origCha
 	globalUsed, usageErr := services.GetGatedFetchUsage(services.GatedFetchScopeGlobal, 0)
 	globalCap := config.GetGatedFetchGlobalMonthlyCap()
 	userAllowance := config.GetGatedFetchUserMonthlyAllowance()
-	apifyToken := config.GetApifyToken()
-	apifyActor := config.GetApifyInstagramActor()
-	provider := "not configured (set APIFY_TOKEN)"
-
-	if apifyToken != "" {
-		provider = fmt.Sprintf("Apify (<code>%s</code>)", html.EscapeString(apifyActor))
-	}
+	provider := gatedProvidersText()
 
 	if (err == nil) && (hasExplicitChat == true) && (chatID >= 0) {
 		err = errGatedNotGroup
 	}
 
 	text.WriteString("🔞 <b>Gated Instagram fetch</b>\n\n")
-	fmt.Fprintf(&text, "Provider: %s\n", provider)
+	fmt.Fprintf(&text, "Providers: %s\n", provider)
 	capText := globalCapText(globalCap)
 	fmt.Fprintf(&text, "This month, all chats: <b>%d</b> of %s\n", globalUsed, capText)
 	fmt.Fprintf(&text, "Private chats: %d free per user per month by default\n\n", userAllowance)
@@ -428,7 +422,52 @@ func replyGated(origMessage *response.TgMessage, origChat *response.TgChat, text
 }
 
 // globalNoCapText shows a bot-wide cap of GatedFetchNoGlobalCap.
-const globalNoCapText = "no cap (the Apify budget is the limit)"
+const globalNoCapText = "no cap (the paid services' budgets are the limit)"
+
+// Texts of the /gated status providers line.
+const (
+	gatedProvidersNoneText     = "not configured (set APIFY_TOKEN or HIKERAPI_TOKEN)"
+	gatedProvidersSeparator    = " → "
+	gatedProviderApifyTemplate = "Apify (<code>%s</code>)"
+	gatedProviderHikerText     = "HikerAPI"
+	gatedProviderPausedSuffix  = " (budget 0: paused)"
+)
+
+// gatedProvidersText lists the providers that have a token, in the order
+// they are tried, marking those paused by a budget of 0.
+func gatedProvidersText() string {
+	result := gatedProvidersNoneText
+	providers := services.GatedProvidersWithToken()
+	labels := make([]string, 0, len(providers))
+
+	for _, provider := range providers {
+		label := gatedProviderLabel(provider)
+		labels = append(labels, label)
+	}
+
+	if len(labels) > 0 {
+		result = strings.Join(labels, gatedProvidersSeparator)
+	}
+
+	return result
+}
+
+// gatedProviderLabel names one provider for /gated status.
+func gatedProviderLabel(provider services.GatedProviderState) string {
+	apifyActor := config.GetApifyInstagramActor()
+	escapedActor := html.EscapeString(apifyActor)
+	result := fmt.Sprintf(gatedProviderApifyTemplate, escapedActor)
+
+	if provider.Name == services.PaidProviderHiker {
+		result = gatedProviderHikerText
+	}
+
+	if provider.IsOn == false {
+		result = fmt.Sprintf("%s%s", result, gatedProviderPausedSuffix)
+	}
+
+	return result
+}
 
 // globalCapText shows the bot-wide monthly cap of restricted posts.
 func globalCapText(globalCap int) string {

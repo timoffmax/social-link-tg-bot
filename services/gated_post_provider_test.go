@@ -184,7 +184,7 @@ func TestGatedPostCaptionSurvivesEscapingAndLinkSuffix(t *testing.T) {
 	}
 
 	for _, raw := range captions {
-		item := apifyPostItem{Username: "averona.space", FullName: "МАНІКЮР|ПЕДИКЮР|Виноградар🇺🇦|Варшавський +", Caption: raw}
+		item := gatedPost{Username: "averona.space", FullName: "МАНІКЮР|ПЕДИКЮР|Виноградар🇺🇦|Варшавський +", Caption: raw}
 		media := []*MediaInfo{{Type: "photo", Filename: "x.jpg", Caption: gatedPostCaption(item, url, true)}}
 		appendOriginalURL(media, url)
 		caption := media[0].Caption
@@ -210,7 +210,7 @@ func TestGatedPostCaptionSurvivesEscapingAndLinkSuffix(t *testing.T) {
 }
 
 func TestGatedPostCaptionWithoutTextIsAuthorOnly(t *testing.T) {
-	item := apifyPostItem{Username: "someone"}
+	item := gatedPost{Username: "someone"}
 	caption := gatedPostCaption(item, "https://www.instagram.com/p/X/", true)
 
 	if (strings.Contains(caption, "tg-spoiler") == true) || (strings.Contains(caption, "@someone") == false) {

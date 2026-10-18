@@ -170,3 +170,39 @@ func TestGlobalCapTextShowsNoCap(t *testing.T) {
 		t.Fatalf("unexpected cap texts %q %q", globalCapText(-1), globalCapText(100))
 	}
 }
+
+func TestGatedProvidersTextListsTheProvidersInOrder(t *testing.T) {
+	t.Setenv("APIFY_TOKEN", "")
+	t.Setenv("HIKERAPI_TOKEN", "")
+
+	if gatedProvidersText() != gatedProvidersNoneText {
+		t.Fatalf("expected no providers, got %q", gatedProvidersText())
+	}
+
+	t.Setenv("APIFY_TOKEN", "test-token")
+	t.Setenv("APIFY_MONTHLY_BUDGET_USD", "4")
+	t.Setenv("APIFY_INSTAGRAM_ACTOR", "intropix~posts")
+	t.Setenv("HIKERAPI_TOKEN", "test-key")
+	t.Setenv("HIKERAPI_MONTHLY_BUDGET_USD", "1")
+
+	if text := gatedProvidersText(); text != "Apify (<code>intropix~posts</code>) → HikerAPI" {
+		t.Fatalf("unexpected providers %q", text)
+	}
+
+	t.Setenv("INSTAGRAM_PAID_PROVIDERS", "hiker")
+
+	if text := gatedProvidersText(); text != "HikerAPI" {
+		t.Fatalf("unexpected providers %q", text)
+	}
+}
+
+func TestGatedProvidersTextMarksAProviderPausedByABudgetOfZero(t *testing.T) {
+	t.Setenv("APIFY_TOKEN", "test-token")
+	t.Setenv("APIFY_MONTHLY_BUDGET_USD", "0")
+	t.Setenv("APIFY_INSTAGRAM_ACTOR", "intropix~posts")
+	t.Setenv("HIKERAPI_TOKEN", "")
+
+	if text := gatedProvidersText(); text != "Apify (<code>intropix~posts</code>) (budget 0: paused)" {
+		t.Fatalf("unexpected providers %q", text)
+	}
+}

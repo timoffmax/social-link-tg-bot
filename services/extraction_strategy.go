@@ -62,6 +62,7 @@ const (
 	MethodThreadsEmbed
 	MethodThreadsVxthreads
 	MethodFacebookFacebed
+	MethodStoriesHiker
 )
 
 // ExtractionStrategy defines the order of methods to try for a platform
@@ -102,16 +103,16 @@ func getPlatformExtractionStrategy(url string) *ExtractionStrategy {
 			}
 		}
 
-		// Instagram stories: the paid Apify stories scraper (the RapidAPI
-		// endpoint, browser and yt-dlp all fail: stories need a login).
+		// Instagram stories: the paid providers in INSTAGRAM_PAID_PROVIDERS
+		// order (the RapidAPI endpoint, browser and yt-dlp all fail: stories
+		// need a login), strictly one after the other.
 		if strings.Contains(url, "/stories/") {
-			log.Printf("📖 Instagram story - Apify stories scraper")
+			log.Printf("📖 Instagram story - paid stories providers")
 			return &ExtractionStrategy{
-				Platform: "instagram",
-				Methods: []ExtractionMethod{
-					MethodStoriesApify,
-				},
+				Platform:     "instagram",
+				Methods:      instagramStoriesMethods(),
 				HasFixedLink: false,
+				Sequential:   true,
 			}
 		}
 
@@ -331,6 +332,8 @@ func (es *ExtractionStrategy) LogStrategy() {
 			methodNames[i] = "threads-vxthreads"
 		case MethodFacebookFacebed:
 			methodNames[i] = "facebed"
+		case MethodStoriesHiker:
+			methodNames[i] = "stories-hiker"
 		default:
 			methodNames[i] = "unknown"
 		}

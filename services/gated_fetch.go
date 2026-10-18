@@ -98,7 +98,8 @@ func (sd *SmartDownloader) fetchGatedWithQuota(instagramURL string, downloadErr 
 		result, fetchErr = sd.gated.FetchPost(instagramURL, spoiler)
 	}
 
-	isBudgetRefusal := isApifyBudgetError(fetchErr)
+	isBudgetRefusal := isPaidBudgetError(fetchErr)
+	isNothingRun := isPaidSkip(fetchErr)
 
 	if isBudgetRefusal == true {
 		denial = GatedFetchDeniedBudget
@@ -108,13 +109,15 @@ func (sd *SmartDownloader) fetchGatedWithQuota(instagramURL string, downloadErr 
 		log.Printf("❌ [gated-fetch] fetch failed for %s: %v", instagramURL, fetchErr)
 	}
 
-	if (fetchErr != nil) && (isBudgetRefusal == false) {
+	if (fetchErr != nil) && (isNothingRun == false) {
 		sd.refundScopedGatedFetch(quotas)
 	}
 
-	// A budget refusal happens before any run, so nothing was billed: the
-	// global unit goes back too.
-	if isBudgetRefusal == true {
+	// A skip (a budget refusal, or a provider unavailable before running,
+	// e.g. an unreadable spend ledger) happens before any run, so nothing
+	// was billed: the global unit goes back too. Only a budget refusal gets
+	// the "budget used up" reply.
+	if isNothingRun == true {
 		sd.refundGatedQuotas(quotas)
 	}
 

@@ -21,10 +21,18 @@ const (
 	paidStatsStarsTotalTemplate = "• Stars all time: <b>%d</b> payments, <b>%d</b> ⭐\n"
 	paidStatsCreditsTemplate    = "• Unused bonus downloads: <b>%d</b>\n"
 	paidStatsStarsUnknown       = "• Stars support: <i>unavailable</i>\n"
+	paidStatsHikerTemplate      = "• HikerAPI this month: <b>$%.3f</b> of $%.2f (%d calls, %d gated, %d stories)"
+	paidStatsHikerUnknown       = "• HikerAPI this month: <i>unavailable</i> (budget $%.2f)"
+	paidStatsHikerBalance       = "; balance: %d requests left\n"
+	paidStatsHikerNoBalance     = "; balance <i>unavailable</i>\n"
 )
 
-// paidStatsReads is the number of parallel reads of loadPaidFetchingStats.
-const paidStatsReads = 3
+// paidStatsReads is the number of parallel reads of loadPaidFetchingStats,
+// plus paidStatsHikerReads while HikerAPI has a token.
+const (
+	paidStatsReads      = 3
+	paidStatsHikerReads = 2
+)
 
 // paidFetchingStats are the values of the "Paid fetching" section; a non-nil
 // error leaves its value out.
@@ -37,6 +45,13 @@ type paidFetchingStats struct {
 	ApifyBudget  float64
 	Support      services.SupportStats
 	SupportErr   error
+	// HikerOn shows the HikerAPI line (a token is set).
+	HikerOn         bool
+	HikerBudget     float64
+	HikerStats      services.PaidMonthStats
+	HikerStatsErr   error
+	HikerBalance    services.HikerBalance
+	HikerBalanceErr error
 }
 
 // paidFetchingStatsText reads and formats the owner's "Paid fetching"
@@ -48,15 +63,25 @@ func paidFetchingStatsText() string {
 	return result
 }
 
-// loadPaidFetchingStats reads the counters, Apify usage and Stars totals in
-// parallel, so a slow Apify answer doesn't add to the database reads.
+// loadPaidFetchingStats reads the counters, Apify usage, Stars totals and
+// (with a HikerAPI token) the HikerAPI ledger and balance in parallel, so a
+// slow provider answer doesn't add to the database reads.
 func loadPaidFetchingStats() paidFetchingStats {
 	var wg sync.WaitGroup
 	result := paidFetchingStats{}
 	result.FetchesCap = config.GetGatedFetchGlobalMonthlyCap()
 	result.ApifyBudget = config.GetApifyMonthlyBudgetUsd()
+	result.HikerBudget = config.GetHikerAPIMonthlyBudgetUsd()
+	hikerToken := config.GetHikerAPIToken()
+	result.HikerOn = (hikerToken != "")
 
 	wg.Add(paidStatsReads)
+
+	if result.HikerOn == true {
+		wg.Add(paidStatsHikerReads)
+		go loadHikerMonthStats(&wg, &result)
+		go loadHikerBalance(&wg, &result)
+	}
 
 	go func() {
 		defer wg.Done()
@@ -78,8 +103,28 @@ func loadPaidFetchingStats() paidFetchingStats {
 	logPaidStatsError("restricted-post usage", result.FetchesErr)
 	logPaidStatsError("Apify usage", result.ApifyErr)
 	logPaidStatsError("Stars support totals", result.SupportErr)
+	logPaidStatsError("HikerAPI ledger", result.HikerStatsErr)
+	logPaidStatsError("HikerAPI balance", result.HikerBalanceErr)
 
 	return result
+}
+
+// loadHikerMonthStats reads this month's HikerAPI ledger totals.
+func loadHikerMonthStats(wg *sync.WaitGroup, stats *paidFetchingStats) {
+	defer wg.Done()
+
+	stats.HikerStats, stats.HikerStatsErr = services.GetHikerMonthStats()
+}
+
+// readHikerBalance reads the free HikerAPI balance; tests replace it so they
+// never call HikerAPI.
+var readHikerBalance = services.GetHikerBalance
+
+// loadHikerBalance reads the free HikerAPI balance.
+func loadHikerBalance(wg *sync.WaitGroup, stats *paidFetchingStats) {
+	defer wg.Done()
+
+	stats.HikerBalance, stats.HikerBalanceErr = readHikerBalance()
 }
 
 // logPaidStatsError logs a stats read that failed.
@@ -112,9 +157,34 @@ func formatPaidFetchingStats(stats paidFetchingStats) string {
 	text.WriteString(paidStatsHeading)
 	text.WriteString(fetchesLine)
 	text.WriteString(apifyLine)
+
+	if stats.HikerOn == true {
+		hikerLine := formatHikerStats(stats)
+		text.WriteString(hikerLine)
+	}
+
 	text.WriteString(supportLines)
 
 	return text.String()
+}
+
+// formatHikerStats renders the HikerAPI spend and balance line.
+func formatHikerStats(stats paidFetchingStats) string {
+	month := stats.HikerStats
+	spendText := fmt.Sprintf(paidStatsHikerTemplate, month.CostUsd, stats.HikerBudget, month.Calls, month.GatedCalls, month.StoryCalls)
+	balanceText := fmt.Sprintf(paidStatsHikerBalance, stats.HikerBalance.Requests)
+
+	if stats.HikerStatsErr != nil {
+		spendText = fmt.Sprintf(paidStatsHikerUnknown, stats.HikerBudget)
+	}
+
+	if stats.HikerBalanceErr != nil {
+		balanceText = paidStatsHikerNoBalance
+	}
+
+	result := fmt.Sprintf("%s%s", spendText, balanceText)
+
+	return result
 }
 
 // formatSupportStats renders the Stars totals and unused bonus downloads.

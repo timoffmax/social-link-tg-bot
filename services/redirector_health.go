@@ -30,7 +30,8 @@ const (
 
 // CheckRedirectorHealth probes each kk redirector, vxreddit and facebed once
 // and feeds the shared outage tracker, so repeated probe failures alert the
-// admin and a later success sends a recovery notice.
+// admin and a later success sends a recovery notice. It also reads the free
+// HikerAPI balance (low-balance alert, skip while empty) when HikerAPI is on.
 func CheckRedirectorHealth() {
 	probeRedirector(
 		kkInstagramServiceName+"-probe",
@@ -48,6 +49,7 @@ func CheckRedirectorHealth() {
 
 	probeVxreddit()
 	probeFacebed()
+	CheckHikerBalance()
 }
 
 // facebedProbePhotoID is a known-stable public photo (Ludus Magnus Studio,

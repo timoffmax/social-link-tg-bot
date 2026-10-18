@@ -234,7 +234,7 @@ func TestApifyBudgetFailsClosedOnAMalformedAnswer(t *testing.T) {
 
 	err := fakeApifyClient(server).reserveBudget(context.Background(), 0.01)
 
-	if (err == nil) || (isApifyBudgetError(err) == true) {
+	if (err == nil) || (isPaidBudgetError(err) == true) {
 		t.Fatalf("expected a lookup failure, got %v", err)
 	}
 }

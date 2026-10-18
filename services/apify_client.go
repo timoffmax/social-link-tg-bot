@@ -29,11 +29,11 @@ const (
 )
 
 // errApifyNotConfigured is returned by Apify methods without APIFY_TOKEN.
-var errApifyNotConfigured = errors.New("apify not configured (APIFY_TOKEN empty)")
+var errApifyNotConfigured = fmt.Errorf("%w: apify (APIFY_TOKEN empty)", errPaidNotConfigured)
 
 // errApifyBudget is returned when a run could push this month's Apify spend
 // over APIFY_MONTHLY_BUDGET_USD.
-var errApifyBudget = errors.New("apify monthly budget reached")
+var errApifyBudget = fmt.Errorf("%w: apify monthly budget reached", errPaidBudget)
 
 // apifyClient runs Apify actors synchronously. Every run first checks the
 // account's real monthly usage against the budget, so all Apify use (gated
@@ -198,22 +198,6 @@ func (c *apifyClient) monthlyUsage(ctx context.Context) (float64, error) {
 	}
 
 	return result, err
-}
-
-// IsPaidBudgetError reports that a download failed because this month's
-// budget for the paid service is used up, anywhere in the error chain.
-func IsPaidBudgetError(err error) bool {
-	result := isApifyBudgetError(err)
-
-	return result
-}
-
-// isApifyBudgetError reports a deliberate budget refusal: nothing was billed
-// and it is not a service failure.
-func isApifyBudgetError(err error) bool {
-	result := errors.Is(err, errApifyBudget)
-
-	return result
 }
 
 // do sends an authorized request and returns the body of a 2xx answer.

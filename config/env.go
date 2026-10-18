@@ -269,7 +269,7 @@ const (
 	defaultGatedFetchChatMonthlyCap   = 20
 )
 
-// GetApifyToken returns the Apify API token; empty disables the gated-post fetch.
+// GetApifyToken returns the Apify API token; empty turns Apify off.
 func GetApifyToken() string {
 	raw := os.Getenv(apifyTokenKey)
 	result := strings.TrimSpace(raw)
@@ -419,6 +419,101 @@ func getBoolEnv(key string, defaultValue bool) bool {
 }
 
 // GatedFetchNoGlobalCap is the bot-wide monthly cap of restricted posts that
-// means no cap: fetches are still counted, and only the Apify dollar budget
-// stops them. 0 turns the paid fetch off.
+// means no cap: fetches are still counted, and only the paid providers'
+// dollar budgets stop them. 0 turns the paid fetch off.
 const GatedFetchNoGlobalCap = -1
+
+// HikerAPI: the backup paid provider for restricted Instagram posts and
+// stories. It is off unless HIKERAPI_TOKEN is set.
+const (
+	hikerAPITokenKey                  = "HIKERAPI_TOKEN"
+	hikerAPIMonthlyBudgetUsdKey       = "HIKERAPI_MONTHLY_BUDGET_USD"
+	hikerAPIPricePerRequestUsdKey     = "HIKERAPI_PRICE_PER_REQUEST_USD"
+	hikerAPILowBalanceRequestsKey     = "HIKERAPI_LOW_BALANCE_REQUESTS"
+	instagramPaidProvidersKey         = "INSTAGRAM_PAID_PROVIDERS"
+	defaultHikerAPIMonthlyBudgetUsd   = 1.0
+	defaultHikerAPIPricePerRequestUsd = 0.001
+	defaultHikerAPILowBalanceRequests = 100
+	defaultInstagramPaidProviders     = "apify,hiker"
+	instagramPaidProvidersSeparator   = ","
+)
+
+// GetHikerAPIToken returns the HikerAPI access key; empty turns HikerAPI off.
+func GetHikerAPIToken() string {
+	raw := os.Getenv(hikerAPITokenKey)
+	result := strings.TrimSpace(raw)
+
+	return result
+}
+
+// GetHikerAPIMonthlyBudgetUsd returns the monthly HikerAPI spend limit
+// (counted by the bot's own ledger); 0 turns HikerAPI off.
+func GetHikerAPIMonthlyBudgetUsd() float64 {
+	result := getNonNegativeFloatEnv(hikerAPIMonthlyBudgetUsdKey, defaultHikerAPIMonthlyBudgetUsd)
+
+	return result
+}
+
+// GetHikerAPIPricePerRequestUsd returns what one billed HikerAPI request
+// costs, for the ledger and the budget check. It is always above 0 (0 or an
+// invalid value keeps the default), so the monthly budget always caps spend.
+func GetHikerAPIPricePerRequestUsd() float64 {
+	result := getPositiveFloatEnv(hikerAPIPricePerRequestUsdKey, defaultHikerAPIPricePerRequestUsd)
+
+	return result
+}
+
+// GetHikerAPILowBalanceRequests returns the requests left on the HikerAPI
+// account below which the owner is alerted.
+func GetHikerAPILowBalanceRequests() int {
+	result := getIntEnv(hikerAPILowBalanceRequestsKey, defaultHikerAPILowBalanceRequests)
+
+	return result
+}
+
+// GetInstagramPaidProviders returns the paid Instagram providers in the order
+// they are tried (lowercase names; unknown ones are left to the caller).
+func GetInstagramPaidProviders() []string {
+	raw := getStringEnv(instagramPaidProvidersKey, defaultInstagramPaidProviders)
+	lowered := strings.ToLower(raw)
+	parts := strings.Split(lowered, instagramPaidProvidersSeparator)
+	result := make([]string, 0, len(parts))
+
+	for _, part := range parts {
+		name := strings.TrimSpace(part)
+
+		if name != "" {
+			result = append(result, name)
+		}
+	}
+
+	return result
+}
+
+// getPositiveFloatEnv parses a float env variable above 0, falling back to
+// defaultValue when it is unset, invalid, 0 or negative.
+func getPositiveFloatEnv(key string, defaultValue float64) float64 {
+	result := defaultValue
+	parsed := getNonNegativeFloatEnv(key, defaultValue)
+
+	if parsed > 0 {
+		result = parsed
+	}
+
+	return result
+}
+
+// getNonNegativeFloatEnv parses a float env variable of 0 or more, falling
+// back to defaultValue when it is unset or invalid.
+func getNonNegativeFloatEnv(key string, defaultValue float64) float64 {
+	result := defaultValue
+	value := os.Getenv(key)
+	raw := strings.TrimSpace(value)
+	parsed, err := strconv.ParseFloat(raw, 64)
+
+	if (raw != "") && (err == nil) && (parsed >= 0) {
+		result = parsed
+	}
+
+	return result
+}

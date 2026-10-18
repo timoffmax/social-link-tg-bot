@@ -394,22 +394,23 @@ func IsRestrictedPostsOffered() bool {
 	return result
 }
 
-// IsPaidServiceConfigured reports whether the paid service (Apify) can run
-// at all: a token and a monthly budget above 0.
+// IsPaidServiceConfigured reports whether a paid service of the stories
+// chain (Apify or HikerAPI, as INSTAGRAM_PAID_PROVIDERS lists them) can run
+// at all: a token and a monthly budget above 0. It decides whether Stories
+// are offered.
 func IsPaidServiceConfigured() bool {
-	budget := config.GetApifyMonthlyBudgetUsd()
-	result := (config.GetApifyToken() != "") && (budget > 0)
+	result := isStoriesFetchConfigured()
 
 	return result
 }
 
 // IsGatedFetchConfigured reports whether restricted posts can be fetched at
-// all: the paid service and a bot-wide monthly cap that isn't 0 (no cap by
-// default).
+// all: a provider of INSTAGRAM_PAID_PROVIDERS that can run and a bot-wide
+// monthly cap that isn't 0 (no cap by default).
 func IsGatedFetchConfigured() bool {
 	globalCap := config.GetGatedFetchGlobalMonthlyCap()
-	isPaidServiceOn := IsPaidServiceConfigured()
-	result := (isPaidServiceOn == true) && (globalCap != 0)
+	providers := ConfiguredGatedProviders()
+	result := (len(providers) > 0) && (globalCap != 0)
 
 	return result
 }

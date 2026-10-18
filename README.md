@@ -6,15 +6,15 @@ A Telegram bot that downloads and sends actual media files from social media lin
 
 - **Real media, not links** — downloads photos, videos, galleries, slideshows, carousels and stories, and sends them as native Telegram media; a post's photos and videos arrive as one album in post order (split evenly when over Telegram's 10-item limit). Free Instagram extraction gets the first carousel item; the paid fallback gets them all
 - **Layered extraction chains with automatic fallbacks** — every platform has multiple extraction methods tried in order, so a single dead third-party service never silently kills a platform:
-  - **Instagram**: kkinstagram redirector → OG-preview fallback; posts gated by their author (e.g. age limits) are fetched through a paid Apify actor within monthly quotas (20 per chat by default; the caption shows how many are left; age-limited posts are blurred), and otherwise explained (with the reason, e.g. a used-up quota)
+  - **Instagram**: kkinstagram redirector → OG-preview fallback; posts gated by their author (e.g. age limits) are fetched through a paid Apify actor (HikerAPI as the backup when configured) within monthly quotas (20 per chat by default; the caption shows how many are left; age-limited posts are blurred), and otherwise explained (with the reason, e.g. a used-up quota)
   - **Reddit**: vxreddit (works from datacenter IPs, resolves `/s/` share links) → direct JSON API (with inline JS-challenge solving; text posts) → yt-dlp
   - **TikTok**: direct scraping → slideshow API → tikwm.com → kktiktok redirector → headless browser; handles both videos and photo slideshows
   - **Twitter/X**: hybrid extraction — full tweet text (with author display name and recursive quote resolution) via FxTwitter + media via yt-dlp
   - **YouTube**: Shorts and community posts only (regular videos are ignored). Shorts: yt-dlp (HLS merging via ffmpeg, EJS challenge solver) → a paid Apify downloader when YouTube walls the server IP. Posts: text and images read from the post page
   - **Facebook**: photo links (`/photo/?fbid=…`, `photo.php`, `/<page>/photos/…`) through the facebed embed service only (yt-dlp can't fetch Facebook photos; Facebook walls datacenter IPs); posts (`/<page>/posts/…`, `permalink.php`, `story.php`, group posts, `/share/p/…`, `/share/<code>`) through facebed first, then yt-dlp; videos, reels, watch and `/share/r|v/` links through yt-dlp first, then facebed. facebed gives up to 4 photos (downloaded in parallel) with the author and text; a public text-only post comes back as one text message with the author, the text and the original link (facebed cuts the text at 1024 characters, so a cut text ends with "…"; a link-share post loses its link preview); a photo or video link answered without media, a post with neither media nor text and an answer about another post than the link names are dropped. `FACEBED_HOST` (default `www.facebed.com`) sets the service; an hourly probe (page plus photo download) alerts the admin when it breaks
-  - **Instagram stories**: a paid Apify stories scraper (stories need a login)
+  - **Instagram stories**: a paid Apify stories scraper, then HikerAPI as the backup when configured (stories need a login)
   - **Threads**: Meta's server-rendered post embed (text, photos, videos and mixed carousels in order) → vxthreads mirror → vxthreads fixed link
-- **Paid fallbacks with a hard budget** — where free methods are blocked from datacenter IPs (author-gated Instagram posts, Instagram stories, YouTube Shorts), Apify actors take over. Every run is capped, and before each run the bot reads the account's real monthly spend and refuses runs that could exceed `APIFY_MONTHLY_BUDGET_USD`; runs in flight are counted too. Gated posts also have monthly quotas per chat/user, reserved atomically in PostgreSQL
+- **Paid fallbacks with a hard budget** — where free methods are blocked from datacenter IPs (author-gated Instagram posts, Instagram stories, YouTube Shorts), Apify actors take over, with HikerAPI as an optional backup for gated posts and stories (`INSTAGRAM_PAID_PROVIDERS`, default `apify,hiker`; off unless `HIKERAPI_TOKEN` is set). Every Apify run is capped, and before each run the bot reads the account's real monthly spend and refuses runs that could exceed `APIFY_MONTHLY_BUDGET_USD`; runs in flight are counted too. HikerAPI requests are recorded in a local ledger (`paid_requests`) and capped by `HIKERAPI_MONTHLY_BUDGET_USD`; a low prepaid balance alerts the admin. Gated posts also have monthly quotas per chat/user, reserved atomically in PostgreSQL
 - **Concurrent processing** — every Telegram update and every link within a message is processed in its own goroutine
 - **Health monitoring** — hourly probes of third-party redirectors and proxies, plus failure tracking of the paid and page-reading extractors; consecutive failures trigger Telegram alerts to the admin, with recovery notices
 - **Response validation** — third-party redirector responses are verified as real CDN media (content type, size, redirect target) so a broken service fails loudly instead of sending garbage
@@ -48,7 +48,7 @@ A Telegram bot that downloads and sends actual media files from social media lin
 | Command | Description |
 |---|---|
 | `/owner` | Owner panel |
-| `/adminstats [period]` | Global stats: chats, media counts, platform breakdown, top chats, plus "Paid fetching": restricted-post fetches this month (vs the bot-wide cap, none by default), Apify spend vs budget, Stars support totals (month / all time, refunds excluded) and unused bonus downloads |
+| `/adminstats [period]` | Global stats: chats, media counts, platform breakdown, top chats, plus "Paid fetching": restricted-post fetches this month (vs the bot-wide cap, none by default), Apify spend vs budget, HikerAPI spend this month and balance (when configured), Stars support totals (month / all time, refunds excluded) and unused bonus downloads |
 | `/broadcast` | Announcements with test/preview targeting (users vs groups) |
 | `/gated` | Paid fetch of author-gated Instagram posts: status, `on`/`off` per group, monthly `cap` per group and per-`user` allowance (`N`, `unlimited`, `default`) |
 | Blog system | Publish/edit/toggle posts shown to users (posts can also be written in the [owner dashboard](#owner-dashboard); sending them stays here) |
@@ -69,6 +69,7 @@ services/            → one extractor per platform + shared infrastructure:
                        instagram_* chain + instagram_gate (oEmbed gate check),
                        threads_extractor, youtube_post_extractor,
                        apify_client (shared budget) + gated_post_provider,
+                       hikerapi_client + paid_requests_store (backup provider, ledger) + gated_provider_chain,
                        youtube_apify_extractor, instagram_stories_apify_extractor,
                        gated_fetch + gated_fetch_store (quotas),
                        redirector_health, outage_tracker, notify_admin,
@@ -106,6 +107,7 @@ go build -o social-link-bot .
 | `FACEBED_HOST` | Facebook photo and text post embed service (default `www.facebed.com`) |
 | `APIFY_TOKEN`, `GATED_FETCH_*` | Paid fetch of author-gated Instagram posts and its monthly quotas (see `.env.example`, owner command `/gated`) |
 | `APIFY_MONTHLY_BUDGET_USD`, `APIFY_YOUTUBE_ACTOR`, `APIFY_STORIES_ACTOR` | Shared monthly Apify spend limit and the YouTube / Instagram stories actors |
+| `HIKERAPI_TOKEN`, `HIKERAPI_MONTHLY_BUDGET_USD`, `HIKERAPI_PRICE_PER_REQUEST_USD`, `HIKERAPI_LOW_BALANCE_REQUESTS`, `INSTAGRAM_PAID_PROVIDERS` | Optional HikerAPI backup for gated posts and stories (off without a token), its monthly cap (default $1), price per request for the ledger, low-balance alert threshold, and the provider order (stories use exactly the listed providers) |
 | `KKINSTAGRAM_HOST`, `KKTIKTOK_HOST`, `VXREDDIT_HOST` | Override third-party fallback hosts |
 | `DEFAULT_DAILY_MEDIA_LIMIT` | Default per-user daily limit (0 = unlimited) |
 | `STARS_SUPPORT_ENABLED` | Optional "support the developer" payments in Telegram Stars (tier buttons on `/donate`, alias `/support`; `/paysupport`, `/terms`); default `false` |

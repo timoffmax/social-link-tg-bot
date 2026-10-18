@@ -152,7 +152,7 @@ func (e *YouTubeApifyExtractor) ExtractMedia(ctx context.Context, youtubeURL str
 func isYouTubeServiceFailure(err error, item youtubeApifyItem) bool {
 	isContentError := (youtubeContentErrors[item.ErrorCode] == true) || (errors.Is(err, errYouTubeTooLarge) == true)
 	isDeadline := errors.Is(err, context.DeadlineExceeded)
-	result := (isContentError == false) && (isApifyBudgetError(err) == false) && (isDeadline == false)
+	result := (isContentError == false) && (isPaidBudgetError(err) == false) && (isDeadline == false)
 
 	return result
 }

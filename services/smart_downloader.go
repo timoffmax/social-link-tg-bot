@@ -24,6 +24,7 @@ type SmartDownloader struct {
 	gated        GatedPostProvider
 	youtubeApify *YouTubeApifyExtractor
 	storiesApify *InstagramStoriesApifyExtractor
+	storiesHiker *InstagramStoriesHikerExtractor
 	youtubePost  *YouTubePostExtractor
 	threads      *ThreadsExtractor
 	facebook     *FacebookFacebedExtractor
@@ -83,6 +84,7 @@ func NewSmartDownloader() *SmartDownloader {
 		gated:        NewGatedPostProvider(tempDir),
 		youtubeApify: NewYouTubeApifyExtractor(tempDir),
 		storiesApify: NewInstagramStoriesApifyExtractor(tempDir),
+		storiesHiker: NewInstagramStoriesHikerExtractor(tempDir),
 		youtubePost:  NewYouTubePostExtractor(tempDir),
 		threads:      NewThreadsExtractor(tempDir),
 		facebook:     NewFacebookFacebedExtractor(tempDir),
@@ -140,13 +142,16 @@ func (sd *SmartDownloader) downloadMediaWithContext(ctx context.Context, mediaUR
 		startIdx = concurrentCount
 	}
 
+	paidOutcome := paidChainOutcome{}
+
 	for i := startIdx; i < len(strategy.Methods); i++ {
 		if ctx.Err() != nil {
 			log.Printf("⏰ Overall 90s deadline exceeded for %s, aborting remaining strategies", mediaURL)
 			break
 		}
 
-		result, err := sd.executeStrategy(ctx, strategy.Methods[i], mediaURL, strategy, startTime)
+		method := strategy.Methods[i]
+		result, err := sd.executeStrategy(ctx, method, mediaURL, strategy, startTime)
 		if result != nil {
 			return result, nil
 		}
@@ -155,8 +160,18 @@ func (sd *SmartDownloader) downloadMediaWithContext(ctx context.Context, mediaUR
 			lastErr = err
 		}
 
+		paidOutcome.add(method, err)
 		lastResort = lastResortMediaOf(lastResort, err)
+
+		// A paid provider's answer about the content (private account, no
+		// such story) is final: the next one would be billed for the same.
+		if isPaidContentOutcome(err) == true {
+			log.Printf("🛑 Content outcome for %s, not trying further paid methods", mediaURL)
+			break
+		}
 	}
+
+	lastErr = paidOutcome.cause(lastErr)
 
 	totalDuration := time.Since(startTime)
 	var chainErr error
@@ -379,6 +394,11 @@ func (sd *SmartDownloader) executeStrategy(
 
 	case MethodStoriesApify:
 		mediaInfos, err := sd.runExtractorMethod(ctx, strategy, mediaURL, "stories-apify", sd.storiesApifyExtract, overallStart, methodStartTime)
+
+		return mediaInfos, err
+
+	case MethodStoriesHiker:
+		mediaInfos, err := sd.runExtractorMethod(ctx, strategy, mediaURL, "stories-hiker", sd.storiesHikerExtract, overallStart, methodStartTime)
 
 		return mediaInfos, err
 
@@ -703,6 +723,18 @@ func (sd *SmartDownloader) youtubeApifyExtract(ctx context.Context, mediaURL str
 
 	if sd.youtubeApify != nil {
 		result, err = sd.youtubeApify.ExtractMedia(ctx, mediaURL)
+	}
+
+	return result, err
+}
+
+// storiesHikerExtract runs the HikerAPI story fetch when it is configured.
+func (sd *SmartDownloader) storiesHikerExtract(ctx context.Context, mediaURL string) ([]*MediaInfo, error) {
+	var result []*MediaInfo
+	err := errHikerNotConfigured
+
+	if sd.storiesHiker != nil {
+		result, err = sd.storiesHiker.ExtractMedia(ctx, mediaURL)
 	}
 
 	return result, err

@@ -24,15 +24,67 @@ var apifyEmptyRetryDelay = 3 * time.Second
 var errApifyNoMedia = errors.New("apify returned no media")
 
 // GatedPostProvider fetches an Instagram post its author gated (e.g. an age
-// limit) through a service with its own logged-in sessions. It is an interface
-// so the provider can be swapped (Apify today, HikerAPI if Apify blocks us).
+// limit) through a service with its own logged-in sessions (Apify, HikerAPI,
+// or both behind a fallbackGatedProvider).
 type GatedPostProvider interface {
 	Name() string
 	FetchPost(instagramURL string, spoiler bool) ([]*MediaInfo, error)
 }
 
-// NewGatedPostProvider returns the configured provider, or nil when none is.
+// NewGatedPostProvider returns the configured providers in the order of
+// INSTAGRAM_PAID_PROVIDERS: one provider as it is, several behind a
+// fallbackGatedProvider, or nil when none is configured.
 func NewGatedPostProvider(tempDir string) GatedPostProvider {
+	var result GatedPostProvider
+	order := instagramPaidProviderOrder()
+	providers := buildGatedProviders(order, tempDir)
+
+	if len(providers) == 1 {
+		result = providers[0]
+	}
+
+	if len(providers) > 1 {
+		result = &fallbackGatedProvider{providers: providers}
+	}
+
+	return result
+}
+
+// buildGatedProviders builds each named provider that has a token.
+func buildGatedProviders(order []string, tempDir string) []GatedPostProvider {
+	result := make([]GatedPostProvider, 0, len(order))
+
+	for _, name := range order {
+		provider := buildGatedProvider(name, tempDir)
+
+		if provider != nil {
+			result = append(result, provider)
+		}
+	}
+
+	return result
+}
+
+// buildGatedProvider returns the named provider from the registry, or nil
+// without its token; an unknown name is logged and ignored.
+func buildGatedProvider(name, tempDir string) GatedPostProvider {
+	var result GatedPostProvider
+	provider, isKnown := paidProviders[name]
+
+	if isKnown == false {
+		log.Printf("⚠️ [gated-fetch] unknown provider %q ignored", name)
+	}
+
+	if isKnown == true {
+		result = provider.gatedProvider(tempDir)
+	}
+
+	return result
+}
+
+// newApifyGatedProvider returns the Apify provider, or nil without its
+// token (a budget of 0 still builds it, and it refuses each run, as before).
+func newApifyGatedProvider(tempDir string) GatedPostProvider {
 	var result GatedPostProvider
 	token := config.GetApifyToken()
 
@@ -42,6 +94,19 @@ func NewGatedPostProvider(tempDir string) GatedPostProvider {
 			actor:   config.GetApifyInstagramActor(),
 			api:     newApifyClient(),
 		}
+	}
+
+	return result
+}
+
+// newHikerGatedProvider returns the HikerAPI provider, or nil while
+// HikerAPI is not configured.
+func newHikerGatedProvider(tempDir string) GatedPostProvider {
+	var result GatedPostProvider
+	api := newHikerClient()
+
+	if api != nil {
+		result = &HikerInstagramProvider{tempDir: tempDir, api: api}
 	}
 
 	return result
@@ -66,7 +131,7 @@ const (
 	// gatedCaptionSeparator joins the author line and the caption text.
 	gatedCaptionSeparator = "\n\n"
 
-	// gatedFilePrefix starts the temp file name of a downloaded slide.
+	// gatedFilePrefix starts the temp file name of a slide Apify found.
 	gatedFilePrefix = "instagram_apify"
 
 	gatedPlatform = "instagram"
@@ -127,7 +192,7 @@ func (p *ApifyInstagramProvider) FetchPost(instagramURL string, spoiler bool) ([
 		result, err = p.downloadSlides(item, instagramURL, spoiler)
 	}
 
-	if (err != nil) && (isApifyBudgetError(err) == false) {
+	if (err != nil) && (isPaidBudgetError(err) == false) {
 		detail := err.Error()
 		ReportServiceFailure(apifyServiceName, detail)
 	}
@@ -161,7 +226,7 @@ func (p *ApifyInstagramProvider) runActor(postURL string) (apifyPostItem, error)
 func (p *ApifyInstagramProvider) retryActor(postURL string, firstErr error) (apifyPostItem, error) {
 	result, _, err := p.runActorOnce(postURL)
 
-	if isApifyBudgetError(err) == true {
+	if isPaidBudgetError(err) == true {
 		err = firstErr
 	}
 
@@ -211,16 +276,62 @@ func pickApifyPostItem(items []apifyPostItem, postURL string) (apifyPostItem, er
 
 // downloadSlides downloads every slide that fits Telegram's upload limit.
 func (p *ApifyInstagramProvider) downloadSlides(item apifyPostItem, instagramURL string, spoiler bool) ([]*MediaInfo, error) {
+	post := apifyGatedPost(item)
+	download := gatedDownload{TempDir: p.tempDir, Provider: apifyServiceName, FilePrefix: gatedFilePrefix}
+	result, err := download.slides(post, instagramURL, spoiler)
+
+	return result, err
+}
+
+// apifyGatedPost maps an Apify dataset item to the provider-neutral post.
+func apifyGatedPost(item apifyPostItem) gatedPost {
+	slides := make([]gatedSlide, 0, len(item.Media))
+
+	for _, media := range item.Media {
+		isVideo := (media.MediaType == apifyMediaTypeVideo)
+		slides = append(slides, gatedSlide{IsVideo: isVideo, URL: media.MediaURL})
+	}
+
+	result := gatedPost{Shortcode: item.Shortcode, Username: item.Username, FullName: item.FullName, Caption: item.Caption, Slides: slides}
+
+	return result
+}
+
+// gatedPost is a restricted post as any provider returns it.
+type gatedPost struct {
+	Shortcode string
+	Username  string
+	FullName  string
+	Caption   string
+	Slides    []gatedSlide
+}
+
+// gatedSlide is one photo or video of a gatedPost (a direct CDN URL).
+type gatedSlide struct {
+	IsVideo bool
+	URL     string
+}
+
+// gatedDownload downloads a provider's slides into TempDir.
+type gatedDownload struct {
+	TempDir    string
+	Provider   string
+	FilePrefix string
+}
+
+// slides downloads every slide that fits Telegram's upload limit; it fails
+// only when none could be downloaded, and a failed slide leaves no file.
+func (d gatedDownload) slides(post gatedPost, instagramURL string, spoiler bool) ([]*MediaInfo, error) {
 	var result []*MediaInfo
 	var err error
 	timestamp := time.Now().UnixNano()
-	caption := gatedPostCaption(item, instagramURL, spoiler)
+	caption := gatedPostCaption(post, instagramURL, spoiler)
 
-	for i, slide := range item.Media {
-		mediaInfo, slideErr := p.downloadSlide(slide, item.Shortcode, timestamp, i, spoiler)
+	for i, slide := range post.Slides {
+		mediaInfo, slideErr := d.slide(slide, post.Shortcode, timestamp, i, spoiler)
 
 		if slideErr != nil {
-			log.Printf("⚠️ [apify] skipping slide %d of %s: %v", (i + 1), item.Shortcode, slideErr)
+			log.Printf("⚠️ [%s] skipping slide %d of %s: %v", d.Provider, (i + 1), post.Shortcode, slideErr)
 		}
 
 		if slideErr == nil {
@@ -236,7 +347,7 @@ func (p *ApifyInstagramProvider) downloadSlides(item apifyPostItem, instagramURL
 	}
 
 	if len(result) == 0 {
-		err = fmt.Errorf("no apify slide could be downloaded for %s", item.Shortcode)
+		err = fmt.Errorf("no %s slide could be downloaded for %s", d.Provider, post.Shortcode)
 	}
 
 	return result, err
@@ -245,12 +356,12 @@ func (p *ApifyInstagramProvider) downloadSlides(item apifyPostItem, instagramURL
 // gatedPostCaption builds the author line plus the post caption, hidden
 // behind spoilers like the media when spoiler is set; room is kept for the
 // remaining-quota note appended after the fetch.
-func gatedPostCaption(item apifyPostItem, instagramURL string, spoiler bool) string {
+func gatedPostCaption(post gatedPost, instagramURL string, spoiler bool) string {
 	caption := authorCaption{
 		Platform:    gatedPlatform,
-		DisplayName: item.FullName,
-		Username:    item.Username,
-		Text:        item.Caption,
+		DisplayName: post.FullName,
+		Username:    post.Username,
+		Text:        post.Caption,
 		PostURL:     instagramURL,
 		Reserve:     gatedQuotaNoteReserve,
 		Spoiler:     spoiler,
@@ -412,20 +523,20 @@ func escapeCaptionLines(raw string, spoiler bool, escape func(string) string) st
 	return result
 }
 
-// downloadSlide downloads one slide to a temp file.
-func (p *ApifyInstagramProvider) downloadSlide(slide apifyPostMedia, shortcode string, timestamp int64, index int, spoiler bool) (*MediaInfo, error) {
+// slide downloads one slide to a temp file, removing it on failure.
+func (d gatedDownload) slide(slide gatedSlide, shortcode string, timestamp int64, index int, spoiler bool) (*MediaInfo, error) {
 	var result *MediaInfo
 	mediaType := MediaTypePhoto
 	ext := gatedExtPhoto
 
-	if slide.MediaType == apifyMediaTypeVideo {
+	if slide.IsVideo == true {
 		mediaType = MediaTypeVideo
 		ext = gatedExtVideo
 	}
 
-	filename := fmt.Sprintf("%s_%s_%d_%d%s", gatedFilePrefix, shortcode, timestamp, (index + 1), ext)
-	filePath := filepath.Join(p.tempDir, filename)
-	err := downloadToFile(slide.MediaURL, filePath)
+	filename := fmt.Sprintf("%s_%s_%d_%d%s", d.FilePrefix, shortcode, timestamp, (index + 1), ext)
+	filePath := filepath.Join(d.TempDir, filename)
+	err := downloadToFile(slide.URL, filePath)
 
 	if err == nil {
 		err = checkUploadSize(filePath)

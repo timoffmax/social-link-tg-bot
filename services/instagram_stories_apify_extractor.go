@@ -98,12 +98,19 @@ func (e *InstagramStoriesApifyExtractor) ExtractMedia(ctx context.Context, story
 	}
 
 	if err == nil {
-		result, err = e.download(story, username, storyURL)
+		media := storyMedia{ID: story.ID, ImageURL: story.ImageURL, VideoURL: story.VideoURL}
+		download := storyDownload{TempDir: e.tempDir, FilePrefix: storiesApifyFilePrefix}
+		result, err = download.file(media, username, storyURL)
 	}
 
-	isContentOutcome := (storiesContentStatuses[status] == true) || (isStoryMissing == true)
+	isContentOutcome := (err != nil) && ((storiesContentStatuses[status] == true) || (isStoryMissing == true))
 	isDeadline := errors.Is(err, context.DeadlineExceeded)
-	isServiceFailure := (err != nil) && (isParsed == true) && (isContentOutcome == false) && (isApifyBudgetError(err) == false) && (isDeadline == false)
+	isServiceFailure := (err != nil) && (isParsed == true) && (isContentOutcome == false) && (isPaidBudgetError(err) == false) && (isDeadline == false)
+
+	// Another paid provider would be billed for the same answer: final.
+	if isContentOutcome == true {
+		err = fmt.Errorf("%w: %w", errPaidContentOutcome, err)
+	}
 
 	if isServiceFailure == true {
 		detail := err.Error()
@@ -201,8 +208,22 @@ func pickStory(rows []storiesApifyRow, username, storyID string) (storiesApifyIt
 	return result, status, err
 }
 
-// download fetches the story's video, or its image when it has none.
-func (e *InstagramStoriesApifyExtractor) download(story storiesApifyItem, username, storyURL string) ([]*MediaInfo, error) {
+// storyMedia is one story as any provider returns it (direct CDN URLs).
+type storyMedia struct {
+	ID       string
+	ImageURL string
+	VideoURL string
+}
+
+// storyDownload downloads a provider's story into TempDir.
+type storyDownload struct {
+	TempDir    string
+	FilePrefix string
+}
+
+// file fetches the story's video, or its image when it has none; a failed
+// download leaves no file.
+func (d storyDownload) file(story storyMedia, username, storyURL string) ([]*MediaInfo, error) {
 	var result []*MediaInfo
 	mediaURL := story.ImageURL
 	mediaType := MediaTypePhoto
@@ -215,8 +236,8 @@ func (e *InstagramStoriesApifyExtractor) download(story storiesApifyItem, userna
 	}
 
 	timestamp := time.Now().UnixNano()
-	filename := fmt.Sprintf("%s_%s_%d%s", storiesApifyFilePrefix, story.ID, timestamp, ext)
-	filePath := filepath.Join(e.tempDir, filename)
+	filename := fmt.Sprintf("%s_%s_%d%s", d.FilePrefix, story.ID, timestamp, ext)
+	filePath := filepath.Join(d.TempDir, filename)
 	err := downloadToFile(mediaURL, filePath)
 
 	if err == nil {
