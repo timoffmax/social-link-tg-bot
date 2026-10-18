@@ -26,42 +26,141 @@ if [ ! -f "$CONFIG_FILE" ]; then
 fi
 source "$CONFIG_FILE"
 
+# Optional owner dashboard: deployed only when deploy.conf sets its service name
+DASHBOARD_SERVICE_NAME="${DASHBOARD_SERVICE_NAME:-}"
+DASHBOARD_ENABLED=false
+if [ -n "$DASHBOARD_SERVICE_NAME" ]; then
+    DASHBOARD_ENABLED=true
+fi
+
+usage() {
+    echo "Usage: $0 [--restart-only] [--dashboard-only]"
+    echo "  --restart-only    restart without pulling or building"
+    echo "  --dashboard-only  pull, build and restart only the dashboard (needs DASHBOARD_SERVICE_NAME)"
+}
+
 # Parse options
 RESTART_ONLY=false
-if [[ "${1:-}" == "--restart-only" ]]; then
-    RESTART_ONLY=true
+DASHBOARD_ONLY=false
+for arg in "$@"; do
+    case "$arg" in
+        --restart-only) RESTART_ONLY=true ;;
+        --dashboard-only) DASHBOARD_ONLY=true ;;
+        -h|--help) usage; exit 0 ;;
+        *) log_error "Unknown option: $arg"; usage; exit 1 ;;
+    esac
+done
+
+if [ "$DASHBOARD_ONLY" = true ] && [ "$DASHBOARD_ENABLED" = false ]; then
+    log_error "--dashboard-only needs DASHBOARD_SERVICE_NAME in $CONFIG_FILE"
+    exit 1
 fi
+
+DEPLOY_BOT=true
+if [ "$DASHBOARD_ONLY" = true ]; then
+    DEPLOY_BOT=false
+fi
+
+# remote runs one command on the server
+remote() {
+    ssh -i "$SERVER_SSH_KEY" "$SERVER_USER@$SERVER_IP" "$1"
+}
+
+# build_dashboard builds the React app (embedded into the binary) and then the dashboard binary
+build_dashboard() {
+    log_info "Building dashboard on server..."
+    remote "cd $REMOTE_DIR && (cd dashboard/web && npm ci && npm run build) && /usr/local/go/bin/go build -o social-link-dashboard ./cmd/dashboard" || return 1
+    log_success "Dashboard build completed on server"
+}
+
+# restart_dashboard restarts the dashboard service and shows its status
+restart_dashboard() {
+    log_info "Restarting dashboard service..."
+    remote "sudo systemctl restart $DASHBOARD_SERVICE_NAME" || return 1
+    sleep 2
+
+    log_info "Checking dashboard service status..."
+    remote "sudo systemctl status $DASHBOARD_SERVICE_NAME --no-pager" || true
+}
+
+# deploy_dashboard builds (unless restart-only) and restarts the dashboard.
+# It runs in an if-condition, where set -e is off, so every step returns on failure.
+deploy_dashboard() {
+    if [ "$RESTART_ONLY" = false ]; then
+        build_dashboard || return 1
+    fi
+
+    restart_dashboard || return 1
+}
 
 echo "🚀 Deploying Social Link Bot"
 echo "============================"
 
 if [ "$RESTART_ONLY" = false ]; then
+    if [ "$DASHBOARD_ONLY" = true ]; then
+        # The bot applies migrations on start; new dashboard SQL may need them.
+        # Checked before the pull, so the checkout stays put and a rerun stops too.
+        log_info "Checking for new migrations..."
+        remote "cd $REMOTE_DIR && git fetch origin master"
+        NEW_MIGRATIONS="$(remote "cd $REMOTE_DIR && git diff --name-only HEAD FETCH_HEAD -- migrations/")"
+
+        if [ -n "$NEW_MIGRATIONS" ]; then
+            log_error "master brings new migrations, which only the bot applies on restart:"
+            echo "$NEW_MIGRATIONS"
+            log_error "Nothing was pulled. Run the full deploy first: $0"
+            exit 1
+        fi
+    fi
+
     # Push latest code to server
     log_info "Pushing latest code to server..."
-    ssh -i "$SERVER_SSH_KEY" "$SERVER_USER@$SERVER_IP" "cd $REMOTE_DIR && git pull origin master"
-    
-    # Build on server (to avoid GLIBC issues)
-    log_info "Building application on server..."
-    ssh -i "$SERVER_SSH_KEY" "$SERVER_USER@$SERVER_IP" "cd $REMOTE_DIR && /usr/local/go/bin/go build -o social-link-bot ."
-    log_success "Build completed on server"
+    remote "cd $REMOTE_DIR && git pull origin master"
+
+    if [ "$DEPLOY_BOT" = true ]; then
+        # Build on server (to avoid GLIBC issues)
+        log_info "Building application on server..."
+        remote "cd $REMOTE_DIR && /usr/local/go/bin/go build -o social-link-bot ."
+        log_success "Build completed on server"
+    fi
 fi
 
-# Restart service
-log_info "Restarting service..."
-ssh -i "$SERVER_SSH_KEY" "$SERVER_USER@$SERVER_IP" "sudo systemctl restart $SERVICE_NAME"
-sleep 2
+if [ "$DEPLOY_BOT" = true ]; then
+    # Restart service
+    log_info "Restarting service..."
+    remote "sudo systemctl restart $SERVICE_NAME"
+    sleep 2
 
-# Check status
-log_info "Checking service status..."
-ssh -i "$SERVER_SSH_KEY" "$SERVER_USER@$SERVER_IP" "sudo systemctl status $SERVICE_NAME --no-pager" || true
+    # Check status
+    log_info "Checking service status..."
+    remote "sudo systemctl status $SERVICE_NAME --no-pager" || true
 
-# Show recent logs
-log_info "Recent logs:"
-ssh -i "$SERVER_SSH_KEY" "$SERVER_USER@$SERVER_IP" "tail -n 10 $REMOTE_DIR/logs/bot.log 2>/dev/null || echo 'No logs yet'"
+    # Show recent logs
+    log_info "Recent logs:"
+    remote "tail -n 10 $REMOTE_DIR/logs/bot.log 2>/dev/null || echo 'No logs yet'"
+fi
 
-log_success "Deployment completed!"
+# The dashboard goes last, so its failure never stops the bot deploy
+DASHBOARD_FAILED=false
+if [ "$DASHBOARD_ENABLED" = true ]; then
+    if ! deploy_dashboard; then
+        DASHBOARD_FAILED=true
+        log_error "Dashboard deploy failed; the bot deploy is not affected"
+    fi
+fi
+
+if [ "$DASHBOARD_FAILED" = false ]; then
+    log_success "Deployment completed!"
+fi
 
 echo ""
 echo "📋 Useful commands:"
 echo "  View logs: ssh -i $SERVER_SSH_KEY $SERVER_USER@$SERVER_IP 'tail -f $REMOTE_DIR/logs/bot.log'"
 echo "  Restart:   $0 --restart-only"
+if [ "$DASHBOARD_ENABLED" = true ]; then
+    echo "  Dashboard: $0 --dashboard-only"
+fi
+
+if [ "$DASHBOARD_FAILED" = true ]; then
+    log_error "Dashboard deploy failed (see above)"
+    exit 1
+fi

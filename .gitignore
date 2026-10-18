@@ -54,3 +54,6 @@ cookies/*_cookies.txt
 
 # Machine-specific local dev symlink (created by `make install-deps`)
 bin/yt-dlp
+
+# Owner dashboard binary
+social-link-dashboard

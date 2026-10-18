@@ -13,3 +13,10 @@ REMOTE_DIR="/var/www/social-link-tg-bot"
 
 # systemd service restarted by bin/deploy
 SERVICE_NAME="social-link-bot"
+
+# Optional owner dashboard (cmd/dashboard). When DASHBOARD_SERVICE_NAME is set,
+# bin/deploy also builds the frontend (npm ci && npm run build in dashboard/web,
+# needs Node 22+ on the server) and the social-link-dashboard binary, then
+# restarts this systemd service. Leave it commented out to deploy only the bot.
+# ./bin/deploy --dashboard-only deploys just the dashboard.
+# DASHBOARD_SERVICE_NAME="social-link-dashboard"

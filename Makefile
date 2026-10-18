@@ -7,11 +7,13 @@ GOCLEAN=$(GOCMD) clean
 GOTEST=$(GOCMD) test
 GOGET=$(GOCMD) get
 BINARY_NAME=social-link-bot
+DASHBOARD_BINARY=social-link-dashboard
+DASHBOARD_WEB_DIR=dashboard/web
 
 # Add Go to PATH if needed
 export PATH := $(HOME)/go/bin:$(PATH)
 
-.PHONY: all build clean test run dev install-deps help
+.PHONY: all build clean test run dev install-deps help dashboard-web dashboard dashboard-dev
 
 all: build
 
@@ -22,7 +24,7 @@ build:
 ## clean: Clean build files
 clean:
 	$(GOCLEAN)
-	rm -f $(BINARY_NAME)
+	rm -f $(BINARY_NAME) $(DASHBOARD_BINARY)
 
 ## test: Run tests
 test:
@@ -37,6 +39,18 @@ dev:
 	@echo "Starting development mode..."
 	@echo "Install entr for auto-restart: sudo apt install entr"
 	find . -name "*.go" | entr -r make run
+
+## dashboard-web: Install the dashboard frontend's packages and build it into dashboard/web/dist
+dashboard-web:
+	cd $(DASHBOARD_WEB_DIR) && npm ci && npm run build
+
+## dashboard: Build the owner dashboard binary (embeds the frontend, so builds it first)
+dashboard: dashboard-web
+	$(GOBUILD) -o $(DASHBOARD_BINARY) -v ./cmd/dashboard
+
+## dashboard-dev: Build and run the dashboard locally (DASHBOARD_* env vars, see README)
+dashboard-dev: dashboard
+	./$(DASHBOARD_BINARY)
 
 ## install-deps: Install development dependencies
 install-deps:
