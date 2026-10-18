@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type ComponentType } from 'react';
 import { RANGE_DAYS, type RangeDays, type ResponseMeta } from './api';
 import { Segmented, type SegmentOption } from './components/Bits';
+import { Tabs } from './components/Tabs';
 import { formatClock } from './format';
 import { TABS, useHashRoute, useRefreshTick, useTheme, type PostRef, type Tab, type ThemeChoice } from './hooks';
 import { BlogTab } from './tabs/Blog';
@@ -44,6 +45,7 @@ export function App() {
   const [meta, setMeta] = useState<ResponseMeta | null>(null);
   const spec = TAB_SPECS[route.tab];
   const ActiveTab = spec.component;
+  const tabLinks = TABS.map((tab) => ({ id: tab, label: TAB_SPECS[tab].label, href: `#/${tab}?days=${route.days}` }));
 
   const onLoaded = useCallback(<T extends ResponseMeta>(response: T): T => {
     setMeta({ generated_at: response.generated_at, timezone: response.timezone });
@@ -72,18 +74,7 @@ export function App() {
         </div>
       </header>
 
-      <nav className="tabs" aria-label="Dashboard sections">
-        {TABS.map((tab) => (
-          <a
-            key={tab}
-            href={`#/${tab}?days=${route.days}`}
-            className="tabs__item"
-            aria-current={(tab === route.tab) ? 'page' : undefined}
-          >
-            {TAB_SPECS[tab].label}
-          </a>
-        ))}
-      </nav>
+      <Tabs tabs={tabLinks} active={route.tab} />
 
       {(router.pending !== null) && <LeavePrompt onLeave={router.leave} onStay={router.stay} />}
 

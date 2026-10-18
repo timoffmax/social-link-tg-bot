@@ -448,7 +448,7 @@ func TestIntegrationMoney(t *testing.T) {
 	d.exec(t, `INSERT INTO gated_fetch_usage (scope, scope_id, period, used) VALUES
 ('global', 0, '2026-10-01', 12), ('chat', -100, '2026-10-01', 5), ('chat', -200, '2026-10-01', 3), ('user', 1, '2026-10-01', 3),
 ('global', 0, '2026-09-01', 4), ('chat', -100, '2026-09-01', 4)`)
-	d.exec(t, `INSERT INTO gated_fetch_policies (scope, scope_id, enabled, monthly_limit) VALUES ('chat', -100, true, 20), ('chat', -200, true, NULL)`)
+	d.exec(t, `INSERT INTO gated_fetch_policies (scope, scope_id, enabled, monthly_limit) VALUES ('chat', -100, true, 20), ('chat', -200, true, NULL), ('user', 1, true, -1)`)
 	d.exec(t, `INSERT INTO support_payments (telegram_payment_charge_id, user_id, chat_id, stars, credits, payload, created_at, refunded_at, boosted_chat_id) VALUES
 ('p1', 1, 1, 25, 10, 'support:25:1', '2026-10-05T10:00:00Z', NULL, NULL),
 ('p2', 2, -100, 50, 25, 'support:50:2', '2026-10-06T10:00:00Z', NULL, -100),
@@ -472,7 +472,7 @@ func TestIntegrationMoney(t *testing.T) {
 	assertEqual(t, "gated current", got.GatedCurrent, []GatedCurrent{
 		{Scope: "chat", ScopeID: -100, Title: "Group A", Used: 5, Limit: &chatLimit, Custom: true},
 		{Scope: "chat", ScopeID: -200, Title: "Group B", Used: 3, Limit: nil, Custom: false},
-		{Scope: "user", ScopeID: 1, Title: "alice", Used: 3, Limit: nil, Custom: false},
+		{Scope: "user", ScopeID: 1, Title: "alice", Used: 3, Limit: nil, Unlimited: true, Custom: true},
 	})
 	assertEqual(t, "stars monthly", got.StarsMonthly, []StarsMonth{
 		{Month: "2026-08"},

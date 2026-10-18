@@ -208,14 +208,55 @@ button {
   text-decoration: underline;
 }
 
-/* Tabs: scroll inside their own row on a phone, never the page. */
+/* Tabs: scroll inside their own row on the narrowest phones, never the page;
+   the edge that hides more tabs fades into the page. */
+.tabs-row {
+  position: relative;
+  margin-top: 18px;
+}
+
+.tabs-row::before,
+.tabs-row::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 1px;
+  width: 28px;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 160ms ease;
+}
+
+.tabs-row::before {
+  left: 0;
+  background: linear-gradient(to right, var(--page), transparent);
+}
+
+.tabs-row::after {
+  right: 0;
+  background: linear-gradient(to left, var(--page), transparent);
+}
+
+.tabs-row[data-fade-start="true"]::before,
+.tabs-row[data-fade-end="true"]::after {
+  opacity: 1;
+}
+
 .tabs {
   display: flex;
   gap: 4px;
-  margin-top: 18px;
   border-bottom: 1px solid var(--axis);
   overflow-x: auto;
   scrollbar-width: none;
+}
+
+.tabs::-webkit-scrollbar {
+  display: none;
+}
+
+/* The scrolling row clips anything outside it, so the focus ring sits inside the tab. */
+.tabs__item:focus-visible {
+  outline-offset: -2px;
 }
 
 .tabs__item {
@@ -618,6 +659,64 @@ button {
   white-space: nowrap;
   vertical-align: bottom;
   font-weight: 550;
+}
+
+/* Phone tables: detail columns move into a line under their row and the
+   fill column takes the room left over, so nothing is clipped. */
+.table__detail td {
+  padding-top: 0;
+}
+
+.cell-details {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(112px, 1fr));
+  gap: 2px 14px;
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.cell-details div {
+  display: flex;
+  gap: 5px;
+}
+
+.cell-details dt {
+  color: var(--text-muted);
+}
+
+.cell-details dd {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+/* PHONE_MAX_WIDTH in hooks.ts: DataTable renders the detail line from the
+   same breakpoint. */
+@media (max-width: 640px) {
+  .table th,
+  .table th.num {
+    white-space: normal;
+  }
+
+  .table tr.has-detail td {
+    border-bottom: 0;
+    padding-bottom: 2px;
+  }
+
+  .table td.cell-fill {
+    width: 100%;
+  }
+
+  /* Only an ellipsizing title may shrink below its text; plain text such as
+     a month keeps its longest word and wraps. */
+  .table td.cell-fill:has(.cell-title) {
+    max-width: 0;
+  }
+
+  .table td.cell-fill .cell-title {
+    display: block;
+    max-width: none;
+  }
 }
 
 .kind {
@@ -1336,9 +1435,15 @@ a.tg-link:hover {
 }
 
 @media (max-width: 480px) {
+  .tabs {
+    gap: 0;
+  }
+
   .tabs__item {
-    padding: 10px 8px;
+    flex: 1 0 auto;
+    padding: 10px 5px;
     font-size: 14px;
+    text-align: center;
   }
 
   .hero-figure {
@@ -1351,6 +1456,20 @@ a.tg-link:hover {
 
   .facts {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 380px) {
+  .tabs__item {
+    padding: 10px 4px;
+    font-size: 13px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tabs-row::before,
+  .tabs-row::after {
+    transition: none;
   }
 }
 

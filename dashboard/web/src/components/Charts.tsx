@@ -12,13 +12,20 @@ import {
   YAxis,
   type TooltipProps,
 } from 'recharts';
-import { formatCompact, formatNumber, tickInterval } from '../format';
+import { useCallback, useMemo, useState } from 'react';
+import { formatCompact, formatNumber, tickIntervalForWidth } from '../format';
 import { Legend } from './Bits';
 
 export const SERIES_1 = 'var(--series-1)';
 export const SERIES_2 = 'var(--series-2)';
 
-const AXIS_TICK = { fill: 'var(--text-muted)', fontSize: 12 };
+const AXIS_FONT_SIZE = 12;
+const AXIS_TICK = { fill: 'var(--text-muted)', fontSize: AXIS_FONT_SIZE };
+/** Free space kept between two x-axis labels. */
+const TICK_GAP = 12;
+/** Average glyph width per font size, used when the canvas cannot measure. */
+const GLYPH_RATIO = 0.62;
+const COLUMN_MARGIN = { top: 8, right: 4, bottom: 0, left: 0 };
 const MAX_BAR = 24;
 const GAP_THRESHOLD = 120;
 const MAX_X_TICKS = 7;
@@ -53,6 +60,38 @@ function gapShape(orientation: 'vertical' | 'horizontal', trim: boolean, opacity
 
     return <Rectangle x={x} y={bar.y} width={width} height={height} fill={bar.fill} fillOpacity={opacity} radius={bar.radius} />;
   };
+}
+
+let measureContext: CanvasRenderingContext2D | null | undefined;
+
+function canvasContext(): CanvasRenderingContext2D | null {
+  if (measureContext === undefined) {
+    const canvas = document.createElement('canvas');
+    measureContext = canvas.getContext('2d');
+  }
+
+  return measureContext;
+}
+
+function estimatedWidths(labels: string[]): number[] {
+  return labels.map((label) => label.length * AXIS_FONT_SIZE * GLYPH_RATIO);
+}
+
+/** Sets the axis font on the context once, then measures every label. */
+function measuredWidths(context: CanvasRenderingContext2D, labels: string[]): number[] {
+  const fontFamily = getComputedStyle(document.body).fontFamily;
+  context.font = `${AXIS_FONT_SIZE}px ${fontFamily}`;
+
+  return labels.map((label) => context.measureText(label).width);
+}
+
+/** Width of the widest x-axis label, so the tick spacing can keep labels apart. */
+function widestLabel(labels: string[]): number {
+  const context = canvasContext();
+  const widths = (context === null) ? estimatedWidths(labels) : measuredWidths(context, labels);
+  const widest = Math.max(0, ...widths);
+
+  return Math.ceil(widest);
 }
 
 export interface Series {
@@ -122,18 +161,32 @@ export function ColumnChart<T extends Row>(props: ColumnChartProps<T>) {
   const height = props.height ?? 240;
   const dense = (data.length > GAP_THRESHOLD);
   const lastIndex = series.length - 1;
+  const [width, setWidth] = useState(0);
+  const onResize = useCallback((containerWidth: number) => {
+    const rounded = Math.round(containerWidth);
+    setWidth(rounded);
+  }, []);
+  const labelWidth = useMemo(() => {
+    const labels = data.map((row) => formatTick(String(row[xKey])));
+
+    return widestLabel(labels);
+  }, [data, xKey, formatTick]);
+  const plotWidth = Math.max(0, width - AXIS_WIDTH - COLUMN_MARGIN.left - COLUMN_MARGIN.right);
+  const interval = tickIntervalForWidth(data.length, plotWidth, labelWidth, TICK_GAP, MAX_X_TICKS);
+  // Until onResize reports the width the spacing is unknown, so the labels wait a frame instead of overlapping.
+  const xTick = (width > 0) ? AXIS_TICK : false;
 
   return (
     <figure className="chart">
       {(series.length > 1) && <Legend items={series} />}
-      <ResponsiveContainer width="100%" height={height}>
-        <BarChart data={data} margin={{ top: 8, right: 4, bottom: 0, left: 0 }} barCategoryGap={dense ? 0 : '18%'} barGap={0}>
+      <ResponsiveContainer width="100%" height={height} onResize={onResize}>
+        <BarChart data={data} margin={COLUMN_MARGIN} barCategoryGap={dense ? 0 : '18%'} barGap={0}>
           <CartesianGrid vertical={false} stroke="var(--grid)" />
           <XAxis
             dataKey={xKey}
             tickFormatter={formatTick}
-            interval={tickInterval(data.length, MAX_X_TICKS)}
-            tick={AXIS_TICK}
+            interval={interval}
+            tick={xTick}
             tickLine={false}
             axisLine={{ stroke: 'var(--axis)' }}
             minTickGap={8}

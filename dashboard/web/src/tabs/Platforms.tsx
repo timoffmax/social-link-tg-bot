@@ -38,15 +38,16 @@ const SERIES_COLUMNS: Column<PlatformSeries>[] = [
 
 function healthColumns(data: PlatformsResponse): Column<PlatformHealth>[] {
   return [
-    { header: 'Platform', cell: (row) => platformLabel(row.platform) },
+    { header: 'Platform', cell: (row) => platformLabel(row.platform), fill: true },
     { header: 'Status', cell: (row) => <StatusBadge status={row.status} /> },
     {
       header: 'Last download',
       cell: (row) => <time dateTime={row.last_download_at ?? undefined} title={formatTimestamp(row.last_download_at, data.timezone)}>{formatRelative(row.last_download_at, data.generated_at)}</time>,
+      detail: true,
     },
-    { header: '24 h', cell: (row) => formatNumber(row.downloads_24h), numeric: true },
-    { header: 'Per day, 7 d', cell: (row) => formatDecimal(row.avg_daily_7d), numeric: true },
-    { header: 'Per day, prev 28 d', cell: (row) => formatDecimal(row.avg_daily_prev_28d), numeric: true },
+    { header: '24 h', cell: (row) => formatNumber(row.downloads_24h), numeric: true, detail: true },
+    { header: 'Per day, 7 d', cell: (row) => formatDecimal(row.avg_daily_7d), numeric: true, detail: true },
+    { header: 'Per day, prev 28 d', cell: (row) => formatDecimal(row.avg_daily_prev_28d), numeric: true, detail: true },
     { header: 'Change', cell: (row) => <span className={changeClass(row)}>{formatChangePct(row.change_pct)}</span>, numeric: true },
   ];
 }

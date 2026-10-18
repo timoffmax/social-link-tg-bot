@@ -9,33 +9,42 @@ import {
   formatFullMonth,
   formatNumber,
   formatRelative,
+  formatRelativeShort,
   formatTimestamp,
   isSettingOn,
   platformLabel,
   retentionRate,
   userLabel,
 } from '../format';
-import { useApi, type Query } from '../hooks';
+import { useApi, useIsPhone, type Query } from '../hooks';
 import type { TabProps } from './types';
 
-function lastSeen(timestamp: string | null, data: ChatsResponse) {
-  return <time dateTime={timestamp ?? undefined} title={formatTimestamp(timestamp, data.timezone)}>{formatRelative(timestamp, data.generated_at)}</time>;
+// A phone shows the short form ("6h") so the column fits beside the title.
+function LastSeen({ timestamp, data }: { timestamp: string | null; data: ChatsResponse }) {
+  const isPhone = useIsPhone();
+  const format = isPhone ? formatRelativeShort : formatRelative;
+
+  return (
+    <time dateTime={timestamp ?? undefined} title={formatTimestamp(timestamp, data.timezone)}>
+      {format(timestamp, data.generated_at)}
+    </time>
+  );
 }
 
 function groupColumns(data: ChatsResponse): Column<TopGroup>[] {
   return [
-    { header: 'Group', cell: (row) => <span className="cell-title">{chatLabel(row.title, row.chat_id)}</span> },
+    { header: 'Group', cell: (row) => <span className="cell-title" title={chatLabel(row.title, row.chat_id)}>{chatLabel(row.title, row.chat_id)}</span>, fill: true },
     { header: 'Downloads', cell: (row) => formatNumber(row.downloads), numeric: true },
     { header: 'Users', cell: (row) => formatNumber(row.users), numeric: true },
-    { header: 'Last', cell: (row) => lastSeen(row.last_at, data) },
+    { header: 'Last', cell: (row) => <LastSeen timestamp={row.last_at} data={data} /> },
   ];
 }
 
 function userColumns(data: ChatsResponse): Column<TopUser>[] {
   return [
-    { header: 'User', cell: (row) => <span className="cell-title">{userLabel(row.username, row.user_id)}</span> },
+    { header: 'User', cell: (row) => <span className="cell-title" title={userLabel(row.username, row.user_id)}>{userLabel(row.username, row.user_id)}</span>, fill: true },
     { header: 'Downloads', cell: (row) => formatNumber(row.downloads), numeric: true },
-    { header: 'Last', cell: (row) => lastSeen(row.last_at, data) },
+    { header: 'Last', cell: (row) => <LastSeen timestamp={row.last_at} data={data} /> },
   ];
 }
 

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type RefObject } from 'react';
 import { DEFAULT_RANGE_DAYS, RANGE_DAYS, type RangeDays } from './api';
 
 export const TABS = ['overview', 'platforms', 'chats', 'money', 'reports', 'blog'] as const;
@@ -250,4 +250,43 @@ export function useTheme(): [ThemeChoice, () => void] {
   }, []);
 
   return [theme, cycle];
+}
+
+/** Calls callback whenever the element behind ref changes size (and once when observed). */
+export function useResizeObserver<T extends Element>(ref: RefObject<T>, callback: () => void): void {
+  useEffect(() => {
+    const element = ref.current;
+    const observer = new ResizeObserver(callback);
+
+    if (element !== null) {
+      observer.observe(element);
+    }
+
+    return () => observer.disconnect();
+  }, [ref, callback]);
+}
+
+/**
+ * The widest viewport that gets the phone layout. styles.css uses the same
+ * 640px in its phone-table (max-width: 640px) media query.
+ */
+export const PHONE_MAX_WIDTH = 640;
+const PHONE_QUERY = `(max-width: ${PHONE_MAX_WIDTH}px)`;
+
+function subscribePhone(onChange: () => void): () => void {
+  const query = window.matchMedia(PHONE_QUERY);
+  query.addEventListener('change', onChange);
+
+  return () => query.removeEventListener('change', onChange);
+}
+
+function readPhone(): boolean {
+  const query = window.matchMedia(PHONE_QUERY);
+
+  return query.matches;
+}
+
+/** Whether the viewport is phone width (up to PHONE_MAX_WIDTH), kept current. */
+export function useIsPhone(): boolean {
+  return useSyncExternalStore(subscribePhone, readPhone);
 }

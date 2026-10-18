@@ -81,6 +81,8 @@ Platform health lists every platform with a download in the last 90 days and com
 
 Custom settings list the chats with a daily limit, per-user limits or a setting changed from its default (every setting defaults to on: a platform is off by its enabled flag, any other setting by a false value). The all-default rows the bot stores when a group opens its platform menu are left out, and only the changed settings are shown.
 
+In `gated_current`, `limit` is a chat's or user's custom monthly limit of restricted posts and `custom` says whether one is set; `limit` is `null` both for the bot's default limit (`custom: false`) and for an unlimited chat or user (`unlimited: true`, `custom: true`, the stored `-1`).
+
 The exact response shapes are defined twice and kept in sync:
 
 - Go: [`dashboard/types.go`](../dashboard/types.go)

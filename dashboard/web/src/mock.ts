@@ -289,10 +289,10 @@ function money(months: number, empty: boolean): MoneyResponse {
       return { month, global_used: chatsUsed + usersUsed, chats_used: chatsUsed, users_used: usersUsed };
     }),
     gated_current: empty ? [] : [
-      { scope: 'chat', scope_id: -1_001_234_567_000, title: 'Meme Lab', used: 17, limit: 20, custom: false },
-      { scope: 'chat', scope_id: -1_001_234_567_001, title: 'Kyiv cyclists', used: 9, limit: 40, custom: true },
-      { scope: 'user', scope_id: 100_200, title: 'olena_k', used: 6, limit: null, custom: false },
-      { scope: 'chat', scope_id: -1_001_234_567_005, title: '', used: 2, limit: null, custom: false },
+      { scope: 'chat', scope_id: -1_001_234_567_000, title: 'Meme Lab', used: 17, limit: 20, unlimited: false, custom: false },
+      { scope: 'chat', scope_id: -1_001_234_567_001, title: 'Kyiv cyclists', used: 9, limit: 40, unlimited: false, custom: true },
+      { scope: 'user', scope_id: 100_200, title: 'olena_k', used: 6, limit: null, unlimited: true, custom: true },
+      { scope: 'chat', scope_id: -1_001_234_567_005, title: '', used: 2, limit: null, unlimited: false, custom: false },
     ],
     stars_monthly: monthList.map((month, index) => {
       const active = (empty === false) && (index >= months - 3);

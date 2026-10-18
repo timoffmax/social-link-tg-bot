@@ -144,7 +144,9 @@ export interface GatedCurrent {
   scope_id: number;
   title: string;
   used: number;
+  /** The custom monthly limit; null for the default limit and when unlimited. */
   limit: number | null;
+  unlimited: boolean;
   custom: boolean;
 }
 

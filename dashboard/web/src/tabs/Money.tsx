@@ -7,6 +7,29 @@ import { chatLabel, formatCount, formatFullMonth, formatMonth, formatNumber, isA
 import { useApi, type Query } from '../hooks';
 import type { TabProps } from './types';
 
+/** " of N" after the used count, or nothing without a custom limit (default or unlimited). */
+function limitSuffix(limit: number | null): string {
+  const result = (limit === null) ? '' : ` of ${formatNumber(limit)}`;
+
+  return result;
+}
+
+const LIMIT_KINDS = { unlimited: 'Unlimited', custom: 'Custom', default: 'Default' } as const;
+
+function limitKind(row: GatedCurrent): string {
+  let result: string = LIMIT_KINDS.default;
+
+  if (row.custom === true) {
+    result = LIMIT_KINDS.custom;
+  }
+
+  if (row.unlimited === true) {
+    result = LIMIT_KINDS.unlimited;
+  }
+
+  return result;
+}
+
 const GATED_SERIES: Series[] = [{ key: 'global_used', label: 'Restricted posts', color: SERIES_1 }];
 
 const STARS_SERIES: Series[] = [
@@ -15,19 +38,19 @@ const STARS_SERIES: Series[] = [
 ];
 
 const GATED_COLUMNS: Column<GatedMonth>[] = [
-  { header: 'Month', cell: (row) => formatFullMonth(row.month) },
+  { header: 'Month', cell: (row) => formatFullMonth(row.month), fill: true },
   { header: 'All', cell: (row) => formatNumber(row.global_used), numeric: true },
   { header: 'Group quotas', cell: (row) => formatNumber(row.chats_used), numeric: true },
   { header: 'User quotas', cell: (row) => formatNumber(row.users_used), numeric: true },
 ];
 
 const STARS_COLUMNS: Column<StarsMonth>[] = [
-  { header: 'Month', cell: (row) => formatFullMonth(row.month) },
+  { header: 'Month', cell: (row) => formatFullMonth(row.month), fill: true },
   { header: 'Payments', cell: (row) => formatNumber(row.payments), numeric: true },
   { header: 'Stars', cell: (row) => formatNumber(row.stars), numeric: true },
-  { header: 'Boosts', cell: (row) => formatNumber(row.boosts), numeric: true },
-  { header: 'Refunds', cell: (row) => formatNumber(row.refunds), numeric: true },
-  { header: 'Refunded Stars', cell: (row) => formatNumber(row.refunded_stars), numeric: true },
+  { header: 'Boosts', cell: (row) => formatNumber(row.boosts), numeric: true, detail: true },
+  { header: 'Refunds', cell: (row) => formatNumber(row.refunds), numeric: true, detail: true },
+  { header: 'Refunded Stars', cell: (row) => formatNumber(row.refunded_stars), numeric: true, detail: true },
 ];
 
 function currentTitle(row: GatedCurrent): string {
@@ -37,19 +60,19 @@ function currentTitle(row: GatedCurrent): string {
 }
 
 const CURRENT_COLUMNS: Column<GatedCurrent>[] = [
-  { header: 'Chat or user', cell: (row) => <span className="cell-title">{currentTitle(row)}</span> },
-  { header: 'Kind', cell: (row) => <span className="kind">{(row.scope === 'chat') ? 'Group' : 'User'}</span> },
+  { header: 'Chat or user', cell: (row) => <span className="cell-title" title={currentTitle(row)}>{currentTitle(row)}</span>, fill: true },
+  { header: 'Kind', cell: (row) => <span className="kind">{(row.scope === 'chat') ? 'Group' : 'User'}</span>, detail: true },
   {
     header: 'Used',
     cell: (row) => (
       <span className="used">
         <Meter used={row.used} limit={row.limit} />
-        {formatNumber(row.used)}{(row.limit === null) ? '' : ` of ${formatNumber(row.limit)}`}
+        {formatNumber(row.used)}{limitSuffix(row.limit)}
       </span>
     ),
     numeric: true,
   },
-  { header: 'Limit', cell: (row) => (row.custom ? 'Custom' : 'Default') },
+  { header: 'Limit', cell: limitKind, detail: true },
 ];
 
 export function MoneyTab({ tick, onLoaded }: TabProps) {

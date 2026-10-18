@@ -113,6 +113,44 @@ export function formatTimestamp(timestamp: string | null, timeZone: string): str
   return result;
 }
 
+type ElapsedUnit = 'minute' | 'hour' | 'day';
+
+interface Elapsed {
+  unit: ElapsedUnit;
+  count: number;
+}
+
+/** Hours are shown up to two days, so "47h" is followed by "2d". */
+const HOURS_BEFORE_DAYS = (2 * DAY_MS) / HOUR_MS;
+
+/** Each unit with the rounded count from which the next unit takes over. */
+const ELAPSED_UNITS: { unit: ElapsedUnit; ms: number; limit: number }[] = [
+  { unit: 'minute', ms: MINUTE_MS, limit: HOUR_MS / MINUTE_MS },
+  { unit: 'hour', ms: HOUR_MS, limit: HOURS_BEFORE_DAYS },
+  { unit: 'day', ms: DAY_MS, limit: Number.POSITIVE_INFINITY },
+];
+
+const SHORT_UNITS: Record<ElapsedUnit, string> = { minute: 'm', hour: 'h', day: 'd' };
+
+/**
+ * The elapsed time as one unit and count, the unit chosen after rounding
+ * (59m40s -> 1 hour, 47h40m -> 2 days); null under a minute.
+ */
+function pickElapsed(timestamp: string, now: string): Elapsed | null {
+  const nowMs = Date.parse(now);
+  const timestampMs = Date.parse(timestamp);
+  const elapsed = Math.max(0, nowMs - timestampMs);
+  let result: Elapsed | null = null;
+
+  if (elapsed >= MINUTE_MS) {
+    const rounded = ELAPSED_UNITS.map((step) => ({ ...step, count: Math.round(elapsed / step.ms) }));
+    const fitting = rounded.find((step) => (step.count < step.limit));
+    result = fitting ?? null;
+  }
+
+  return result;
+}
+
 /** Relative to the response's generated_at, so it matches the data; null -> "—". */
 export function formatRelative(timestamp: string | null, now: string): string {
   const result = (timestamp === null) ? NO_TIMESTAMP : formatElapsed(timestamp, now);
@@ -121,20 +159,22 @@ export function formatRelative(timestamp: string | null, now: string): string {
 }
 
 function formatElapsed(timestamp: string, now: string): string {
-  const elapsed = Date.parse(now) - Date.parse(timestamp);
-  let result = relativeFormat.format(-Math.round(elapsed / DAY_MS), 'day');
+  const elapsed = pickElapsed(timestamp, now);
+  const result = (elapsed === null) ? 'just now' : relativeFormat.format(-elapsed.count, elapsed.unit);
 
-  if (elapsed < MINUTE_MS) {
-    result = 'just now';
-  }
+  return result;
+}
 
-  if ((elapsed >= MINUTE_MS) && (elapsed < HOUR_MS)) {
-    result = relativeFormat.format(-Math.round(elapsed / MINUTE_MS), 'minute');
-  }
+/** Relative to generated_at in a few characters: "now", "5m", "6h", "3d"; null -> "—". */
+export function formatRelativeShort(timestamp: string | null, now: string): string {
+  const result = (timestamp === null) ? NO_TIMESTAMP : formatElapsedShort(timestamp, now);
 
-  if ((elapsed >= HOUR_MS) && (elapsed < (2 * DAY_MS))) {
-    result = relativeFormat.format(-Math.round(elapsed / HOUR_MS), 'hour');
-  }
+  return result;
+}
+
+function formatElapsedShort(timestamp: string, now: string): string {
+  const elapsed = pickElapsed(timestamp, now);
+  const result = (elapsed === null) ? 'now' : `${elapsed.count}${SHORT_UNITS[elapsed.unit]}`;
 
   return result;
 }
@@ -204,6 +244,20 @@ export function isAllZero<T>(rows: T[], pick: (row: T) => number): boolean {
 /** Tick spacing for a daily axis so labels do not collide at phone width. */
 export function tickInterval(count: number, maxTicks: number): number {
   const result = Math.max(0, Math.ceil(count / maxTicks) - 1);
+
+  return result;
+}
+
+/**
+ * Tick spacing for a category axis drawn plotWidth pixels wide: every shown
+ * label keeps at least gap pixels from the next one, and no more than maxTicks
+ * are shown. Before the width is known (0) only maxTicks applies.
+ */
+export function tickIntervalForWidth(count: number, plotWidth: number, labelWidth: number, gap: number, maxTicks: number): number {
+  const byCount = tickInterval(count, maxTicks);
+  const hasWidth = (plotWidth > 0) && (count > 0);
+  const step = hasWidth ? Math.ceil((count * (labelWidth + gap)) / plotWidth) : 1;
+  const result = Math.max(byCount, step - 1);
 
   return result;
 }

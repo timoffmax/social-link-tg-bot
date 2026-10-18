@@ -193,8 +193,10 @@ type GatedCurrent struct {
 	ScopeID int64  `json:"scope_id"`
 	Title   string `json:"title"`
 	Used    int64  `json:"used"`
-	Limit   *int64 `json:"limit"`
-	Custom  bool   `json:"custom"`
+	// Limit is the custom monthly limit; null without one or when unlimited.
+	Limit     *int64 `json:"limit"`
+	Unlimited bool   `json:"unlimited"`
+	Custom    bool   `json:"custom"`
 }
 
 // StarsMonth is one month of Stars support payments.

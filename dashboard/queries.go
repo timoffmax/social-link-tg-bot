@@ -32,6 +32,10 @@ const (
 	gatedPeriodTimezone = "UTC"
 )
 
+// gatedUnlimited is the monthly_limit the bot stores for a chat or user
+// without a limit of its own (services.GatedFetchUnlimited).
+const gatedUnlimited = -1
+
 // platformSettingType is the chat_settings type whose enabled flag holds the
 // value; every other type keeps it in setting_value.
 const platformSettingType = "platform"
@@ -632,18 +636,27 @@ func loadGatedCurrent(q readTx, now time.Time) ([]GatedCurrent, error) {
 		item := GatedCurrent{}
 		var limit sql.NullInt64
 		scanErr := rows.Scan(&item.Scope, &item.ScopeID, &item.Title, &item.Used, &limit, &item.Custom)
-
-		if limit.Valid == true {
-			value := limit.Int64
-			item.Limit = &value
-		}
-
+		item.Limit, item.Unlimited = gatedLimit(limit)
 		result = append(result, item)
 
 		return scanErr
 	}, now, gatedPeriodTimezone, gatedScopeChat, gatedScopeUser)
 
 	return result, err
+}
+
+// gatedLimit maps a stored monthly_limit to the API's limit and unlimited
+// flag: NULL (the bot's default) and the unlimited sentinel have no limit.
+func gatedLimit(stored sql.NullInt64) (*int64, bool) {
+	var limit *int64
+	isUnlimited := (stored.Valid == true) && (stored.Int64 == gatedUnlimited)
+
+	if (stored.Valid == true) && (isUnlimited == false) {
+		value := stored.Int64
+		limit = &value
+	}
+
+	return limit, isUnlimited
 }
 
 // loadStarsMonthly reads the gap-filled Stars payments per month.
