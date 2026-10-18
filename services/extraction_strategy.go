@@ -30,6 +30,21 @@ func threadsExtractionStrategy() *ExtractionStrategy {
 	return result
 }
 
+// facebookExtractionStrategy orders the methods by link shape
+// (facebookLinkMethods: photos via facebed only, posts via facebed then
+// yt-dlp, videos via yt-dlp then facebed). Disabled Facebook gets no methods.
+func facebookExtractionStrategy(rawURL string) *ExtractionStrategy {
+	methods := facebookLinkMethods(rawURL)
+
+	if config.IsFacebookEnabled() == false {
+		methods = []ExtractionMethod{}
+	}
+
+	result := &ExtractionStrategy{Platform: FacebookPlatform, Methods: methods, Sequential: true}
+
+	return result
+}
+
 // ExtractionMethod represents a method for extracting media
 type ExtractionMethod int
 
@@ -46,6 +61,7 @@ const (
 	MethodYouTubePost
 	MethodThreadsEmbed
 	MethodThreadsVxthreads
+	MethodFacebookFacebed
 )
 
 // ExtractionStrategy defines the order of methods to try for a platform
@@ -218,22 +234,9 @@ func getPlatformExtractionStrategy(url string) *ExtractionStrategy {
 		}
 	}
 
-	// Facebook: yt-dlp (videos and reels; photo posts are unsupported)
+	// Facebook: photos via facebed, posts via facebed then yt-dlp, videos via yt-dlp then facebed.
 	if strings.Contains(url, "facebook.com") {
-		if !config.IsFacebookEnabled() {
-			return &ExtractionStrategy{
-				Platform:     "facebook",
-				Methods:      []ExtractionMethod{},
-				HasFixedLink: false,
-			}
-		}
-		return &ExtractionStrategy{
-			Platform: "facebook",
-			Methods: []ExtractionMethod{
-				MethodYtDlp,
-			},
-			HasFixedLink: false,
-		}
+		return facebookExtractionStrategy(url)
 	}
 
 	// 9GAG: yt-dlp, then the 9GAG API helper for photo posts
@@ -326,6 +329,8 @@ func (es *ExtractionStrategy) LogStrategy() {
 			methodNames[i] = "threads-embed"
 		case MethodThreadsVxthreads:
 			methodNames[i] = "threads-vxthreads"
+		case MethodFacebookFacebed:
+			methodNames[i] = "facebed"
 		default:
 			methodNames[i] = "unknown"
 		}

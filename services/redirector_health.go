@@ -10,6 +10,7 @@ package services
 // otherwise a low-traffic outage could stay below the alert threshold forever.
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"log"
@@ -27,9 +28,9 @@ const (
 	kkTikTokProbeVideoID      = "7633407742224469268"
 )
 
-// CheckRedirectorHealth probes each kk redirector once and feeds the shared
-// outage tracker, so repeated probe failures alert the admin and a later
-// success sends a recovery notice.
+// CheckRedirectorHealth probes each kk redirector, vxreddit and facebed once
+// and feeds the shared outage tracker, so repeated probe failures alert the
+// admin and a later success sends a recovery notice.
 func CheckRedirectorHealth() {
 	probeRedirector(
 		kkInstagramServiceName+"-probe",
@@ -46,6 +47,38 @@ func CheckRedirectorHealth() {
 	)
 
 	probeVxreddit()
+	probeFacebed()
+}
+
+// facebedProbePhotoID is a known-stable public photo (Ludus Magnus Studio,
+// from facebed's own coverage list). Replace it if it is deleted: the probe
+// then gets the login card and raises a false outage alert.
+const facebedProbePhotoID = "1220500346751179"
+
+// facebedProbePostURL is the Facebook link of the probe photo.
+const facebedProbePostURL = "https://www.facebook.com/photo/?fbid=" + facebedProbePhotoID
+
+// probeFacebed checks that facebed still reads a known public photo the way
+// a user's link is read (HTTP 200, facebed's site name, the requested post,
+// an og:image) and that the photo downloads as an image from the CDN.
+func probeFacebed() {
+	service := fmt.Sprintf("%s-probe", facebedServiceName)
+	ctx := context.Background()
+	extractor := NewFacebookFacebedExtractor("")
+	// Probes share SharedHTTPClient (its timeout, and the tests' transport).
+	extractor.photoClient = SharedHTTPClient
+	err := extractor.checkHealth(ctx, facebedProbePostURL)
+
+	if err != nil {
+		message := fmt.Sprintf("probe: %v", err)
+		log.Printf("🩺 [%s] probe failed: %v", service, err)
+		ReportServiceFailure(service, message)
+	}
+
+	if err == nil {
+		log.Printf("🩺 [%s] probe OK", service)
+		ReportServiceSuccess(service)
+	}
 }
 
 // vxredditProbePath is a known-stable public video post used to verify that

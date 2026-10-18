@@ -540,21 +540,12 @@ func (e *ThreadsExtractor) downloadItem(ctx context.Context, item threadsMedia, 
 	return result, err
 }
 
-// threadsCaption formats author and text (escaped for HTML). The escaped text
-// is fitted into maxText bytes (or, when maxText is 0, into what the media
-// caption limit leaves next to the author line and the original link), so a
-// later cut never splits an escaped entity.
+// threadsCaption formats author and text (escaped for HTML), the text
+// fitted into maxText bytes or, when maxText is 0, into what the media
+// caption limit leaves next to the author line and the original link.
 func threadsCaption(post threadsPost, maxText int, postURL string) string {
-	authorLine := FormatAuthorCaption(ThreadsPlatform, "", post.Author, "")
-	linkSuffix := FormatOriginalLink(postURL)
-	budget := maxText
-
-	if maxText == 0 {
-		budget = TelegramCaptionLimitBytes - len(authorLine) - len(gatedCaptionSeparator) - len(linkSuffix)
-	}
-
-	fittedText := fitSpoilerCaption(post.Text, budget, false)
-	result := FormatAuthorCaption(ThreadsPlatform, "", post.Author, fittedText)
+	caption := authorCaption{Platform: ThreadsPlatform, Username: post.Author, Text: post.Text, PostURL: postURL, MaxText: maxText}
+	result := buildAuthorCaption(caption)
 
 	return result
 }

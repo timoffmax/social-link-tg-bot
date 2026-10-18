@@ -23,7 +23,7 @@ const startPlatformsTemplate = `🌐 <b>Supported platforms:</b>
 🐦 <b>Twitter/X</b> — Photos, Videos, GIFs, Tweet Text
 📺 <b>YouTube</b> — Shorts, Community Posts
 🔴 <b>Reddit</b> — Videos, Images
-👥 <b>Facebook</b> — Videos, Reels
+👥 <b>Facebook</b> — Videos, Reels, Photos
 😂 <b>9GAG</b> — Videos, Images
 🧵 <b>Threads</b> — Text, Photos, Videos, Carousels
 
@@ -213,7 +213,7 @@ Posts with both photos and videos now arrive as a single album.
 Shorts download more reliably. Regular YouTube videos are no longer processed.
 
 👥 <b>Facebook and Reddit</b>
-Facebook videos download more reliably, and Reddit share links work again.
+Facebook photos now download too (up to 4 per post), videos more reliably, and Reddit share links work again.
 
 👤 <b>Author links</b>
 Instagram and TikTok usernames now link to the author's profile.

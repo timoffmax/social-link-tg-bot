@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -241,40 +242,92 @@ func (p *ApifyInstagramProvider) downloadSlides(item apifyPostItem, instagramURL
 }
 
 // gatedPostCaption builds the author line plus the post caption, hidden
-// behind spoilers like the media when spoiler is set. The caption is fitted (after HTML escaping)
-// into what Telegram's caption limit leaves next to the author line and the
-// original link, so no later truncation can cut a tag or an entity.
+// behind spoilers like the media when spoiler is set; room is kept for the
+// remaining-quota note appended after the fetch.
 func gatedPostCaption(item apifyPostItem, instagramURL string, spoiler bool) string {
-	escapedName := EscapeForTelegramHTML(item.FullName)
-	authorLine := FormatAuthorCaption(gatedPlatform, escapedName, item.Username, "")
-	linkSuffix := FormatOriginalLink(instagramURL)
-	// Room is kept for the remaining-quota note appended after the fetch.
-	budget := TelegramCaptionLimitBytes - len(authorLine) - len(gatedCaptionSeparator) - len(linkSuffix) - gatedQuotaNoteReserve
-	spoilerText := fitSpoilerCaption(item.Caption, budget, spoiler)
-	result := FormatAuthorCaption(gatedPlatform, escapedName, item.Username, spoilerText)
+	caption := authorCaption{
+		Platform:    gatedPlatform,
+		DisplayName: item.FullName,
+		Username:    item.Username,
+		Text:        item.Caption,
+		PostURL:     instagramURL,
+		Reserve:     gatedQuotaNoteReserve,
+		Spoiler:     spoiler,
+	}
+	result := buildAuthorCaption(caption)
 
 	return result
 }
 
-// fitSpoilerCaption returns the escaped, spoiler-wrapped caption, shortened
-// (at rune boundaries of the raw text) until it fits budget bytes. Escaping
-// only ever grows text, so cutting the overshoot from the raw text shrinks the
-// result by at least as much; the loop ends at the latest with an empty text.
-func fitSpoilerCaption(raw string, budget int, spoiler bool) string {
-	remaining := raw
-	result := wrapSpoilerLines(remaining, spoiler)
+// authorCaption is what buildAuthorCaption formats.
+type authorCaption struct {
+	Platform string
+	// DisplayName is raw; buildAuthorCaption escapes it.
+	DisplayName string
+	Username    string
+	// Text is the raw post text.
+	Text    string
+	PostURL string
+	// MaxText caps the escaped text; 0 fills what the caption limit leaves.
+	MaxText int
+	// Reserve is kept free next to the original link (e.g. a quota note).
+	Reserve int
+	Spoiler bool
+}
 
-	for (len(result) > budget) && (remaining != "") {
-		overshoot := len(result) - budget
-		keep := len(remaining) - overshoot
+// buildAuthorCaption formats the author line plus the post text (escaped for
+// HTML, spoiler-wrapped when Spoiler is set). The text is fitted into MaxText
+// bytes, or into what Telegram's caption limit leaves next to the author
+// line, the original link and Reserve, so no later cut splits a tag or an
+// entity.
+func buildAuthorCaption(caption authorCaption) string {
+	displayName := EscapeForTelegramHTML(caption.DisplayName)
+	authorLine := FormatAuthorCaption(caption.Platform, displayName, caption.Username, "")
+	linkSuffix := FormatOriginalLink(caption.PostURL)
+	budget := caption.MaxText
 
-		if keep < 0 {
-			keep = 0
-		}
-
-		remaining = truncateAtRuneBoundary(remaining, keep)
-		result = wrapSpoilerLines(remaining, spoiler)
+	if caption.MaxText == 0 {
+		budget = TelegramCaptionLimitBytes - len(authorLine) - len(gatedCaptionSeparator) - len(linkSuffix) - caption.Reserve
 	}
+
+	fittedText := fitSpoilerCaption(caption.Text, budget, caption.Spoiler)
+	result := FormatAuthorCaption(caption.Platform, displayName, caption.Username, fittedText)
+
+	return result
+}
+
+// fitSpoilerCaption returns the escaped, spoiler-wrapped caption of the
+// longest prefix of raw (cut at a rune boundary) whose result fits budget
+// bytes. The result only grows with the prefix, so a binary search over the
+// rune boundaries finds that prefix exactly; a negative budget gives "".
+func fitSpoilerCaption(raw string, budget int, spoiler bool) string {
+	result := ""
+	boundaries := runeBoundaries(raw)
+	firstTooLong := sort.Search(len(boundaries), func(i int) bool {
+		prefix := raw[:boundaries[i]]
+		wrapped := wrapSpoilerLines(prefix, spoiler)
+
+		return (len(wrapped) > budget)
+	})
+
+	if firstTooLong > 0 {
+		end := boundaries[firstTooLong-1]
+		result = wrapSpoilerLines(raw[:end], spoiler)
+	}
+
+	return result
+}
+
+// runeBoundaries returns the byte offset of every rune start in s plus
+// len(s), so s[:offset] is a valid prefix for each of them.
+func runeBoundaries(s string) []int {
+	result := make([]int, 0, (len(s) + 1))
+
+	for offset := range s {
+		result = append(result, offset)
+	}
+
+	result = append(result, len(s))
 
 	return result
 }

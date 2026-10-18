@@ -239,6 +239,23 @@ func GetVxredditHost() string {
 	return host
 }
 
+// defaultFacebedHost is the public facebed instance.
+const defaultFacebedHost = "www.facebed.com"
+
+// GetFacebedHost returns the facebed-style embed host that reads public
+// Facebook posts (Facebook walls the bot's datacenter IP).
+func GetFacebedHost() string {
+	rawHost := os.Getenv("FACEBED_HOST")
+	host := strings.TrimSpace(rawHost)
+	result := host
+
+	if host == "" {
+		result = defaultFacebedHost
+	}
+
+	return result
+}
+
 // Gated-post fetch (paid fallback for Instagram posts gated by their author).
 const (
 	apifyTokenKey                     = "APIFY_TOKEN"

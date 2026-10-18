@@ -27,6 +27,9 @@ const (
 	probeKKInstagramHost = "kkinstagram.com"
 	probeKKTikTokHost    = "kktiktok.com"
 	probeVxredditHost    = "vxreddit.com"
+	probeFacebedHost     = "www.facebed.com"
+	probeFacebedCDNHost  = "scontent.xx.fbcdn.net"
+	probeFacebedCDNPath  = "/v/t39.30808-6/probe_n.jpg"
 
 	probeInstagramOrigin = "instagram.com"
 	probeTikTokOrigin    = "tiktok.com"
@@ -48,6 +51,7 @@ const (
 	probeKKInstagramService = kkInstagramServiceName + "-probe"
 	probeKKTikTokService    = kkTikTokServiceName + "-probe"
 	probeVxredditService    = redditVxredditServiceName + "-probe"
+	probeFacebedService     = facebedServiceName + "-probe"
 )
 
 // probeMediaPayload is comfortably larger than redirectorMinMediaSize, so a
@@ -300,6 +304,28 @@ func probeVxredditVideoHandler(w http.ResponseWriter, r *http.Request) {
 	probeWriteHTML(w, `<html><head><meta property="og:video" content="https://`+probeVxredditHost+`/video/probe.mp4"></head></html>`)
 }
 
+// probeFacebedPhotoPage is facebed's answer for a public photo post.
+const probeFacebedPhotoPage = `<meta property="og:title" content="Ludus Magnus Studio"/>
+<meta property="og:site_name" content="facebed by pi.kt
+⌚ 2026/10/17 17:52:06 UTC+07"/>
+<meta property="og:url" content="https://www.facebook.com/photo?fbid=1220500346751179"/>
+<meta property="og:image" content="https://` + probeFacebedCDNHost + probeFacebedCDNPath + `?_nc_cat=1&amp;oe=1"/>`
+
+// probeFacebedLoginCard is facebed's answer for every post it cannot read.
+const probeFacebedLoginCard = `<meta property="og:title" content="Log in or sign up to view"/>
+<meta property="og:description" content="See posts, photos and more on Facebook."/>`
+
+// probeFacebedPhotoHandler answers like facebed does for a public photo.
+func probeFacebedPhotoHandler(w http.ResponseWriter, r *http.Request) {
+	probeWriteHTML(w, probeFacebedPhotoPage)
+}
+
+// probeFacebedImageHandler serves the probe photo like the CDN does.
+func probeFacebedImageHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "image/jpeg")
+	_, _ = w.Write(probeMediaPayload)
+}
+
 // probeAllServicesHandler answers every probe target CheckRedirectorHealth
 // visits and 404s anything else, so a wrong probe URL fails loudly.
 func probeAllServicesHandler(w http.ResponseWriter, r *http.Request) {
@@ -310,6 +336,10 @@ func probeAllServicesHandler(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, probeTikTokCDNURL, http.StatusFound)
 	case probeVxredditHost:
 		probeVxredditVideoHandler(w, r)
+	case probeFacebedHost:
+		probeFacebedPhotoHandler(w, r)
+	case probeFacebedCDNHost:
+		probeFacebedImageHandler(w, r)
 	case probeInstagramCDNHost, probeTikTokCDNHost:
 		probeWriteMedia(w, probeMediaPayload)
 	default:
@@ -585,6 +615,7 @@ func TestProbeVxredditOutcomes(t *testing.T) {
 
 func TestProbeVxredditTransportFailure(t *testing.T) {
 	t.Setenv("VXREDDIT_HOST", probeVxredditHost)
+	t.Setenv("FACEBED_HOST", probeFacebedHost)
 
 	alerts := probeCaptureAdminAlerts(t)
 	probeForgetTrackerState(t, probeVxredditService)
@@ -608,6 +639,7 @@ func TestProbeVxredditTransportFailure(t *testing.T) {
 
 func TestProbeVxredditAlertsAfterThresholdAndRecovers(t *testing.T) {
 	t.Setenv("VXREDDIT_HOST", probeVxredditHost)
+	t.Setenv("FACEBED_HOST", probeFacebedHost)
 
 	alerts := probeCaptureAdminAlerts(t)
 	probeForgetTrackerState(t, probeVxredditService)
@@ -654,9 +686,10 @@ func TestCheckRedirectorHealthPinsEachProbeToItsOwnOrigin(t *testing.T) {
 	t.Setenv("KKINSTAGRAM_HOST", probeKKInstagramHost)
 	t.Setenv("KKTIKTOK_HOST", probeKKTikTokHost)
 	t.Setenv("VXREDDIT_HOST", probeVxredditHost)
+	t.Setenv("FACEBED_HOST", probeFacebedHost)
 
 	alerts := probeCaptureAdminAlerts(t)
-	probeForgetTrackerState(t, probeKKInstagramService, probeKKTikTokService, probeVxredditService)
+	probeForgetTrackerState(t, probeKKInstagramService, probeKKTikTokService, probeVxredditService, probeFacebedService)
 	probeServeHTTPS(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Host == "www."+probeKKTikTokHost {
 			http.Redirect(w, r, probeTikTokOriginBounceURL, http.StatusFound)
@@ -681,7 +714,7 @@ func TestCheckRedirectorHealthPinsEachProbeToItsOwnOrigin(t *testing.T) {
 		t.Fatalf("a bounce back to %s must fail the TikTok probe, tracker holds %d", probeTikTokOrigin, got)
 	}
 
-	for _, service := range []string{probeKKInstagramService, probeVxredditService} {
+	for _, service := range []string{probeKKInstagramService, probeVxredditService, probeFacebedService} {
 		if got := probeTrackerFailures(service); got != 0 {
 			t.Errorf("%s must be unaffected by the TikTok bounce, tracker holds %d", service, got)
 		}
@@ -704,12 +737,13 @@ func TestProbeKeysStaySeparateFromUserTraffic(t *testing.T) {
 	// The invariant documented at the top of redirector_health.go: a probe
 	// success must never reset failure counts accumulated from real user
 	// traffic, or a low-traffic outage would stay below the threshold forever.
-	trafficServices := []string{kkInstagramServiceName, kkTikTokServiceName, redditVxredditServiceName}
-	probeServices := []string{probeKKInstagramService, probeKKTikTokService, probeVxredditService}
+	trafficServices := []string{kkInstagramServiceName, kkTikTokServiceName, redditVxredditServiceName, facebedServiceName}
+	probeServices := []string{probeKKInstagramService, probeKKTikTokService, probeVxredditService, probeFacebedService}
 
 	t.Setenv("KKINSTAGRAM_HOST", probeKKInstagramHost)
 	t.Setenv("KKTIKTOK_HOST", probeKKTikTokHost)
 	t.Setenv("VXREDDIT_HOST", probeVxredditHost)
+	t.Setenv("FACEBED_HOST", probeFacebedHost)
 
 	alerts := probeCaptureAdminAlerts(t)
 	probeForgetTrackerState(t, trafficServices...)
@@ -745,11 +779,12 @@ func TestCheckRedirectorHealthProbesEveryService(t *testing.T) {
 	t.Setenv("KKINSTAGRAM_HOST", probeKKInstagramHost)
 	t.Setenv("KKTIKTOK_HOST", probeKKTikTokHost)
 	t.Setenv("VXREDDIT_HOST", probeVxredditHost)
+	t.Setenv("FACEBED_HOST", probeFacebedHost)
 
 	requests := &probeRequestLog{}
 
 	alerts := probeCaptureAdminAlerts(t)
-	probeForgetTrackerState(t, probeKKInstagramService, probeKKTikTokService, probeVxredditService)
+	probeForgetTrackerState(t, probeKKInstagramService, probeKKTikTokService, probeVxredditService, probeFacebedService)
 	probeServeHTTPS(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests.record(r)
 		probeAllServicesHandler(w, r)
@@ -757,7 +792,7 @@ func TestCheckRedirectorHealthProbesEveryService(t *testing.T) {
 
 	CheckRedirectorHealth()
 
-	for _, service := range []string{probeKKInstagramService, probeKKTikTokService, probeVxredditService} {
+	for _, service := range []string{probeKKInstagramService, probeKKTikTokService, probeVxredditService, probeFacebedService} {
 		if got := probeTrackerFailures(service); got != 0 {
 			t.Errorf("%s: healthy probe recorded %d failure(s)", service, got)
 		}
@@ -767,6 +802,8 @@ func TestCheckRedirectorHealthProbesEveryService(t *testing.T) {
 		probeKKInstagramHost + "/reel/" + kkInstagramProbeShortcode + "/",
 		"www." + probeKKTikTokHost + "/@i/video/" + kkTikTokProbeVideoID,
 		probeVxredditHost + vxredditProbePath,
+		probeFacebedHost + "/photo/",
+		probeFacebedCDNHost + probeFacebedCDNPath,
 	}
 
 	for _, target := range wantTargets {
@@ -777,5 +814,139 @@ func TestCheckRedirectorHealthProbesEveryService(t *testing.T) {
 
 	if got := alerts.alertKeys(); len(got) != 0 {
 		t.Errorf("healthy probes must not alert, got %v", got)
+	}
+}
+
+func TestProbeFacebedOutcomes(t *testing.T) {
+	pageTarget := probeFacebedHost + "/photo/"
+	imageTarget := probeFacebedCDNHost + probeFacebedCDNPath
+	cases := []struct {
+		name         string
+		pageHandler  http.HandlerFunc
+		imageHandler http.HandlerFunc
+		wantFailure  bool
+		wantTargets  []string
+	}{
+		{name: "public photo page", pageHandler: probeFacebedPhotoHandler, imageHandler: probeFacebedImageHandler, wantTargets: []string{pageTarget, imageTarget}},
+		{
+			name: "login card",
+			pageHandler: func(w http.ResponseWriter, r *http.Request) {
+				probeWriteHTML(w, probeFacebedLoginCard)
+			},
+			wantFailure: true,
+			wantTargets: []string{pageTarget},
+		},
+		{
+			name: "another post",
+			pageHandler: func(w http.ResponseWriter, r *http.Request) {
+				page := strings.Replace(probeFacebedPhotoPage, facebedProbePhotoID, "1220500346751178", 1)
+				probeWriteHTML(w, page)
+			},
+			wantFailure: true,
+			wantTargets: []string{pageTarget},
+		},
+		{
+			name: "post page without an image",
+			pageHandler: func(w http.ResponseWriter, r *http.Request) {
+				page := strings.Split(probeFacebedPhotoPage, "\n<meta property=\"og:image\"")[0]
+				probeWriteHTML(w, page)
+			},
+			wantFailure: true,
+			wantTargets: []string{pageTarget},
+		},
+		{
+			name: "error status",
+			pageHandler: func(w http.ResponseWriter, r *http.Request) {
+				http.Error(w, "bad gateway", http.StatusBadGateway)
+			},
+			wantFailure: true,
+			wantTargets: []string{pageTarget},
+		},
+		{
+			name:        "CDN refuses the photo",
+			pageHandler: probeFacebedPhotoHandler,
+			imageHandler: func(w http.ResponseWriter, r *http.Request) {
+				http.Error(w, "forbidden", http.StatusForbidden)
+			},
+			wantFailure: true,
+			wantTargets: []string{pageTarget, imageTarget},
+		},
+		{
+			name:        "CDN answers HTML",
+			pageHandler: probeFacebedPhotoHandler,
+			imageHandler: func(w http.ResponseWriter, r *http.Request) {
+				probeWriteHTML(w, string(probeMediaPayload))
+			},
+			wantFailure: true,
+			wantTargets: []string{pageTarget, imageTarget},
+		},
+		{
+			name:        "CDN answers a video",
+			pageHandler: probeFacebedPhotoHandler,
+			imageHandler: func(w http.ResponseWriter, r *http.Request) {
+				probeWriteMedia(w, probeMediaPayload)
+			},
+			wantFailure: true,
+			wantTargets: []string{pageTarget, imageTarget},
+		},
+		{
+			name: "photo off the CDN",
+			pageHandler: func(w http.ResponseWriter, r *http.Request) {
+				page := strings.Replace(probeFacebedPhotoPage, probeFacebedCDNHost, "evil.example.com", 1)
+				probeWriteHTML(w, page)
+			},
+			wantFailure: true,
+			wantTargets: []string{pageTarget},
+		},
+	}
+
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Setenv("FACEBED_HOST", probeFacebedHost)
+
+			requests := &probeRequestLog{}
+			probeCaptureAdminAlerts(t)
+			probeForgetTrackerState(t, probeFacebedService, facebedServiceName)
+			probeServeHTTPS(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				requests.record(r)
+
+				switch r.Host {
+				case probeFacebedHost:
+					testCase.pageHandler(w, r)
+				case probeFacebedCDNHost:
+					testCase.imageHandler(w, r)
+				default:
+					http.NotFound(w, r)
+				}
+			}))
+
+			probeFacebed()
+
+			wantFailures := 0
+
+			if testCase.wantFailure == true {
+				wantFailures = 1
+			}
+
+			if got := probeTrackerFailures(probeFacebedService); got != wantFailures {
+				t.Errorf("tracker holds %d failure(s), want %d", got, wantFailures)
+			}
+
+			if got := probeTrackerFailures(facebedServiceName); got != 0 {
+				t.Errorf("the probe must not touch the traffic key, it holds %d", got)
+			}
+
+			recorded := requests.snapshot()
+
+			if len(recorded) != len(testCase.wantTargets) {
+				t.Fatalf("unexpected probe requests %+v, want %v", recorded, testCase.wantTargets)
+			}
+
+			for i, record := range recorded {
+				if (record.target != testCase.wantTargets[i]) || (record.userAgent != redirectorBotUserAgent) {
+					t.Errorf("request %d: %+v, want %s with the bot UA", i, record, testCase.wantTargets[i])
+				}
+			}
+		})
 	}
 }

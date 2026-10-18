@@ -10,6 +10,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 const apifyTestToken = "test-token"
@@ -276,5 +277,57 @@ func TestApifyFetchPostDoesNotRetryANonEmptyAnswer(t *testing.T) {
 
 	if (errors.Is(err, errApifyNoMedia) == false) || (runs != 1) {
 		t.Fatalf("expected no retry for a non-empty answer, got runs=%d err=%v", runs, err)
+	}
+}
+
+func TestFitSpoilerCaptionFitsEscapedTextExactly(t *testing.T) {
+	raw := strings.Repeat("&", 300) + strings.Repeat("x", 300)
+
+	got := fitSpoilerCaption(raw, 1000, false)
+
+	if got != strings.Repeat("&amp;", 200) {
+		t.Fatalf("want 200 escaped ampersands (1000 bytes), got %d bytes %q", len(got), got[:40])
+	}
+}
+
+// longestFittingCaption is the linear reference fitSpoilerCaption must match.
+func longestFittingCaption(raw string, budget int, spoiler bool) string {
+	result := ""
+
+	for end := 0; end <= len(raw); end++ {
+		isRuneBoundary := utf8.ValidString(raw[:end])
+		wrapped := wrapSpoilerLines(raw[:end], spoiler)
+
+		if (isRuneBoundary == true) && (len(wrapped) <= budget) {
+			result = wrapped
+		}
+	}
+
+	return result
+}
+
+func TestFitSpoilerCaptionIsTheLongestFitAtRuneBoundaries(t *testing.T) {
+	texts := []string{
+		strings.Repeat("Привет, «мир» & друзья\n", 6),
+		strings.Repeat("🤭 emoji <b>👍🏻</b> ", 8),
+		"\"quoted\" 'single' & <tag>\n\n  second line  ",
+	}
+	budgets := []int{-1, 0, 1, 5, 17, 64, 101, 255, 4096}
+
+	for _, raw := range texts {
+		for _, budget := range budgets {
+			for _, spoiler := range []bool{false, true} {
+				got := fitSpoilerCaption(raw, budget, spoiler)
+				want := longestFittingCaption(raw, budget, spoiler)
+
+				if got != want {
+					t.Fatalf("budget %d spoiler %v: got %q, want %q", budget, spoiler, got, want)
+				}
+
+				if (utf8.ValidString(got) == false) || (len(got) > max(budget, 0)) {
+					t.Fatalf("budget %d: invalid or too long result %q", budget, got)
+				}
+			}
+		}
 	}
 }

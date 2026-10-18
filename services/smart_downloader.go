@@ -25,6 +25,7 @@ type SmartDownloader struct {
 	storiesApify *InstagramStoriesApifyExtractor
 	youtubePost  *YouTubePostExtractor
 	threads      *ThreadsExtractor
+	facebook     *FacebookFacebedExtractor
 	tempDir      string
 	workingDir   string
 }
@@ -52,6 +53,7 @@ func NewSmartDownloader() *SmartDownloader {
 		storiesApify: NewInstagramStoriesApifyExtractor(tempDir),
 		youtubePost:  NewYouTubePostExtractor(tempDir),
 		threads:      NewThreadsExtractor(tempDir),
+		facebook:     NewFacebookFacebedExtractor(tempDir),
 		tempDir:      tempDir,
 		workingDir:   workingDir,
 	}
@@ -333,6 +335,11 @@ func (sd *SmartDownloader) executeStrategy(
 
 	case MethodThreadsVxthreads:
 		mediaInfos, err := sd.runExtractorMethod(ctx, strategy, mediaURL, "threads-vxthreads", sd.threads.ExtractVxthreads, overallStart, methodStartTime)
+
+		return mediaInfos, err
+
+	case MethodFacebookFacebed:
+		mediaInfos, err := sd.runExtractorMethod(ctx, strategy, mediaURL, "facebed", sd.facebook.ExtractMedia, overallStart, methodStartTime)
 
 		return mediaInfos, err
 
