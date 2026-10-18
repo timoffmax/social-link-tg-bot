@@ -30,9 +30,33 @@ func threadsExtractionStrategy() *ExtractionStrategy {
 	return result
 }
 
+// redditExtractionStrategy is vxreddit, the JSON API when proxies are on and
+// configured (Reddit blocks its .json without them), then yt-dlp. Disabled
+// Reddit gets no methods.
+func redditExtractionStrategy() *ExtractionStrategy {
+	methods := []ExtractionMethod{MethodRedditVxreddit}
+	proxies := config.GetYtDlpProxies()
+	hasProxies := (config.IsProxyEnabled() == true) && (len(proxies) > 0)
+
+	if hasProxies == true {
+		methods = append(methods, MethodRedditAPI)
+	}
+
+	methods = append(methods, MethodYtDlp)
+
+	if config.IsRedditEnabled() == false {
+		methods = []ExtractionMethod{}
+	}
+
+	result := &ExtractionStrategy{Platform: RedditPlatform, Methods: methods, Sequential: true}
+
+	return result
+}
+
 // facebookExtractionStrategy orders the methods by link shape
-// (facebookLinkMethods: photos via facebed only, posts via facebed then
-// yt-dlp, videos via yt-dlp then facebed). Disabled Facebook gets no methods.
+// (facebookLinkMethods: photos via facebed only, posts via facebed, yt-dlp,
+// then facebed's video, videos via yt-dlp then facebed with its video).
+// Disabled Facebook gets no methods.
 func facebookExtractionStrategy(rawURL string) *ExtractionStrategy {
 	methods := facebookLinkMethods(rawURL)
 
@@ -63,6 +87,7 @@ const (
 	MethodThreadsVxthreads
 	MethodFacebookFacebed
 	MethodStoriesHiker
+	MethodFacebookFacebedVideo
 )
 
 // ExtractionStrategy defines the order of methods to try for a platform
@@ -212,30 +237,15 @@ func getPlatformExtractionStrategy(url string) *ExtractionStrategy {
 		}
 	}
 
-	// Reddit: vxreddit first (works from the datacenter IP, resolves /s/ share
-	// links), then the JSON API (text posts; Reddit returns 403 to datacenter
-	// IPs), then yt-dlp.
+	// Reddit: vxreddit (works from the datacenter IP, resolves /s/ share links,
+	// reads every post shape), then the JSON API only with proxies (Reddit
+	// answers .json with "blocked by network security" even after its JS
+	// challenge is solved), then yt-dlp.
 	if strings.Contains(url, "reddit.com") {
-		if !config.IsRedditEnabled() {
-			return &ExtractionStrategy{
-				Platform:     "reddit",
-				Methods:      []ExtractionMethod{},
-				HasFixedLink: false,
-			}
-		}
-		return &ExtractionStrategy{
-			Platform: "reddit",
-			Methods: []ExtractionMethod{
-				MethodRedditVxreddit,
-				MethodRedditAPI,
-				MethodYtDlp,
-			},
-			HasFixedLink: false,
-			Sequential:   true,
-		}
+		return redditExtractionStrategy()
 	}
 
-	// Facebook: photos via facebed, posts via facebed then yt-dlp, videos via yt-dlp then facebed.
+	// Facebook: photos via facebed, posts via facebed, yt-dlp, then facebed's video, videos via yt-dlp then facebed.
 	if strings.Contains(url, "facebook.com") {
 		return facebookExtractionStrategy(url)
 	}
@@ -334,6 +344,8 @@ func (es *ExtractionStrategy) LogStrategy() {
 			methodNames[i] = "facebed"
 		case MethodStoriesHiker:
 			methodNames[i] = "stories-hiker"
+		case MethodFacebookFacebedVideo:
+			methodNames[i] = "facebed-video"
 		default:
 			methodNames[i] = "unknown"
 		}

@@ -9,6 +9,7 @@ package services
 // garbage to the chat.
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -31,6 +32,165 @@ const redirectorBotUserAgent = "TelegramBot (like TwitterBot)"
 
 // redirectorMinMediaSize guards against tiny HTML/error bodies being treated as media.
 const redirectorMinMediaSize = int64(10 * 1024)
+
+// mediaMaxRedirects caps the redirects of one media download.
+const mediaMaxRedirects = 10
+
+// mediaDownload is what one media download returned.
+type mediaDownload struct {
+	FinalURL    string
+	ContentType string
+	Size        int64
+}
+
+// mediaLimitFor returns the most bytes accepted for an answer's mime type.
+type mediaLimitFor func(mimeType string) int64
+
+// mediaURLCheck refuses a URL the download must not request; it runs before
+// the request (fromURL "") and on every redirect (fromURL the previous hop).
+type mediaURLCheck func(rawURL, fromURL string) error
+
+// mediaRequest is one capped media download: its URL and headers, the
+// client (nil: SharedDownloadClient), the URL check (nil: any URL) and the
+// limit by mime type.
+type mediaRequest struct {
+	URL      string
+	Headers  map[string]string
+	Client   *http.Client
+	CheckURL mediaURLCheck
+	LimitFor mediaLimitFor
+}
+
+// downloadMediaCapped GETs the request's URL under ctx and writes the body to
+// filePath. It refuses a URL or redirect the check refuses, a non-200 answer
+// and a body above the limit of its mime type (by Content-Length before
+// reading, else read one byte past the limit to tell). The file is removed on
+// failure.
+func downloadMediaCapped(ctx context.Context, request mediaRequest, filePath string) (mediaDownload, error) {
+	result := mediaDownload{FinalURL: request.URL}
+	var resp *http.Response
+	var out *os.File
+	var limit int64
+	err := checkMediaURL(request.CheckURL, request.URL)
+
+	if err == nil {
+		resp, err = requestMedia(ctx, request)
+	}
+
+	if err == nil {
+		defer resp.Body.Close()
+
+		result.FinalURL = resp.Request.URL.String()
+		result.ContentType = resp.Header.Get("Content-Type")
+	}
+
+	mimeType := extractMimeType(result.ContentType)
+
+	if err == nil {
+		limit = request.LimitFor(mimeType)
+		err = checkMediaAnswer(resp, mimeType, limit)
+	}
+
+	if err == nil {
+		out, err = os.Create(filePath)
+	}
+
+	if err == nil {
+		limited := io.LimitReader(resp.Body, (limit + 1))
+		result.Size, err = io.Copy(out, limited)
+		closeErr := out.Close()
+		err = errors.Join(err, closeErr)
+	}
+
+	if (err == nil) && (result.Size > limit) {
+		err = fmt.Errorf("%s media is above the %d-byte limit", mimeType, limit)
+	}
+
+	if (err != nil) && (out != nil) {
+		os.Remove(filePath)
+	}
+
+	return result, err
+}
+
+// requestMedia sends the GET with the request's headers; with a URL check,
+// every redirect is checked too.
+func requestMedia(ctx context.Context, request mediaRequest) (*http.Response, error) {
+	var result *http.Response
+	client := mediaClient(request)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, request.URL, nil)
+
+	if err == nil {
+		for name, value := range request.Headers {
+			req.Header.Set(name, value)
+		}
+
+		result, err = client.Do(req)
+	}
+
+	return result, err
+}
+
+// mediaClient returns the request's client; with a URL check, a copy of it
+// that checks every redirect.
+func mediaClient(request mediaRequest) *http.Client {
+	result := SharedDownloadClient
+
+	if request.Client != nil {
+		result = request.Client
+	}
+
+	if request.CheckURL != nil {
+		checkRedirect := func(req *http.Request, via []*http.Request) error {
+			return checkMediaRedirect(request.CheckURL, req, via)
+		}
+		result = &http.Client{Transport: result.Transport, Timeout: result.Timeout, Jar: result.Jar, CheckRedirect: checkRedirect}
+	}
+
+	return result
+}
+
+// checkMediaRedirect applies the URL check to one redirect and caps their
+// number.
+func checkMediaRedirect(check mediaURLCheck, req *http.Request, via []*http.Request) error {
+	redirectURL := req.URL.String()
+	previous := via[len(via)-1]
+	fromURL := previous.URL.String()
+	result := check(redirectURL, fromURL)
+
+	if (result == nil) && (len(via) >= mediaMaxRedirects) {
+		result = fmt.Errorf("media stopped after %d redirects", mediaMaxRedirects)
+	}
+
+	return result
+}
+
+// checkMediaURL applies the URL check, if any.
+func checkMediaURL(check mediaURLCheck, rawURL string) error {
+	var result error
+
+	if check != nil {
+		result = check(rawURL, "")
+	}
+
+	return result
+}
+
+// checkMediaAnswer refuses a non-200 answer and a Content-Length above the
+// limit.
+func checkMediaAnswer(resp *http.Response, mimeType string, limit int64) error {
+	var result error
+
+	if resp.StatusCode != http.StatusOK {
+		result = fmt.Errorf("bad status code: %d", resp.StatusCode)
+	}
+
+	if (result == nil) && (resp.ContentLength > limit) {
+		result = fmt.Errorf("%s media of %d bytes is above the %d-byte limit", mimeType, resp.ContentLength, limit)
+	}
+
+	return result
+}
 
 // downloadWithUA fetches a URL with a custom User-Agent, following redirects, and
 // writes the body to filePath. It returns the final (post-redirect) URL, the

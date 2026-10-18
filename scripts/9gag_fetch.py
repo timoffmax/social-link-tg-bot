@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fetch 9GAG post data using curl_cffi browser impersonation to bypass Cloudflare."""
+"""Fetch a 9GAG post (the API's data.post, as is) using curl_cffi browser impersonation to bypass Cloudflare."""
 
 import json
 import sys
@@ -29,30 +29,9 @@ def fetch_post(post_id):
         if not post:
             return {"error": "Post not found in response"}
 
-        result = {
-            "id": post.get("id", ""),
-            "title": post.get("title", ""),
-            "type": post.get("type", ""),
-            "nsfw": post.get("nsfw", 0),
-            "images": {},
-        }
-
-        for key, img in post.get("images", {}).items():
-            result["images"][key] = {
-                "url": img.get("url", ""),
-                "width": img.get("width", 0),
-                "height": img.get("height", 0),
-            }
-            if "vp9Url" in img:
-                result["images"][key]["vp9Url"] = img["vp9Url"]
-            if "h265Url" in img:
-                result["images"][key]["h265Url"] = img["h265Url"]
-            if "duration" in img:
-                result["images"][key]["duration"] = img["duration"]
-            if "hasAudio" in img:
-                result["images"][key]["hasAudio"] = img["hasAudio"]
-
-        return result
+        # The post as the API returns it: images (photo and MP4 renditions),
+        # and article (blocks and medias) for Article posts.
+        return post
 
     except Exception as e:
         return {"error": str(e)}

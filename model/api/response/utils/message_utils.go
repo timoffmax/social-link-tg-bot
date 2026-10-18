@@ -1,6 +1,8 @@
 package utils
 
 import (
+	"fmt"
+
 	"github.com/timoffmax/social-link-bot/config"
 	"github.com/timoffmax/social-link-bot/model/api/response"
 	"github.com/timoffmax/social-link-bot/services"
@@ -224,17 +226,59 @@ func GetOriginalYouTubeLinks(message *response.TgMessage) []string {
 	return regex.FindAllString(message.Text, -1)
 }
 
-func GetRedditLinks(message *response.TgMessage) []string {
-	regex := regexp.MustCompile(`https?:\/\/(www\.|old\.|m\.|np\.)?reddit\.com\/r\/[^\s]+`)
-	result := regex.FindAllString(message.Text, -1)
+// redditLinkExpression matches Reddit post links (www/old/m/np hosts, /r/...
+// and /comments/<id>), redditShortLinkExpression the redd.it short links
+// (not the i.redd.it / v.redd.it media hosts).
+const (
+	redditLinkExpression      = `https?:\/\/(www\.|old\.|m\.|np\.)?reddit\.com\/(r|comments)\/[^\s]+`
+	redditShortLinkExpression = `https?:\/\/(www\.)?redd\.it\/([A-Za-z0-9]+)`
+)
 
-	// No fixed link service for Reddit, return as-is
+var (
+	redditShortLinkPattern = regexp.MustCompile(redditShortLinkExpression)
+
+	// redditAnyLinkExpression and redditAnyLinkPattern find both shapes in
+	// text order.
+	redditAnyLinkExpression = fmt.Sprintf("%s|%s", redditLinkExpression, redditShortLinkExpression)
+	redditAnyLinkPattern    = regexp.MustCompile(redditAnyLinkExpression)
+)
+
+// redditShortLinkTarget is where a redd.it/<id> link leads.
+const redditShortLinkTarget = "https://www.reddit.com/comments/%s"
+
+// GetRedditLinks returns the Reddit post links of a message; redd.it short
+// links come as reddit.com/comments/<id>, where they redirect.
+func GetRedditLinks(message *response.TgMessage) []string {
+	result := GetOriginalRedditLinks(message)
+
 	return result
 }
 
+// GetOriginalRedditLinks returns the Reddit post links of a message in text
+// order; redd.it/<id> comes as reddit.com/comments/<id>.
 func GetOriginalRedditLinks(message *response.TgMessage) []string {
-	regex := regexp.MustCompile(`https?:\/\/(www\.|old\.|m\.|np\.)?reddit\.com\/r\/[^\s]+`)
-	return regex.FindAllString(message.Text, -1)
+	result := []string{}
+	links := redditAnyLinkPattern.FindAllString(message.Text, -1)
+
+	for _, link := range links {
+		normalized := normalizeRedditLink(link)
+		result = append(result, normalized)
+	}
+
+	return result
+}
+
+// normalizeRedditLink turns a redd.it/<id> link into reddit.com/comments/<id>.
+func normalizeRedditLink(link string) string {
+	result := link
+	match := redditShortLinkPattern.FindStringSubmatch(link)
+	isShort := (len(match) == 3) && (match[0] == link)
+
+	if isShort == true {
+		result = fmt.Sprintf(redditShortLinkTarget, match[2])
+	}
+
+	return result
 }
 
 func GetFacebookLinks(message *response.TgMessage) []string {
@@ -250,14 +294,36 @@ func GetOriginalFacebookLinks(message *response.TgMessage) []string {
 	return regex.FindAllString(message.Text, -1)
 }
 
+// ninegagLinkPattern matches 9GAG post links (www. and the m. mobile host).
+var ninegagLinkPattern = regexp.MustCompile(`https?:\/\/(www\.|m\.)?9gag\.com\/gag\/[^\s]+`)
+
+// ninegagMobileHostPattern matches the scheme and m. host of a 9GAG link.
+var ninegagMobileHostPattern = regexp.MustCompile(`^https?:\/\/m\.9gag\.com\/`)
+
+// ninegagDesktopRoot replaces the m. host (the API helper and yt-dlp read
+// 9gag.com links only).
+const ninegagDesktopRoot = "https://9gag.com/"
+
+// Get9GAGLinks returns the 9GAG post links of a message (see
+// GetOriginal9GAGLinks).
 func Get9GAGLinks(message *response.TgMessage) []string {
-	regex := regexp.MustCompile(`https?:\/\/(www\.)?9gag\.com\/gag\/[^\s]+`)
-	return regex.FindAllString(message.Text, -1)
+	result := GetOriginal9GAGLinks(message)
+
+	return result
 }
 
+// GetOriginal9GAGLinks returns the 9GAG post links of a message; an
+// m.9gag.com link comes as its 9gag.com form.
 func GetOriginal9GAGLinks(message *response.TgMessage) []string {
-	regex := regexp.MustCompile(`https?:\/\/(www\.)?9gag\.com\/gag\/[^\s]+`)
-	return regex.FindAllString(message.Text, -1)
+	result := []string{}
+	links := ninegagLinkPattern.FindAllString(message.Text, -1)
+
+	for _, link := range links {
+		desktop := ninegagMobileHostPattern.ReplaceAllString(link, ninegagDesktopRoot)
+		result = append(result, desktop)
+	}
+
+	return result
 }
 
 // threadsLinkPattern matches Threads post links (threads.com / threads.net,

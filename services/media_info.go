@@ -6,11 +6,13 @@ const (
 	MediaTypePhoto            = "photo"
 	MediaTypeVideo            = "video"
 	MediaTypeText             = "text"
+	MediaTypeAnimation        = "animation"
+	MediaTypeDocument         = "document"
 	TelegramCaptionLimitBytes = 1024
 )
 
 type MediaInfo struct {
-	Type        string // "photo", "video", "document"
+	Type        string // "photo", "video", "animation", "text", "document"
 	URL         string
 	Caption     string
 	Filename    string

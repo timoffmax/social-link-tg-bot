@@ -537,26 +537,18 @@ func processMediaDownload(url string, origChat *response.TgChat, origMessage *re
 
 	// Check if this is a fixed link response (text-only with no filename)
 	if len(mediaInfos) == 1 && mediaInfos[0].Type == "text" && mediaInfos[0].Filename == "" {
-		// Add formatted original link to text content
-		textWithURL := mediaInfos[0].Caption + services.FormatOriginalLink(url)
-
-		// Disable web page preview for extracted content (e.g. Reddit text posts)
-		// but keep it for fixed link responses where the preview IS the content
-		isFixedLink := strings.HasPrefix(strings.TrimSpace(mediaInfos[0].Caption), "http")
-
-		// Send the fixed link as reply with silent notification
-		fixedLinkMsg := payload.TgPlSendMessage{
-			ChatId:                origChat.Id,
-			ParseMode:             payload.ParseModeHTML,
-			Text:                  textWithURL,
-			ReplyToMessageId:      origMessage.MessageId,
-			DisableNotification:   true,
-			DisableWebPagePreview: !isFixedLink,
-		}
-		response := message.NewSendMessage(fixedLinkMsg)
-		services.LogTelegramMessage(origChat.Id, "fixed-link", response != nil, "")
+		sendTextPost(mediaInfos[0], origChat, origMessage, url)
 		return
 	}
+
+	// A post whose text comes before its media (a 9GAG article) gets the text
+	// as its own message first, then the media below.
+	mediaInfos = sendLeadingText(mediaInfos, origChat, origMessage, url)
+
+	// GIFs go out as animations (a photo would be a still frame); photos are
+	// kept within sendPhoto's limits (shrunk, or sent as documents).
+	mediaInfos = services.PrepareAnimations(mediaInfos)
+	services.PreparePhotos(mediaInfos)
 
 	// Skip confirmation message - send media directly for better UX
 
@@ -576,6 +568,10 @@ func processMediaDownload(url string, origChat *response.TgChat, origMessage *re
 	// Photos and videos of one post go out as albums (up to 10 items each) in
 	// post order; whatever can't go into an album is sent below as before.
 	mediaInfos = sendMixedAlbums(mediaInfos, origChat, origMessage, url, downloader)
+
+	// A post with an animation goes out in post order: albums between the
+	// animations, each animation on its own.
+	mediaInfos = sendAnimatedPostInOrder(mediaInfos, origChat, origMessage, url, downloader)
 
 	// Separate photos from other media types
 	var photos []*services.MediaInfo
@@ -658,25 +654,7 @@ func processMediaDownload(url string, origChat *response.TgChat, origMessage *re
 		err := sendMediaFile(mediaInfo, origChat, origMessage, url, isWholePost)
 		if err != nil {
 			log.Printf("Failed to send media file %s: %v", mediaInfo.Filename, err)
-
-			// Try fallback: send as document instead of video
-			log.Printf("Trying fallback: sending video as document...")
-
-			documentPayload := payload.TgPlSendDocument{
-				ChatId:              origChat.Id,
-				Document:            "video.mp4",
-				Caption:             "📹 Downloaded media (sent as document)",
-				FilePath:            mediaInfo.Filename,
-				ReplyToMessageId:    origMessage.MessageId,
-				DisableNotification: true,
-			}
-			message.NewSendDocument(documentPayload)
-			// Note: NewSendDocument automatically sends the message
-			log.Printf("✅ Successfully sent video as document: %s", mediaInfo.Filename)
-
-			// Track document send
-			trackMediaSent(int64(origMessage.From.Id), origMessage.From.Username, origChat.Id, origChat.Title, url, "document")
-
+			sendAsDocumentFallback(mediaInfo, origChat, origMessage, url)
 			downloader.CleanupFile(mediaInfo.Filename)
 		} else {
 			log.Printf("Successfully sent media file: %s", mediaInfo.Filename)
@@ -684,6 +662,49 @@ func processMediaDownload(url string, origChat *response.TgChat, origMessage *re
 			downloader.CleanupFile(mediaInfo.Filename)
 		}
 	}
+}
+
+// sendTextPost sends a text item (a text post or a fixed link) as an HTML
+// message with the original link appended. The web page preview is off for
+// extracted text (e.g. Reddit text posts) and on for a fixed link, whose
+// preview IS the content.
+func sendTextPost(item *services.MediaInfo, origChat *response.TgChat, origMessage *response.TgMessage, url string) {
+	originalLink := services.FormatOriginalLink(url)
+	textWithURL := fmt.Sprintf("%s%s", item.Caption, originalLink)
+	trimmed := strings.TrimSpace(item.Caption)
+	isFixedLink := strings.HasPrefix(trimmed, "http")
+	textPayload := payload.TgPlSendMessage{
+		ChatId:                origChat.Id,
+		ParseMode:             payload.ParseModeHTML,
+		Text:                  textWithURL,
+		ReplyToMessageId:      origMessage.MessageId,
+		DisableNotification:   true,
+		DisableWebPagePreview: (isFixedLink == false),
+	}
+	sent := message.NewSendMessage(textPayload)
+	services.LogTelegramMessage(origChat.Id, "fixed-link", (sent != nil), "")
+}
+
+// sendLeadingText sends the text item that opens a post with media after it
+// (see sendTextPost) and returns the media; other lists come back as they
+// are.
+func sendLeadingText(mediaInfos []*services.MediaInfo, origChat *response.TgChat, origMessage *response.TgMessage, url string) []*services.MediaInfo {
+	result := mediaInfos
+	hasLeadingText := (len(mediaInfos) > 1) && (isTextItem(mediaInfos[0]) == true)
+
+	if hasLeadingText == true {
+		sendTextPost(mediaInfos[0], origChat, origMessage, url)
+		result = mediaInfos[1:]
+	}
+
+	return result
+}
+
+// isTextItem reports a text item without a file.
+func isTextItem(item *services.MediaInfo) bool {
+	result := (services.MediaTypeText == item.Type) && (item.Filename == "")
+
+	return result
 }
 
 // isQuietFailurePlatform reports links whose failures get no error reply
@@ -886,6 +907,9 @@ func sendMediaFile(mediaInfo *services.MediaInfo, origChat *response.TgChat, ori
 		}
 	}
 
+	// The outcome of the media types that report it (animation, document).
+	var sendErr error
+
 	switch mediaInfo.Type {
 	case "text":
 		// Send text-only content as a message with reply and silent notification
@@ -1016,6 +1040,12 @@ func sendMediaFile(mediaInfo *services.MediaInfo, origChat *response.TgChat, ori
 		// Track video send
 		trackMediaSent(int64(origMessage.From.Id), origMessage.From.Username, origChat.Id, origChat.Title, url, "video")
 
+	case services.MediaTypeAnimation:
+		sendErr = sendAnimationFile(mediaInfo, caption, postMarkup, origChat, origMessage, url)
+
+	case services.MediaTypeDocument:
+		sendErr = sendDocumentFile(mediaInfo, caption, postMarkup, origChat, origMessage, url)
+
 	default:
 		// Determine the document type for better user experience
 		var documentName string
@@ -1044,7 +1074,7 @@ func sendMediaFile(mediaInfo *services.MediaInfo, origChat *response.TgChat, ori
 		// Note: NewSendDocument automatically sends the message
 	}
 
-	return nil
+	return sendErr
 }
 
 func getFixedUrl(url string) string {

@@ -31,7 +31,7 @@ type SmartDownloader struct {
 	tempDir      string
 	workingDir   string
 	// extractYtDlp replaces the yt-dlp method (tests); nil runs yt-dlp.
-	extractYtDlp func(mediaURL, platform string) ([]*MediaInfo, error)
+	extractYtDlp func(ctx context.Context, mediaURL, platform string) ([]*MediaInfo, error)
 }
 
 // lastResortError is a method's failure that still carries a lesser result
@@ -293,7 +293,7 @@ func (sd *SmartDownloader) executeStrategy(
 		}
 
 		log.Printf("🎯 Trying yt-dlp extraction for %s", strategy.Platform)
-		mediaInfos, err := sd.runYtDlp(mediaURL, strategy.Platform)
+		mediaInfos, err := sd.runYtDlp(ctx, mediaURL, strategy.Platform)
 		methodDuration := time.Since(methodStartTime)
 
 		if err == nil && len(mediaInfos) > 0 {
@@ -348,24 +348,9 @@ func (sd *SmartDownloader) executeStrategy(
 		return nil, err
 
 	case MethodRedditVxreddit:
-		if ctx.Err() != nil {
-			return nil, ctx.Err()
-		}
+		mediaInfos, err := sd.runExtractorMethod(ctx, strategy, mediaURL, "vxreddit", sd.redditVx.ExtractMedia, overallStart, methodStartTime)
 
-		log.Printf("🟠 Trying vxreddit extraction (datacenter-robust)")
-		mediaInfos, err := sd.redditVx.ExtractMedia(mediaURL)
-		methodDuration := time.Since(methodStartTime)
-
-		if (err == nil) && (len(mediaInfos) > 0) {
-			log.Printf("✅ vxreddit extraction succeeded with %d items", len(mediaInfos))
-			LogExtraction(strategy.Platform, mediaURL, "vxreddit", true, len(mediaInfos), time.Since(overallStart))
-			appendOriginalURL(mediaInfos, mediaURL)
-			return mediaInfos, nil
-		}
-
-		log.Printf("❌ vxreddit extraction failed: %v", err)
-		LogExtraction(strategy.Platform, mediaURL, "vxreddit", false, 0, methodDuration)
-		return nil, err
+		return mediaInfos, err
 
 	case MethodKKInstagram:
 		if ctx.Err() != nil {
@@ -422,6 +407,11 @@ func (sd *SmartDownloader) executeStrategy(
 
 		return mediaInfos, err
 
+	case MethodFacebookFacebedVideo:
+		mediaInfos, err := sd.runExtractorMethod(ctx, strategy, mediaURL, "facebed-video", sd.facebook.ExtractVideo, overallStart, methodStartTime)
+
+		return mediaInfos, err
+
 	case MethodInstagramOG:
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
@@ -468,21 +458,22 @@ func (sd *SmartDownloader) executeFixedLinkStrategy(
 	return result, nil
 }
 
-// runYtDlp runs the yt-dlp method, or its test replacement.
-func (sd *SmartDownloader) runYtDlp(mediaURL, platform string) ([]*MediaInfo, error) {
+// runYtDlp runs the yt-dlp method, or its test replacement, under the
+// chain's ctx (only the 9GAG API fallback honours it so far).
+func (sd *SmartDownloader) runYtDlp(ctx context.Context, mediaURL, platform string) ([]*MediaInfo, error) {
 	extract := sd.tryYtDlpExtraction
 
 	if sd.extractYtDlp != nil {
 		extract = sd.extractYtDlp
 	}
 
-	result, err := extract(mediaURL, platform)
+	result, err := extract(ctx, mediaURL, platform)
 
 	return result, err
 }
 
 // tryYtDlpExtraction attempts to extract media using yt-dlp with platform-specific logic
-func (sd *SmartDownloader) tryYtDlpExtraction(url string, platform string) ([]*MediaInfo, error) {
+func (sd *SmartDownloader) tryYtDlpExtraction(ctx context.Context, url string, platform string) ([]*MediaInfo, error) {
 	// Use platform-specific methods that already exist
 	switch platform {
 	case "twitter":
@@ -496,7 +487,7 @@ func (sd *SmartDownloader) tryYtDlpExtraction(url string, platform string) ([]*M
 	case "facebook":
 		return sd.ytdlp.DownloadFacebookMedia(url)
 	case "9gag":
-		return sd.ytdlp.Download9GAGMedia(url)
+		return sd.ytdlp.Download9GAGMedia(ctx, url)
 	default:
 		return sd.ytdlp.DownloadMedia(url)
 	}

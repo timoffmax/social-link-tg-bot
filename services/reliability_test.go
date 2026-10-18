@@ -5,6 +5,7 @@ package services
 //   VERIFY_LIVE=1 go test ./services -run 'TestVerify' -v
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"os"
@@ -202,7 +203,7 @@ func TestVerifyLiveVxreddit(t *testing.T) {
 	vx := NewRedditVxredditExtractor(t.TempDir())
 
 	// Video post via /s/ share link — the user-reported failing case
-	items, err := vx.ExtractMedia("https://www.reddit.com/r/Damnthatsinteresting/s/2VMcG73Eo4")
+	items, err := vx.ExtractMedia(context.Background(), "https://www.reddit.com/r/Damnthatsinteresting/s/2VMcG73Eo4")
 
 	if err != nil {
 		t.Fatalf("vxreddit video extraction failed: %v", err)

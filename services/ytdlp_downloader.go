@@ -5,7 +5,6 @@ import (
 	"crypto/md5"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log"
 	"net/http"
 	"os"
@@ -13,6 +12,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/timoffmax/social-link-bot/config"
@@ -32,6 +33,9 @@ type YtDlpDownloader struct {
 	TempDir    string
 	BinaryPath string
 	WorkingDir string
+	// ninegagClient downloads 9GAG's files (tests); nil uses
+	// SharedDownloadClient.
+	ninegagClient *http.Client
 }
 
 // extractTwitterUsernameFromURL extracts username from Twitter/X URL
@@ -144,12 +148,43 @@ func NewYtDlpDownloader() *YtDlpDownloader {
 	}
 }
 
-// ytdlpOutputTemplate names downloaded files "<unix ts>_<url hash>_<title>_<id>".
-// findDownloadedFiles relies on the "<ts>_" prefix. The title is capped at 100
-// bytes: Facebook titles are whole captions and overflowed the 255-byte file
-// name limit ("Cannot write video metadata to JSON file"); the id keeps
-// entries of one post apart.
-const ytdlpOutputTemplate = "%d_%s_%%(title).100B_%%(id)s.%%(ext)s"
+// ytdlpOutputTemplate names downloaded files "<download prefix><title>_<id>"
+// (see newDownloadPrefix). findDownloadedFiles and removeLeftoverFiles rely on
+// the prefix. The title is capped at 100 bytes: Facebook titles are whole
+// captions and overflowed the 255-byte file name limit ("Cannot write video
+// metadata to JSON file"); the id keeps entries of one post apart.
+const ytdlpOutputTemplate = "%s%%(title).100B_%%(id)s.%%(ext)s"
+
+// downloadPrefixTemplate is "<unix ns>-<call number>_<url hash>_".
+const downloadPrefixTemplate = "%d-%d_%s_"
+
+// urlHashLength is how many hex digits of the URL's MD5 a prefix keeps.
+const urlHashLength = 8
+
+// downloadCounter numbers the download calls, so two calls in the same
+// nanosecond still get their own prefix.
+var downloadCounter atomic.Uint64
+
+// newDownloadPrefix returns the file name prefix of one download call: unique
+// per call (two downloads of the same URL at once must not share or remove
+// each other's files) and naming the URL by its hash.
+func newDownloadPrefix(url string) string {
+	sum := md5.Sum([]byte(url))
+	hexSum := fmt.Sprintf("%X", sum)
+	callNumber := downloadCounter.Add(1)
+	nanos := time.Now().UnixNano()
+	result := fmt.Sprintf(downloadPrefixTemplate, nanos, callNumber, hexSum[:urlHashLength])
+
+	return result
+}
+
+// downloadOutputTemplate is the yt-dlp output template of a download prefix.
+func (yd *YtDlpDownloader) downloadOutputTemplate(prefix string) string {
+	name := fmt.Sprintf(ytdlpOutputTemplate, prefix)
+	result := filepath.Join(yd.TempDir, name)
+
+	return result
+}
 
 // ytDlpTwitterHostPattern matches twitter.com / x.com hosts (not any URL that
 // merely contains "x.com", such as netflix.com).
@@ -191,10 +226,9 @@ func (yd *YtDlpDownloader) DownloadMedia(url string) ([]*MediaInfo, error) {
 		return nil, fmt.Errorf("failed to create temp directory: %v", err)
 	}
 
-	// Create unique filename with timestamp + URL hash to prevent collisions between concurrent downloads
-	timestamp := time.Now().Unix()
-	urlHash := strings.ToUpper(fmt.Sprintf("%x", md5.Sum([]byte(url))))[:8]
-	outputTemplate := filepath.Join(yd.TempDir, fmt.Sprintf(ytdlpOutputTemplate, timestamp, urlHash))
+	// A prefix of its own per call prevents collisions between concurrent downloads
+	prefix := newDownloadPrefix(url)
+	outputTemplate := yd.downloadOutputTemplate(prefix)
 
 	log.Printf("Using output template: %s", outputTemplate)
 
@@ -263,11 +297,17 @@ func (yd *YtDlpDownloader) DownloadMedia(url string) ([]*MediaInfo, error) {
 	return nil, fmt.Errorf("all yt-dlp download attempts failed: %v", lastErr)
 }
 
-// attemptDownload tries to download with a specific proxy (or empty string for no proxy)
-func (yd *YtDlpDownloader) attemptDownload(url string, outputTemplate string, proxy string) ([]*MediaInfo, error) {
-	// Extract timestamp from output template
-	var timestamp int64
-	fmt.Sscanf(filepath.Base(outputTemplate), "%d_", &timestamp)
+// attemptDownload tries to download with a specific proxy (or empty string
+// for no proxy). Whatever yt-dlp wrote under this download's name and isn't
+// returned for sending (.info.json, .description, skipped thumbnails and
+// audio, files of a failed attempt) is removed when it returns.
+func (yd *YtDlpDownloader) attemptDownload(url string, outputTemplate string, proxy string) (result []*MediaInfo, err error) {
+	defer func() {
+		yd.removeLeftoverFiles(outputTemplate, result)
+	}()
+
+	// This download's file name prefix, from the output template
+	prefix := ytdlpDownloadPrefix(outputTemplate)
 
 	// Build arguments with specific proxy
 	args := yd.buildDownloadArgsWithProxy(url, outputTemplate, proxy)
@@ -336,7 +376,7 @@ func (yd *YtDlpDownloader) attemptDownload(url string, outputTemplate string, pr
 			if strings.Contains(url, "reddit.com") {
 				if imageURLs := yd.extractRedditImageURLsFromOutput(outputStr); len(imageURLs) > 0 {
 					log.Printf("🖼️ Found %d Reddit image URLs in yt-dlp output, downloading directly", len(imageURLs))
-					return yd.downloadRedditImagesDirectly(imageURLs, url, timestamp)
+					return yd.downloadRedditImagesDirectly(imageURLs, url, prefix)
 				}
 			}
 			return nil, fmt.Errorf("download failed: %v\nOutput: %s", err, outputStr)
@@ -359,7 +399,7 @@ func (yd *YtDlpDownloader) attemptDownload(url string, outputTemplate string, pr
 	}
 
 	// Find downloaded files
-	downloadedFiles, err := yd.findDownloadedFiles(timestamp)
+	downloadedFiles, err := yd.findDownloadedFiles(prefix)
 	if err != nil {
 		return nil, fmt.Errorf("failed to find downloaded files: %v", err)
 	}
@@ -604,6 +644,12 @@ func (yd *YtDlpDownloader) attemptDownload(url string, outputTemplate string, pr
 			caption = FormatAuthorCaption("reddit", subreddit, username, postTitle)
 		}
 
+		isNinegag := strings.Contains(url, "9gag.com")
+
+		if isNinegag == true {
+			caption = ninegagMetadataCaption(metadataInfo)
+		}
+
 		mediaInfo := &MediaInfo{
 			Type:     mediaType,
 			URL:      url,
@@ -774,7 +820,9 @@ func (yd *YtDlpDownloader) DownloadFacebookMedia(url string) ([]*MediaInfo, erro
 	return result, err
 }
 
-func (yd *YtDlpDownloader) Download9GAGMedia(url string) ([]*MediaInfo, error) {
+// Download9GAGMedia tries yt-dlp, then the API helper; the helper and the
+// downloads of the files it finds run under ctx (the chain's deadline).
+func (yd *YtDlpDownloader) Download9GAGMedia(ctx context.Context, url string) ([]*MediaInfo, error) {
 	log.Printf("🎭 9GAG download: trying yt-dlp with browser impersonation first")
 
 	// Extract post ID from URL
@@ -790,9 +838,8 @@ func (yd *YtDlpDownloader) Download9GAGMedia(url string) ([]*MediaInfo, error) {
 		return nil, fmt.Errorf("failed to create temp directory: %v", err)
 	}
 
-	timestamp := time.Now().Unix()
-	urlHash := strings.ToUpper(fmt.Sprintf("%x", md5.Sum([]byte(url))))[:8]
-	outputTemplate := filepath.Join(yd.TempDir, fmt.Sprintf(ytdlpOutputTemplate, timestamp, urlHash))
+	prefix := newDownloadPrefix(url)
+	outputTemplate := yd.downloadOutputTemplate(prefix)
 
 	result, err := yd.attemptDownload(url, outputTemplate, "")
 	if err == nil {
@@ -806,7 +853,7 @@ func (yd *YtDlpDownloader) Download9GAGMedia(url string) ([]*MediaInfo, error) {
 	// Step 2: If yt-dlp failed (likely a photo post), try the Python API fetcher
 	if postID != "" {
 		log.Printf("📸 Trying 9GAG API fetch for post %s (may be a photo post)", postID)
-		apiResult, apiErr := yd.fetch9GAGPostViaAPI(postID, url, timestamp, urlHash)
+		apiResult, apiErr := yd.fetch9GAGPostViaAPI(ctx, postID, url, prefix)
 		if apiErr == nil {
 			return apiResult, nil
 		}
@@ -819,7 +866,7 @@ func (yd *YtDlpDownloader) Download9GAGMedia(url string) ([]*MediaInfo, error) {
 }
 
 // fetch9GAGPostViaAPI uses a Python helper with curl_cffi to fetch 9GAG post data
-func (yd *YtDlpDownloader) fetch9GAGPostViaAPI(postID, originalURL string, timestamp int64, urlHash string) ([]*MediaInfo, error) {
+func (yd *YtDlpDownloader) fetch9GAGPostViaAPI(ctx context.Context, postID, originalURL string, prefix string) ([]*MediaInfo, error) {
 	// Find the Python interpreter that has curl_cffi (from yt-dlp's pipx venv)
 	pythonPath := yd.find9GAGPython()
 	if pythonPath == "" {
@@ -831,155 +878,161 @@ func (yd *YtDlpDownloader) fetch9GAGPostViaAPI(postID, originalURL string, times
 		return nil, fmt.Errorf("9gag_fetch.py not found at %s", scriptPath)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	helperCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, pythonPath, scriptPath, postID)
+	cmd := exec.CommandContext(helperCtx, pythonPath, scriptPath, postID)
 	output, err := cmd.Output()
 	if err != nil {
 		return nil, fmt.Errorf("9gag_fetch.py failed: %v", err)
 	}
 
-	var postData struct {
-		Error  string `json:"error"`
-		ID     string `json:"id"`
-		Title  string `json:"title"`
-		Type   string `json:"type"`
-		NSFW   int    `json:"nsfw"`
-		Images map[string]struct {
-			URL      string `json:"url"`
-			Width    int    `json:"width"`
-			Height   int    `json:"height"`
-			VP9URL   string `json:"vp9Url"`
-			H265URL  string `json:"h265Url"`
-			Duration int    `json:"duration"`
-			HasAudio int    `json:"hasAudio"`
-		} `json:"images"`
-	}
+	result, err := yd.build9GAGPost(ctx, output, originalURL, prefix)
 
-	if err := json.Unmarshal(output, &postData); err != nil {
-		return nil, fmt.Errorf("failed to parse 9gag_fetch.py output: %v", err)
-	}
-
-	if postData.Error != "" {
-		return nil, fmt.Errorf("9GAG API error: %s", postData.Error)
-	}
-
-	caption := postData.Title
-	if caption != "" {
-		caption = "😂 " + caption
-	}
-
-	// For video posts, get the best video URL
-	if postData.Type == "Animated" {
-		if sv, ok := postData.Images["image460sv"]; ok {
-			// Prefer H265 MP4 > VP9 WebM > original MP4
-			videoURL := sv.URL
-			if sv.H265URL != "" {
-				videoURL = sv.H265URL
-			}
-
-			filePath, dlErr := yd.download9GAGFile(videoURL, timestamp, urlHash, "video")
-			if dlErr != nil {
-				return nil, fmt.Errorf("failed to download 9GAG video: %v", dlErr)
-			}
-
-			mediaResult := []*MediaInfo{{
-				Type:     "video",
-				URL:      videoURL,
-				Filename: filePath,
-				Caption:  caption,
-			}}
-			log.Printf("✅ 9GAG video downloaded via API: %s", postData.Title)
-			return mediaResult, nil
-		}
-	}
-
-	// For photo posts, get the largest image
-	if img700, ok := postData.Images["image700"]; ok && img700.URL != "" {
-		filePath, dlErr := yd.download9GAGFile(img700.URL, timestamp, urlHash, "photo")
-		if dlErr != nil {
-			return nil, fmt.Errorf("failed to download 9GAG image: %v", dlErr)
-		}
-
-		mediaResult := []*MediaInfo{{
-			Type:     "photo",
-			URL:      img700.URL,
-			Filename: filePath,
-			Caption:  caption,
-		}}
-		log.Printf("✅ 9GAG photo downloaded via API: %s", postData.Title)
-		return mediaResult, nil
-	}
-
-	// Try image460 as fallback
-	if img460, ok := postData.Images["image460"]; ok && img460.URL != "" {
-		filePath, dlErr := yd.download9GAGFile(img460.URL, timestamp, urlHash, "photo")
-		if dlErr != nil {
-			return nil, fmt.Errorf("failed to download 9GAG image: %v", dlErr)
-		}
-
-		mediaResult := []*MediaInfo{{
-			Type:     "photo",
-			URL:      img460.URL,
-			Filename: filePath,
-			Caption:  caption,
-		}}
-		log.Printf("✅ 9GAG photo downloaded via API (460): %s", postData.Title)
-		return mediaResult, nil
-	}
-
-	return nil, fmt.Errorf("no downloadable media found in 9GAG post")
+	return result, err
 }
 
-// download9GAGFile downloads a file from 9GAG CDN
-func (yd *YtDlpDownloader) download9GAGFile(fileURL string, timestamp int64, urlHash string, mediaType string) (string, error) {
-	ext := ".jpg"
-	if mediaType == "video" {
-		if strings.HasSuffix(fileURL, ".webm") {
-			ext = ".webm"
-		} else {
-			ext = ".mp4"
+// build9GAGPost downloads what the API post holds: an article's text and
+// files, an Animated post's MP4, or the photo, with the "😂 <title>" caption;
+// the files are named with the download's prefix.
+func (yd *YtDlpDownloader) build9GAGPost(ctx context.Context, output []byte, originalURL string, prefix string) ([]*MediaInfo, error) {
+	var result []*MediaInfo
+	post, err := parseNinegagPost(output)
+	isArticle := (err == nil) && (isNinegagArticle(post) == true)
+
+	if isArticle == true {
+		result, err = yd.download9GAGArticle(ctx, post, originalURL, prefix)
+	}
+
+	if (err == nil) && (isArticle == false) {
+		result, err = yd.download9GAGSingle(ctx, post, prefix)
+	}
+
+	return result, err
+}
+
+// download9GAGSingle downloads the MP4 of an Animated post or the photo.
+func (yd *YtDlpDownloader) download9GAGSingle(ctx context.Context, post ninegagPost, prefix string) ([]*MediaInfo, error) {
+	var result []*MediaInfo
+	var filePath string
+	var err error
+	file, isFound := ninegagMediaFile(post.Type, post.Images)
+
+	if isFound == false {
+		err = fmt.Errorf("no downloadable media found in 9GAG post")
+	}
+
+	if err == nil {
+		filePath, err = yd.download9GAGFile(ctx, file, prefix)
+	}
+
+	if err != nil {
+		err = fmt.Errorf("failed to download 9GAG %s: %w", file.MediaType, err)
+	}
+
+	if err == nil {
+		caption := NinegagCaption(post.Title)
+		result = []*MediaInfo{{Type: file.MediaType, URL: file.URL, Filename: filePath, Caption: caption}}
+		log.Printf("✅ 9GAG %s downloaded via API: %s", file.MediaType, post.Title)
+	}
+
+	return result, err
+}
+
+// download9GAGArticle returns an article as its text message followed by its
+// photos and MP4s in order (sent as albums), a few downloaded at once; files
+// that fail are left out.
+func (yd *YtDlpDownloader) download9GAGArticle(ctx context.Context, post ninegagPost, originalURL string, prefix string) ([]*MediaInfo, error) {
+	var wg sync.WaitGroup
+	text := ninegagArticleText(post, originalURL)
+	result := []*MediaInfo{{Type: MediaTypeText, URL: originalURL, Caption: text}}
+	files := ninegagArticleFiles(post.Article)
+	paths := make([]string, len(files))
+	fileErrs := make([]error, len(files))
+	slots := make(chan struct{}, ninegagDownloadConcurrency)
+
+	for i, file := range files {
+		wg.Add(1)
+
+		go func(index int, file ninegagFile) {
+			defer wg.Done()
+
+			slots <- struct{}{}
+			defer func() { <-slots }()
+
+			extension := ninegagFileExtension(file)
+			filename := fmt.Sprintf(ninegagArticleFileTemplate, prefix, (index + 1), extension)
+			paths[index], fileErrs[index] = yd.download9GAGFileNamed(ctx, file.URL, filename, file.MediaType)
+		}(i, file)
+	}
+
+	wg.Wait()
+
+	for i, file := range files {
+		if fileErrs[i] != nil {
+			log.Printf("⚠️ 9GAG article file %d/%d failed: %v", (i + 1), len(files), fileErrs[i])
+		}
+
+		if fileErrs[i] == nil {
+			result = append(result, &MediaInfo{Type: file.MediaType, URL: originalURL, Filename: paths[i]})
 		}
 	}
 
-	filename := fmt.Sprintf("%d_%s_9gag%s", timestamp, urlHash, ext)
+	log.Printf("✅ 9GAG article via API: %d of %d files, %s", (len(result) - 1), len(files), post.Title)
+
+	return result, nil
+}
+
+// ninegagFileExtension is the extension of a downloaded 9GAG file.
+func ninegagFileExtension(file ninegagFile) string {
+	result := ".jpg"
+	isVideo := (MediaTypeVideo == file.MediaType)
+	isWebM := strings.HasSuffix(file.URL, ".webm")
+
+	if isVideo == true {
+		result = ".mp4"
+	}
+
+	if (isVideo == true) && (isWebM == true) {
+		result = ".webm"
+	}
+
+	return result
+}
+
+// download9GAGFile downloads a file from 9GAG CDN as "<prefix>9gag.<ext>".
+func (yd *YtDlpDownloader) download9GAGFile(ctx context.Context, file ninegagFile, prefix string) (string, error) {
+	extension := ninegagFileExtension(file)
+	filename := fmt.Sprintf(ninegagFileTemplate, prefix, extension)
+	result, err := yd.download9GAGFileNamed(ctx, file.URL, filename, file.MediaType)
+
+	return result, err
+}
+
+// download9GAGFileNamed downloads a file from 9GAG CDN to the temp dir under
+// ctx, refusing a URL or redirect off the CDN (https on *.9cache.com only)
+// and a file above Telegram's upload limit (a photo above sendPhoto's limit
+// is shrunk before sending, see PreparePhotos); a failed download leaves no
+// file.
+func (yd *YtDlpDownloader) download9GAGFileNamed(ctx context.Context, fileURL string, filename string, mediaType string) (string, error) {
+	result := ""
 	filePath := filepath.Join(yd.TempDir, filename)
+	limitFor := func(mimeType string) int64 {
+		return TelegramUploadLimitBytes
+	}
+	request := mediaRequest{URL: fileURL, Headers: ninegagDownloadHeaders, Client: yd.ninegagClient, CheckURL: checkNinegagMediaURL, LimitFor: limitFor}
+	download, err := downloadMediaCapped(ctx, request, filePath)
 
-	req, err := http.NewRequest("GET", fileURL, nil)
 	if err != nil {
-		return "", err
+		err = fmt.Errorf("9GAG %s download failed: %w", mediaType, err)
 	}
 
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-	req.Header.Set("Accept", "*/*")
-	req.Header.Set("Accept-Language", "en-US,en;q=0.9")
-	req.Header.Set("Referer", "https://9gag.com/")
-
-	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("HTTP request failed: %v", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != 200 {
-		return "", fmt.Errorf("HTTP %d downloading %s", resp.StatusCode, fileURL)
+	if err == nil {
+		log.Printf("📥 Downloaded 9GAG %s: %s (%d bytes)", mediaType, filename, download.Size)
+		result = filePath
 	}
 
-	outFile, err := os.Create(filePath)
-	if err != nil {
-		return "", fmt.Errorf("failed to create file: %v", err)
-	}
-	defer outFile.Close()
-
-	written, err := io.Copy(outFile, resp.Body)
-	if err != nil {
-		return "", fmt.Errorf("failed to write file: %v", err)
-	}
-
-	log.Printf("📥 Downloaded 9GAG %s: %s (%d bytes)", mediaType, filename, written)
-	return filePath, nil
+	return result, err
 }
 
 // find9GAGPython finds a Python interpreter that has curl_cffi installed
@@ -1004,19 +1057,23 @@ func (yd *YtDlpDownloader) find9GAGPython() string {
 	return ""
 }
 
-// downloadThumbnailsOnly tries to download only thumbnails and metadata for posts
-func (yd *YtDlpDownloader) downloadThumbnailsOnly(url string, platform string) ([]*MediaInfo, error) {
+// downloadThumbnailsOnly tries to download only thumbnails and metadata for
+// posts; the files it doesn't return are removed (see attemptDownload).
+func (yd *YtDlpDownloader) downloadThumbnailsOnly(url string, platform string) (result []*MediaInfo, err error) {
 	// Ensure temp directory exists
 	if err := os.MkdirAll(yd.TempDir, 0755); err != nil {
 		return nil, fmt.Errorf("failed to create temp directory: %v", err)
 	}
 
-	// Create unique filename with timestamp + URL hash to prevent collisions between concurrent downloads
-	timestamp := time.Now().Unix()
-	urlHash := strings.ToUpper(fmt.Sprintf("%x", md5.Sum([]byte(url))))[:8]
-	outputTemplate := filepath.Join(yd.TempDir, fmt.Sprintf(ytdlpOutputTemplate, timestamp, urlHash))
+	// A prefix of its own per call prevents collisions between concurrent downloads
+	prefix := newDownloadPrefix(url)
+	outputTemplate := yd.downloadOutputTemplate(prefix)
 
 	log.Printf("Trying thumbnails-only download for %s with template: %s", platform, outputTemplate)
+
+	defer func() {
+		yd.removeLeftoverFiles(outputTemplate, result)
+	}()
 
 	// Build special args for thumbnails and metadata only
 	args := []string{
@@ -1047,7 +1104,7 @@ func (yd *YtDlpDownloader) downloadThumbnailsOnly(url string, platform string) (
 	log.Printf("Output: %s", string(output))
 
 	// Find downloaded files
-	downloadedFiles, err := yd.findDownloadedFiles(timestamp)
+	downloadedFiles, err := yd.findDownloadedFiles(prefix)
 	if err != nil {
 		return nil, fmt.Errorf("failed to find downloaded files: %v", err)
 	}
@@ -1164,7 +1221,58 @@ func (yd *YtDlpDownloader) downloadThumbnailsOnly(url string, platform string) (
 	return mediaInfos, nil
 }
 
-func (yd *YtDlpDownloader) findDownloadedFiles(timestamp int64) ([]string, error) {
+// ninegagMetadataCaption returns the "😂 <title>" caption from yt-dlp's
+// info.json ("" without a title).
+func ninegagMetadataCaption(metadataInfo map[string]interface{}) string {
+	title, _ := metadataInfo["title"].(string)
+	result := NinegagCaption(title)
+
+	return result
+}
+
+// ytdlpDownloadPrefix returns the download prefix ("<unix ns>-<n>_<url
+// hash>_") of the file names an output template gives ("" when the template
+// has another shape).
+func ytdlpDownloadPrefix(outputTemplate string) string {
+	result := ""
+	base := filepath.Base(outputTemplate)
+	parts := strings.SplitN(base, "_", 3)
+
+	if len(parts) == 3 {
+		result = fmt.Sprintf("%s_%s_", parts[0], parts[1])
+	}
+
+	return result
+}
+
+// removeLeftoverFiles removes the temp files of this download (named by its
+// output template) that are not kept for sending.
+func (yd *YtDlpDownloader) removeLeftoverFiles(outputTemplate string, kept []*MediaInfo) {
+	prefix := ytdlpDownloadPrefix(outputTemplate)
+	keptFiles := map[string]bool{}
+	entries, err := os.ReadDir(yd.TempDir)
+
+	for _, item := range kept {
+		keptFiles[item.Filename] = true
+	}
+
+	if (err == nil) && (prefix != "") {
+		for _, entry := range entries {
+			name := entry.Name()
+			path := filepath.Join(yd.TempDir, name)
+			isLeftover := (strings.HasPrefix(name, prefix) == true) && (keptFiles[path] == false) && (entry.IsDir() == false)
+
+			if isLeftover == true {
+				log.Printf("🧹 Removing yt-dlp leftover %s", name)
+				os.Remove(path)
+			}
+		}
+	}
+}
+
+// findDownloadedFiles returns the files of one download (named with its
+// prefix).
+func (yd *YtDlpDownloader) findDownloadedFiles(prefix string) ([]string, error) {
 	var files []string
 
 	err := filepath.Walk(yd.TempDir, func(path string, info os.FileInfo, err error) error {
@@ -1174,7 +1282,7 @@ func (yd *YtDlpDownloader) findDownloadedFiles(timestamp int64) ([]string, error
 
 		if !info.IsDir() {
 			filename := info.Name()
-			if strings.HasPrefix(filename, fmt.Sprintf("%d_", timestamp)) {
+			if (prefix != "") && (strings.HasPrefix(filename, prefix) == true) {
 				files = append(files, path)
 			}
 		}
@@ -1550,7 +1658,7 @@ func (yd *YtDlpDownloader) extractRedditImageURLsFromOutput(output string) []str
 }
 
 // downloadRedditImagesDirectly downloads Reddit images directly using HTTP
-func (yd *YtDlpDownloader) downloadRedditImagesDirectly(imageURLs []string, originalURL string, timestamp int64) ([]*MediaInfo, error) {
+func (yd *YtDlpDownloader) downloadRedditImagesDirectly(imageURLs []string, originalURL string, prefix string) ([]*MediaInfo, error) {
 	var mediaInfos []*MediaInfo
 
 	// Extract subreddit and post info for captions
@@ -1582,7 +1690,8 @@ func (yd *YtDlpDownloader) downloadRedditImagesDirectly(imageURLs []string, orig
 		}
 
 		// Create filename
-		filename := filepath.Join(yd.TempDir, fmt.Sprintf("%d_reddit_image_%d.%s", timestamp, i+1, ext))
+		name := fmt.Sprintf("%sreddit_image_%d.%s", prefix, (i + 1), ext)
+		filename := filepath.Join(yd.TempDir, name)
 
 		// Create file
 		file, err := os.Create(filename)

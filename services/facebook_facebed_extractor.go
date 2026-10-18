@@ -1,10 +1,10 @@
 package services
 
-// FacebookFacebedExtractor reads public Facebook photo and text-only posts
-// through facebed (an embed service like vxthreads). Facebook serves its
+// FacebookFacebedExtractor reads public Facebook photo, video and text-only
+// posts through facebed (an embed service like vxthreads). Facebook serves its
 // login wall to the bot's datacenter IP; facebed answers with og tags whose
-// signed fbcdn photo URLs download directly, and a text-only post is the same
-// page without og:image. Every facebed failure (private, deleted,
+// signed fbcdn photo and video URLs download directly, and a text-only post
+// is the same page without og:image. Every facebed failure (private, deleted,
 // unsupported or blocked post) is the same 200 "Log in" card, so success is
 // told by facebed's own site name, not by the status code.
 
@@ -60,6 +60,13 @@ const (
 	// facebedMaxPhotoSize is Telegram's sendPhoto limit.
 	facebedMaxPhotoSize = int64(10 * 1024 * 1024)
 
+	// facebedMaxVideoSize is Telegram's upload limit.
+	facebedMaxVideoSize = TelegramUploadLimitBytes
+
+	// facebedVideoPostTTL is how long a video post read by facebed is kept
+	// for the facebed-video method later in the same chain.
+	facebedVideoPostTTL = 2 * time.Minute
+
 	// facebedPhotoConcurrency is how many photos download at once (facebed
 	// lists up to 4).
 	facebedPhotoConcurrency = 4
@@ -102,6 +109,10 @@ var (
 	// Left to the other methods.
 	errFacebedNoPhoto = errors.New("no photo on the facebed page")
 
+	// errFacebedNoVideo marks a post link whose facebed page, read earlier in
+	// the chain, showed no video.
+	errFacebedNoVideo = errors.New("no video on the facebed page")
+
 	// errFacebedEmptyPost marks a post facebed reads with neither media nor
 	// text, so there is nothing to send.
 	errFacebedEmptyPost = errors.New("facebed post has no photo and no text")
@@ -110,8 +121,9 @@ var (
 	// wrongly (a group landing returns an unrelated recent post).
 	errFacebookUnsupportedPath = errors.New("facebook link shape not supported by facebed")
 
-	// errFacebedPhotoOffCDN marks a photo URL or redirect off the media CDN.
-	errFacebedPhotoOffCDN = errors.New("photo is not served from the media CDN")
+	// errFacebedPhotoOffCDN marks a photo or video URL or redirect off the
+	// media CDN.
+	errFacebedPhotoOffCDN = errors.New("media is not served from the media CDN")
 
 	// errFacebedBroken marks the failures that feed the outage tracker:
 	// facebed's own transport errors, non-200 answers and unparsable pages,
@@ -204,17 +216,40 @@ var facebedKeptQueryParams = map[string]bool{
 	"v":          true,
 }
 
-// FacebookFacebedExtractor downloads Facebook photo and text-only posts via
-// facebed.
+// FacebookFacebedExtractor downloads Facebook photo, video and text-only
+// posts via facebed.
 type FacebookFacebedExtractor struct {
 	tempDir     string
 	base        string
 	mediaDomain string
 	mediaScheme string
-	// photoClient supplies the transport and timeout of photo downloads; nil
-	// means SharedDownloadClient.
+	// photoClient supplies the transport and timeout of photo and video
+	// downloads; nil means SharedDownloadClient.
 	photoClient *http.Client
+	// videoPosts keeps the video posts ExtractMedia read, by link, for
+	// ExtractVideo after yt-dlp (guarded by videoMu).
+	videoMu    sync.Mutex
+	videoPosts map[string]facebedVideoPost
 }
+
+// facebedVideoPost is a video post read by facebed and when it was read.
+type facebedVideoPost struct {
+	Post   facebedPost
+	ReadAt time.Time
+}
+
+// facebedMediaKind is what one download must be: its Telegram type, mime
+// type prefix and size limit.
+type facebedMediaKind struct {
+	MediaType  string
+	MimePrefix string
+	MaxSize    int64
+}
+
+var (
+	facebedPhotoKind = facebedMediaKind{MediaType: MediaTypePhoto, MimePrefix: "image/", MaxSize: facebedMaxPhotoSize}
+	facebedVideoKind = facebedMediaKind{MediaType: MediaTypeVideo, MimePrefix: "video/", MaxSize: facebedMaxVideoSize}
+)
 
 // facebedPost is a parsed facebed page.
 type facebedPost struct {
@@ -224,6 +259,7 @@ type facebedPost struct {
 	CanonicalURL string
 	Photos       []string
 	HasVideo     bool
+	VideoURL     string
 }
 
 // facebedPhoto is what one photo download returned.
@@ -243,14 +279,15 @@ func NewFacebookFacebedExtractor(tempDir string) *FacebookFacebedExtractor {
 
 // facebookLinkMethods orders the Facebook methods by link shape: photos
 // through facebed only (yt-dlp can't fetch Facebook photos), posts through
-// facebed then yt-dlp (a video post, or the video of a post facebed shows as
-// text only), videos and unknown shapes through yt-dlp then facebed.
+// facebed, yt-dlp (a video post, or the video of a post facebed shows as text
+// only), then facebed's video of a video post, videos and unknown shapes
+// through yt-dlp then facebed with its video.
 func facebookLinkMethods(rawURL string) []ExtractionMethod {
-	result := []ExtractionMethod{MethodYtDlp, MethodFacebookFacebed}
+	result := []ExtractionMethod{MethodYtDlp, MethodFacebookFacebedVideo}
 	kind := facebookLinkKindOf(rawURL)
 
 	if kind == facebookLinkPost {
-		result = []ExtractionMethod{MethodFacebookFacebed, MethodYtDlp}
+		result = []ExtractionMethod{MethodFacebookFacebed, MethodYtDlp, MethodFacebookFacebedVideo}
 	}
 
 	if kind == facebookLinkPhoto {
@@ -293,11 +330,16 @@ func facebookLinkKindOf(rawURL string) facebookLinkKind {
 // ExtractMedia reads the post's photos from facebed. A text-only post fails
 // with a lastResortError carrying its text item, sent only if no later method
 // finds the post's media (facebed doesn't see embedded or shared videos).
-// Video posts fail (yt-dlp handles video), so do empty posts, the login
-// card, another post than the requested one and the refused shapes.
+// Video posts fail and are kept for ExtractVideo (yt-dlp is tried first), so
+// do empty posts, the login card, another post than the requested one and
+// the refused shapes.
 func (e *FacebookFacebedExtractor) ExtractMedia(ctx context.Context, postURL string) ([]*MediaInfo, error) {
 	var result []*MediaInfo
 	post, err := e.readPost(ctx, postURL)
+
+	if (err == nil) && (post.VideoURL != "") {
+		e.rememberVideoPost(postURL, post)
+	}
 
 	if err == nil {
 		err = checkFacebedPost(post, postURL)
@@ -323,11 +365,11 @@ func (e *FacebookFacebedExtractor) checkHealth(ctx context.Context, postURL stri
 	}
 
 	if err == nil {
-		photo, err = e.fetchPhoto(ctx, post.Photos[0], io.Discard)
+		photo, err = e.fetchMedia(ctx, post.Photos[0], io.Discard, facebedPhotoKind)
 	}
 
 	if err == nil {
-		err = e.validatePhoto(photo)
+		err = e.validateMedia(photo, facebedPhotoKind)
 	}
 
 	return err
@@ -575,6 +617,7 @@ func applyFacebedTag(post facebedPost, name, value string) facebedPost {
 	result := post
 	isVideoTag := (name == "og:video") || (name == "og:video:secure_url") || (name == "twitter:player:stream")
 	isNewPhoto := (name == "og:image") && (value != "") && (slices.Contains(result.Photos, value) == false)
+	isFirstVideo := (isVideoTag == true) && (value != "") && (result.VideoURL == "")
 
 	switch name {
 	case "og:title":
@@ -589,6 +632,10 @@ func applyFacebedTag(post facebedPost, name, value string) facebedPost {
 
 	if (isVideoTag == true) && (value != "") {
 		result.HasVideo = true
+	}
+
+	if isFirstVideo == true {
+		result.VideoURL = value
 	}
 
 	if isNewPhoto == true {
@@ -765,7 +812,7 @@ func (e *FacebookFacebedExtractor) downloadPhotos(ctx context.Context, post face
 			defer func() { <-slots }()
 
 			basePath := e.photoBasePath(timestamp, index)
-			items[index], itemErrs[index] = e.downloadPhoto(ctx, photoURL, basePath)
+			items[index], itemErrs[index] = e.downloadMediaFile(ctx, photoURL, basePath, facebedPhotoKind)
 		}(i, photoURL)
 	}
 
@@ -816,9 +863,9 @@ func (e *FacebookFacebedExtractor) photoBasePath(timestamp int64, index int) str
 	return result
 }
 
-// downloadPhoto downloads one photo to basePath and validates it before it
-// is sent; a rejected photo is removed.
-func (e *FacebookFacebedExtractor) downloadPhoto(ctx context.Context, photoURL, basePath string) (*MediaInfo, error) {
+// downloadMediaFile downloads one photo or video to basePath and validates
+// it before it is sent; a rejected file is removed.
+func (e *FacebookFacebedExtractor) downloadMediaFile(ctx context.Context, mediaURL, basePath string, kind facebedMediaKind) (*MediaInfo, error) {
 	var result *MediaInfo
 	var photo facebedPhoto
 	var out *os.File
@@ -829,7 +876,7 @@ func (e *FacebookFacebedExtractor) downloadPhoto(ctx context.Context, photoURL, 
 	}
 
 	if err == nil {
-		photo, err = e.fetchPhoto(ctx, photoURL, out)
+		photo, err = e.fetchMedia(ctx, mediaURL, out, kind)
 		closeErr := out.Close()
 
 		if err == nil {
@@ -838,7 +885,7 @@ func (e *FacebookFacebedExtractor) downloadPhoto(ctx context.Context, photoURL, 
 	}
 
 	if err == nil {
-		err = e.validatePhoto(photo)
+		err = e.validateMedia(photo, kind)
 	}
 
 	if err != nil {
@@ -847,28 +894,28 @@ func (e *FacebookFacebedExtractor) downloadPhoto(ctx context.Context, photoURL, 
 
 	if err == nil {
 		filePath := renameWithMediaExt(basePath, photo.ContentType, photo.FinalURL)
-		result = &MediaInfo{Type: MediaTypePhoto, Filename: filePath}
+		result = &MediaInfo{Type: kind.MediaType, Filename: filePath}
 	}
 
 	return result, err
 }
 
-// fetchPhoto copies one photo into out: only from the media CDN (checked
-// before the request and on every redirect), cancelled with ctx and cut one
-// byte past the photo limit, so validatePhoto rejects it.
-func (e *FacebookFacebedExtractor) fetchPhoto(ctx context.Context, photoURL string, out io.Writer) (facebedPhoto, error) {
+// fetchMedia copies one photo or video into out: only from the media CDN
+// (checked before the request and on every redirect), cancelled with ctx and
+// cut one byte past the kind's limit, so validateMedia rejects it.
+func (e *FacebookFacebedExtractor) fetchMedia(ctx context.Context, mediaURL string, out io.Writer, kind facebedMediaKind) (facebedPhoto, error) {
 	result := facebedPhoto{}
 	var resp *http.Response
-	err := e.checkPhotoURL(photoURL)
+	err := e.checkPhotoURL(mediaURL)
 
 	if err == nil {
-		resp, err = e.requestPhoto(ctx, photoURL)
+		resp, err = e.requestPhoto(ctx, mediaURL)
 	}
 
 	if err == nil {
 		defer resp.Body.Close()
 
-		limited := io.LimitReader(resp.Body, (facebedMaxPhotoSize + 1))
+		limited := io.LimitReader(resp.Body, (kind.MaxSize + 1))
 		result.FinalURL = resp.Request.URL.String()
 		result.ContentType = resp.Header.Get("Content-Type")
 		result.Size, err = io.Copy(out, limited)
@@ -947,26 +994,27 @@ func (e *FacebookFacebedExtractor) basePhotoClient() *http.Client {
 	return result
 }
 
-// validatePhoto applies the kk redirector checks (off facebed's and
+// validateMedia applies the kk redirector checks (off facebed's and
 // Facebook's hosts, media content type, plausible size), and also requires
-// an image served from Facebook's CDN within Telegram's photo limit.
-func (e *FacebookFacebedExtractor) validatePhoto(photo facebedPhoto) error {
+// the kind's media (an image or a video) served from Facebook's CDN within
+// the kind's Telegram limit.
+func (e *FacebookFacebedExtractor) validateMedia(photo facebedPhoto, kind facebedMediaKind) error {
 	pageHost := e.pageHost()
 	err := validateRedirectorMedia(pageHost, facebookOriginDomain, photo.FinalURL, photo.ContentType, photo.Size)
 	isMediaHost := e.isMediaHost(photo.FinalURL)
 	mimeType := extractMimeType(photo.ContentType)
-	isImage := strings.HasPrefix(mimeType, "image/")
+	isKind := strings.HasPrefix(mimeType, kind.MimePrefix)
 
 	if (err == nil) && (isMediaHost == false) {
 		err = fmt.Errorf("%w (%s): %s", errFacebedPhotoOffCDN, e.mediaDomain, photo.FinalURL)
 	}
 
-	if (err == nil) && (isImage == false) {
-		err = fmt.Errorf("non-image content-type %q", photo.ContentType)
+	if (err == nil) && (isKind == false) {
+		err = fmt.Errorf("content-type %q is not %s media", photo.ContentType, kind.MediaType)
 	}
 
-	if (err == nil) && (photo.Size > facebedMaxPhotoSize) {
-		err = fmt.Errorf("photo is above the %d-byte photo limit", facebedMaxPhotoSize)
+	if (err == nil) && (photo.Size > kind.MaxSize) {
+		err = fmt.Errorf("%s is above the %d-byte limit", kind.MediaType, kind.MaxSize)
 	}
 
 	return err

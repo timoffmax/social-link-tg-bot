@@ -213,8 +213,8 @@ func TestBuildFacebedPathRefusesOtherHosts(t *testing.T) {
 
 func TestFacebookStrategyOrdersMethodsByLinkShape(t *testing.T) {
 	photoOnly := []ExtractionMethod{MethodFacebookFacebed}
-	facebedFirst := []ExtractionMethod{MethodFacebookFacebed, MethodYtDlp}
-	ytdlpFirst := []ExtractionMethod{MethodYtDlp, MethodFacebookFacebed}
+	facebedFirst := []ExtractionMethod{MethodFacebookFacebed, MethodYtDlp, MethodFacebookFacebedVideo}
+	ytdlpFirst := []ExtractionMethod{MethodYtDlp, MethodFacebookFacebedVideo}
 	cases := []struct {
 		url  string
 		want []ExtractionMethod
@@ -907,7 +907,7 @@ func TestFacebedExtractorRequestsNoPhotoOffTheMediaCDN(t *testing.T) {
 
 			_, err := extractor.ExtractMedia(context.Background(), facebedTestPhotoURL)
 
-			if (err == nil) || (strings.Contains(err.Error(), "photo is not served from") == false) {
+			if (err == nil) || (strings.Contains(err.Error(), "media is not served from") == false) {
 				t.Fatalf("want a media-host error, got %v", err)
 			}
 
@@ -928,7 +928,7 @@ func TestFacebedExtractorStopsAPhotoRedirectOffTheMediaCDN(t *testing.T) {
 
 	_, err := newTestFacebedExtractor(t, server).ExtractMedia(context.Background(), facebedTestPhotoURL)
 
-	if (err == nil) || (strings.Contains(err.Error(), "photo is not served from") == false) {
+	if (err == nil) || (strings.Contains(err.Error(), "media is not served from") == false) {
 		t.Fatalf("want a media-host error on the redirect, got %v", err)
 	}
 
@@ -1177,7 +1177,7 @@ func TestCheckFacebedPostMatchesComparesTheAnsweredPostID(t *testing.T) {
 // newFacebookTestDownloader runs the Facebook chain on server, with ytdlp in
 // place of yt-dlp; calls counts its runs.
 func newFacebookTestDownloader(t *testing.T, server *facebedTestServer, ytdlp func() ([]*MediaInfo, error), calls *int) *SmartDownloader {
-	extractYtDlp := func(mediaURL, platform string) ([]*MediaInfo, error) {
+	extractYtDlp := func(ctx context.Context, mediaURL, platform string) ([]*MediaInfo, error) {
 		*calls++
 
 		return ytdlp()

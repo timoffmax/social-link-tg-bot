@@ -1,16 +1,21 @@
 package services
 
 // Reddit gates anonymous access behind a lightweight JS challenge: the post
-// page returns an interstitial with a hidden GET form (token, js_challenge=1)
-// and a script computing solution = seed + seed. Submitting the solved form
+// page returns an interstitial with a hidden GET form (jsc_token, jsc_orig_r
+// and js_challenge=1; the token field was named "token" until 2026-10) and a
+// script computing solution = seed + seed. Submitting the solved form
 // grants ~24h of anonymous session cookies (domain .reddit.com), after which
 // the public .json endpoints answer normally — no proxy needed. This is the
 // same JS the headless-browser fallback executes anyway; solving it inline
 // just skips spawning Chrome. When the session expires the next fetch gets
-// blocked again and the challenge is re-solved on demand.
+// blocked again and the challenge is re-solved on demand. Since 2026-10 the
+// .json endpoints answer "blocked by network security" (403) even with a
+// solved session, from residential and datacenter IPs alike, so this path
+// only works through proxies; vxreddit carries Reddit on its own.
 
 import (
 	"fmt"
+	"html"
 	"io"
 	"log"
 	"net/http"
@@ -27,7 +32,8 @@ import (
 const redditBrowserUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
 var (
-	redditChallengeTokenPattern  = regexp.MustCompile(`name="token"\s+value="([0-9a-fA-F]+)"`)
+	redditChallengeTokenPattern  = regexp.MustCompile(`name="((?:jsc_)?token)"\s+value="([0-9a-fA-F]+)"`)
+	redditChallengeOrigPattern   = regexp.MustCompile(`name="jsc_orig_r"\s+value="([^"]*)"`)
 	redditChallengeSeedPattern   = regexp.MustCompile(`e=>e\+e\)\("([0-9a-fA-F]+)"\)`)
 	redditChallengeSeedFallback  = regexp.MustCompile(`\("([0-9a-fA-F]{16})"\)`)
 	redditChallengeActionPattern = regexp.MustCompile(`<form[^>]*action="([^"]+)"`)
@@ -130,7 +136,7 @@ func solveRedditChallenge(client *http.Client, postURL string) error {
 
 	tokenMatch := redditChallengeTokenPattern.FindStringSubmatch(page)
 
-	if len(tokenMatch) < 2 {
+	if len(tokenMatch) < 3 {
 		return fmt.Errorf("challenge page has no token field")
 	}
 
@@ -151,7 +157,20 @@ func solveRedditChallenge(client *http.Client, postURL string) error {
 		action = actionMatch[1]
 	}
 
-	solveURL, err := buildChallengeSolveURL(postURL, action, seedMatch[1], tokenMatch[1])
+	form := redditChallengeForm{
+		Action:     action,
+		Seed:       seedMatch[1],
+		TokenField: tokenMatch[1],
+		Token:      tokenMatch[2],
+	}
+	origMatch := redditChallengeOrigPattern.FindStringSubmatch(page)
+
+	if len(origMatch) == 2 {
+		form.HasOrigR = true
+		form.OrigR = html.UnescapeString(origMatch[1])
+	}
+
+	solveURL, err := buildChallengeSolveURL(postURL, form)
 
 	if err != nil {
 		return err
@@ -170,31 +189,54 @@ func solveRedditChallenge(client *http.Client, postURL string) error {
 	return nil
 }
 
+// redditChallengeForm is the hidden form of the challenge page.
+type redditChallengeForm struct {
+	Action     string
+	Seed       string
+	TokenField string
+	Token      string
+	OrigR      string
+	HasOrigR   bool
+}
+
 // buildChallengeSolveURL assembles the GET request that submits the solved
-// challenge form (solution = seed doubled).
-func buildChallengeSolveURL(postURL, action, seed, token string) (string, error) {
+// challenge form (solution = seed doubled), with the token under the page's
+// own field name and jsc_orig_r when the page has it.
+func buildChallengeSolveURL(postURL string, form redditChallengeForm) (string, error) {
+	result := ""
+	var actionURL *url.URL
 	base, err := url.Parse(postURL)
 
 	if err != nil {
-		return "", fmt.Errorf("cannot parse post URL: %v", err)
+		err = fmt.Errorf("cannot parse post URL: %v", err)
 	}
 
-	if action != "" {
-		actionURL, actionErr := url.Parse(action)
+	if (err == nil) && (form.Action != "") {
+		var actionErr error
+		action := html.UnescapeString(form.Action)
+		actionURL, actionErr = url.Parse(action)
 
 		if actionErr == nil {
 			base = base.ResolveReference(actionURL)
 		}
 	}
 
-	params := url.Values{}
-	params.Set("solution", seed+seed)
-	params.Set("js_challenge", "1")
-	params.Set("token", token)
+	if err == nil {
+		solution := fmt.Sprintf("%s%s", form.Seed, form.Seed)
+		params := url.Values{}
+		params.Set("solution", solution)
+		params.Set("js_challenge", "1")
+		params.Set(form.TokenField, form.Token)
 
-	base.RawQuery = params.Encode()
+		if form.HasOrigR == true {
+			params.Set("jsc_orig_r", form.OrigR)
+		}
 
-	return base.String(), nil
+		base.RawQuery = params.Encode()
+		result = base.String()
+	}
+
+	return result, err
 }
 
 // buildDirectJSONURL converts a canonical post URL to its www.reddit.com
