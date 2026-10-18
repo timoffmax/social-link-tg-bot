@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net/url"
@@ -28,6 +29,37 @@ type SmartDownloader struct {
 	facebook     *FacebookFacebedExtractor
 	tempDir      string
 	workingDir   string
+	// extractYtDlp replaces the yt-dlp method (tests); nil runs yt-dlp.
+	extractYtDlp func(mediaURL, platform string) ([]*MediaInfo, error)
+}
+
+// lastResortError is a method's failure that still carries a lesser result
+// (e.g. a post's text without the video it may hold): the chain goes on, and
+// the result is sent only when every other method fails.
+type lastResortError struct {
+	Media  []*MediaInfo
+	Reason string
+}
+
+// Error implements error.
+func (e *lastResortError) Error() string {
+	result := fmt.Sprintf("kept as a last resort: %s", e.Reason)
+
+	return result
+}
+
+// lastResortMediaOf returns the result an error keeps as a last resort, or
+// current when it keeps none (the first kept result stays).
+func lastResortMediaOf(current []*MediaInfo, err error) []*MediaInfo {
+	result := current
+	var lastResort *lastResortError
+	isLastResort := errors.As(err, &lastResort)
+
+	if (result == nil) && (isLastResort == true) {
+		result = lastResort.Media
+	}
+
+	return result
 }
 
 // NewSmartDownloader creates a new smart downloader instance
@@ -78,6 +110,7 @@ func (sd *SmartDownloader) downloadMediaWithContext(ctx context.Context, mediaUR
 	strategy.LogStrategy()
 
 	var lastErr error
+	var lastResort []*MediaInfo
 
 	// Run the first 2 strategies concurrently if there are at least 2 non-FixedLink
 	// methods, unless the strategy demands strict priority ordering.
@@ -96,6 +129,8 @@ func (sd *SmartDownloader) downloadMediaWithContext(ctx context.Context, mediaUR
 		if err != nil {
 			lastErr = err
 		}
+
+		lastResort = lastResortMediaOf(lastResort, err)
 	}
 
 	// Sequential fallback for remaining strategies (or all if concurrency was not used)
@@ -119,13 +154,25 @@ func (sd *SmartDownloader) downloadMediaWithContext(ctx context.Context, mediaUR
 		if err != nil {
 			lastErr = err
 		}
+
+		lastResort = lastResortMediaOf(lastResort, err)
 	}
 
-	// If all methods failed, return error
 	totalDuration := time.Since(startTime)
-	LogExtraction(strategy.Platform, mediaURL, "all-methods", false, 0, totalDuration)
+	var chainErr error
 
-	return nil, fmt.Errorf("all extraction methods failed for %s: %w", mediaURL, lastErr)
+	if lastResort != nil {
+		log.Printf("📝 Every media method failed for %s, sending the result kept as a last resort", mediaURL)
+		LogExtraction(strategy.Platform, mediaURL, "last-resort", true, len(lastResort), totalDuration)
+	}
+
+	// If all methods failed and nothing was kept, return error
+	if lastResort == nil {
+		LogExtraction(strategy.Platform, mediaURL, "all-methods", false, 0, totalDuration)
+		chainErr = fmt.Errorf("all extraction methods failed for %s: %w", mediaURL, lastErr)
+	}
+
+	return lastResort, chainErr
 }
 
 // getConcurrentCount returns how many of the first strategies can run concurrently.
@@ -187,6 +234,7 @@ func (sd *SmartDownloader) tryConcurrentStrategies(
 	}()
 
 	var lastErr error
+	var lastResortErr error
 
 	for res := range resultCh {
 		if res.media != nil {
@@ -197,6 +245,17 @@ func (sd *SmartDownloader) tryConcurrentStrategies(
 		if res.err != nil {
 			lastErr = res.err
 		}
+
+		isLastResort := (lastResortMediaOf(nil, res.err) != nil)
+
+		if (lastResortErr == nil) && (isLastResort == true) {
+			lastResortErr = res.err
+		}
+	}
+
+	// A result kept as a last resort must reach the caller.
+	if lastResortErr != nil {
+		lastErr = lastResortErr
 	}
 
 	return nil, lastErr
@@ -219,7 +278,7 @@ func (sd *SmartDownloader) executeStrategy(
 		}
 
 		log.Printf("🎯 Trying yt-dlp extraction for %s", strategy.Platform)
-		mediaInfos, err := sd.tryYtDlpExtraction(mediaURL, strategy.Platform)
+		mediaInfos, err := sd.runYtDlp(mediaURL, strategy.Platform)
 		methodDuration := time.Since(methodStartTime)
 
 		if err == nil && len(mediaInfos) > 0 {
@@ -387,6 +446,19 @@ func (sd *SmartDownloader) executeFixedLinkStrategy(
 	}
 
 	return result, nil
+}
+
+// runYtDlp runs the yt-dlp method, or its test replacement.
+func (sd *SmartDownloader) runYtDlp(mediaURL, platform string) ([]*MediaInfo, error) {
+	extract := sd.tryYtDlpExtraction
+
+	if sd.extractYtDlp != nil {
+		extract = sd.extractYtDlp
+	}
+
+	result, err := extract(mediaURL, platform)
+
+	return result, err
 }
 
 // tryYtDlpExtraction attempts to extract media using yt-dlp with platform-specific logic

@@ -331,3 +331,21 @@ func TestFitSpoilerCaptionIsTheLongestFitAtRuneBoundaries(t *testing.T) {
 		}
 	}
 }
+
+func TestFitPrefixEndReportsWhenNothingFits(t *testing.T) {
+	measure := func(prefix string) int {
+		return len(prefix)
+	}
+
+	if got := fitPrefixEnd("abc", -1, measure); got != -1 {
+		t.Fatalf("negative budget: got %d, want -1", got)
+	}
+
+	if got := fitPrefixEnd("aя", 2, measure); got != 1 {
+		t.Fatalf("budget inside a rune: got %d, want 1", got)
+	}
+
+	if got := fitPrefixEnd("abc", 3, measure); got != 3 {
+		t.Fatalf("exact budget: got %d, want 3", got)
+	}
+}

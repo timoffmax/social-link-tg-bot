@@ -1,9 +1,10 @@
 package services
 
-// FacebookFacebedExtractor reads public Facebook photo posts through facebed
-// (an embed service like vxthreads). Facebook serves its login wall to the
-// bot's datacenter IP; facebed answers with og tags whose signed fbcdn photo
-// URLs download directly. Every facebed failure (private, deleted,
+// FacebookFacebedExtractor reads public Facebook photo and text-only posts
+// through facebed (an embed service like vxthreads). Facebook serves its
+// login wall to the bot's datacenter IP; facebed answers with og tags whose
+// signed fbcdn photo URLs download directly, and a text-only post is the same
+// page without og:image. Every facebed failure (private, deleted,
 // unsupported or blocked post) is the same 200 "Log in" card, so success is
 // told by facebed's own site name, not by the status code.
 
@@ -23,6 +24,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf16"
+	"unicode/utf8"
 
 	"github.com/timoffmax/social-link-bot/config"
 )
@@ -62,6 +65,22 @@ const (
 	facebedPhotoConcurrency = 4
 
 	facebedFilePrefix = "facebook_facebed"
+
+	// facebedTextLimit is where facebed cuts a post's text without a marker:
+	// post.text[:1024] in facebed.py, a Python slice counting code points
+	// (runes here). Text of that length is taken as cut.
+	facebedTextLimit = 1024
+
+	// telegramMessageLimit is Telegram's sendMessage limit, counted in UTF-16
+	// code units of the text left after entity parsing.
+	telegramMessageLimit = 4096
+
+	// facebedTruncationMarker ends a text that facebed or the message limit
+	// cut.
+	facebedTruncationMarker = "…"
+
+	// facebedTextPostReason explains a text post kept as a last resort.
+	facebedTextPostReason = "facebed text-only post (sent if no method finds media)"
 )
 
 var (
@@ -78,9 +97,14 @@ var (
 	// asked for (og:url without the requested id).
 	errFacebedWrongPost = fmt.Errorf("%w: it answered with another post", errFacebedUnavailable)
 
-	// errFacebedNoPhoto marks a post facebed reads but that has no photo (a
-	// video or a text-only post), left to the other methods.
+	// errFacebedNoPhoto marks a post facebed reads but whose photo it can't
+	// give: a video post, or a photo or video link answered without media.
+	// Left to the other methods.
 	errFacebedNoPhoto = errors.New("no photo on the facebed page")
+
+	// errFacebedEmptyPost marks a post facebed reads with neither media nor
+	// text, so there is nothing to send.
+	errFacebedEmptyPost = errors.New("facebed post has no photo and no text")
 
 	// errFacebookUnsupportedPath marks link shapes facebed can't read or reads
 	// wrongly (a group landing returns an unrelated recent post).
@@ -95,6 +119,20 @@ var (
 	// with a non-2xx status. A photo that fails validation is a per-post
 	// failure.
 	errFacebedBroken = errors.New("facebed failure")
+)
+
+// telegramTagPattern matches an HTML tag of a message, which Telegram turns
+// into an entity and leaves out of the length.
+var telegramTagPattern = regexp.MustCompile(`<[^>]*>`)
+
+// facebookLinkKind is the shape of a Facebook link.
+type facebookLinkKind int
+
+const (
+	facebookLinkOther facebookLinkKind = iota
+	facebookLinkPhoto
+	facebookLinkVideo
+	facebookLinkPost
 )
 
 var (
@@ -166,7 +204,8 @@ var facebedKeptQueryParams = map[string]bool{
 	"v":          true,
 }
 
-// FacebookFacebedExtractor downloads Facebook photo posts via facebed.
+// FacebookFacebedExtractor downloads Facebook photo and text-only posts via
+// facebed.
 type FacebookFacebedExtractor struct {
 	tempDir     string
 	base        string
@@ -204,10 +243,27 @@ func NewFacebookFacebedExtractor(tempDir string) *FacebookFacebedExtractor {
 
 // facebookLinkMethods orders the Facebook methods by link shape: photos
 // through facebed only (yt-dlp can't fetch Facebook photos), posts through
-// facebed then yt-dlp (a video post), videos and unknown shapes through
-// yt-dlp then facebed.
+// facebed then yt-dlp (a video post, or the video of a post facebed shows as
+// text only), videos and unknown shapes through yt-dlp then facebed.
 func facebookLinkMethods(rawURL string) []ExtractionMethod {
 	result := []ExtractionMethod{MethodYtDlp, MethodFacebookFacebed}
+	kind := facebookLinkKindOf(rawURL)
+
+	if kind == facebookLinkPost {
+		result = []ExtractionMethod{MethodFacebookFacebed, MethodYtDlp}
+	}
+
+	if kind == facebookLinkPhoto {
+		result = []ExtractionMethod{MethodFacebookFacebed}
+	}
+
+	return result
+}
+
+// facebookLinkKindOf classifies a link by its path; photo and video shapes
+// win over the post shapes they overlap (share/r/, share/v/).
+func facebookLinkKindOf(rawURL string) facebookLinkKind {
+	result := facebookLinkOther
 	path := ""
 	parsed, err := url.Parse(rawURL)
 
@@ -219,30 +275,36 @@ func facebookLinkMethods(rawURL string) []ExtractionMethod {
 	isVideo := facebookVideoPathPattern.MatchString(path)
 	isPost := facebookPostPathPattern.MatchString(path)
 
-	if (isPhoto == false) && (isVideo == false) && (isPost == true) {
-		result = []ExtractionMethod{MethodFacebookFacebed, MethodYtDlp}
+	if isPost == true {
+		result = facebookLinkPost
+	}
+
+	if isVideo == true {
+		result = facebookLinkVideo
 	}
 
 	if isPhoto == true {
-		result = []ExtractionMethod{MethodFacebookFacebed}
+		result = facebookLinkPhoto
 	}
 
 	return result
 }
 
-// ExtractMedia reads the post's photos from facebed. Video and text-only
-// posts fail (yt-dlp handles video), so do the login card, another post than
-// the requested one and the refused shapes.
+// ExtractMedia reads the post's photos from facebed. A text-only post fails
+// with a lastResortError carrying its text item, sent only if no later method
+// finds the post's media (facebed doesn't see embedded or shared videos).
+// Video posts fail (yt-dlp handles video), so do empty posts, the login
+// card, another post than the requested one and the refused shapes.
 func (e *FacebookFacebedExtractor) ExtractMedia(ctx context.Context, postURL string) ([]*MediaInfo, error) {
 	var result []*MediaInfo
 	post, err := e.readPost(ctx, postURL)
 
 	if err == nil {
-		err = checkFacebedPhotoPost(post)
+		err = checkFacebedPost(post, postURL)
 	}
 
 	if err == nil {
-		result, err = e.downloadPhotos(ctx, post, postURL)
+		result, err = e.buildMedia(ctx, post, postURL)
 	}
 
 	reportFacebedOutcome(err)
@@ -536,18 +598,149 @@ func applyFacebedTag(post facebedPost, name, value string) facebedPost {
 	return result
 }
 
-// checkFacebedPhotoPost fails a post without photos: facebed drops a video
-// post's images, and a text-only post is not a photo.
-func checkFacebedPhotoPost(post facebedPost) error {
+// checkFacebedPost fails what can't be sent: a video post (facebed drops
+// its images), a photo or video link answered without media (its media is
+// lost, the text alone would pass for the post), a text-only answer whose
+// og:url names no single post (a link without a comparable id answered with
+// a page, profile or group landing) and a post with neither media nor text.
+func checkFacebedPost(post facebedPost, postURL string) error {
 	var result error
+	hasPhotos := (len(post.Photos) > 0)
+	isMediaLink := isFacebookMediaLink(postURL)
+	isPostAnswer := isFacebookPostURL(post.CanonicalURL)
+	trimmedText := strings.TrimSpace(post.Text)
+	isTextPost := (hasPhotos == false) && (post.HasVideo == false)
+
+	if (isTextPost == true) && (trimmedText == "") {
+		result = errFacebedEmptyPost
+	}
+
+	if (isTextPost == true) && (isPostAnswer == false) {
+		result = fmt.Errorf("%w: a text-only answer that is not a post (%s)", errFacebedWrongPost, post.CanonicalURL)
+	}
+
+	if (isTextPost == true) && (isMediaLink == true) {
+		result = fmt.Errorf("%w (photo or video link answered without media)", errFacebedNoPhoto)
+	}
 
 	if post.HasVideo == true {
 		result = fmt.Errorf("%w (video post, left to yt-dlp)", errFacebedNoPhoto)
 	}
 
-	if (post.HasVideo == false) && (len(post.Photos) == 0) {
-		result = fmt.Errorf("%w (text-only post)", errFacebedNoPhoto)
+	return result
+}
+
+// isFacebookMediaLink reports a photo or video link.
+func isFacebookMediaLink(postURL string) bool {
+	kind := facebookLinkKindOf(postURL)
+	result := (kind == facebookLinkPhoto) || (kind == facebookLinkVideo)
+
+	return result
+}
+
+// isFacebookPostURL reports a URL naming one post by its id: a page or group
+// post, permalink.php, story.php or a photo (not a page, profile or group
+// landing, not a reel or video).
+func isFacebookPostURL(rawURL string) bool {
+	result := false
+	kind := facebookLinkKindOf(rawURL)
+	isPostShape := (kind == facebookLinkPost) || (kind == facebookLinkPhoto)
+	parsed, err := url.Parse(rawURL)
+
+	if (err == nil) && (isPostShape == true) {
+		postID := facebookPostIDOf(parsed)
+		result = (postID != "")
 	}
+
+	return result
+}
+
+// buildMedia downloads the post's photos; a text-only post fails with its
+// text item kept as a last resort.
+func (e *FacebookFacebedExtractor) buildMedia(ctx context.Context, post facebedPost, postURL string) ([]*MediaInfo, error) {
+	var result []*MediaInfo
+	var err error
+
+	if len(post.Photos) == 0 {
+		textPost := facebedTextPost(post, postURL)
+		err = &lastResortError{Media: textPost, Reason: facebedTextPostReason}
+	}
+
+	if len(post.Photos) > 0 {
+		result, err = e.downloadPhotos(ctx, post, postURL)
+	}
+
+	return result, err
+}
+
+// facebedTextPost returns a text-only post as one text item (sent as a
+// message with the original link appended). A link-share post comes without
+// its link preview (facebed doesn't expose it); the original link leads to
+// it.
+func facebedTextPost(post facebedPost, postURL string) []*MediaInfo {
+	caption := fitFacebedTextMessage(post, postURL, telegramMessageLimit)
+	result := []*MediaInfo{{Type: MediaTypeText, URL: postURL, Caption: caption}}
+
+	return result
+}
+
+// fitFacebedTextMessage formats the author line and the text, fitted in one
+// pass so the message with the original link the sender appends is at most
+// limit Telegram units long. The text ends with the truncation marker only
+// when facebed or this fit cut it.
+func fitFacebedTextMessage(post facebedPost, postURL string, limit int) string {
+	isFacebedCut := isCutByFacebed(post.Text)
+	text := strings.ReplaceAll(post.Text, "\r\n", "\n")
+	displayName := html.EscapeString(post.Author)
+	linkSuffix := FormatOriginalLink(postURL)
+	measure := func(prefix string) int {
+		isCut := (isFacebedCut == true) || (len(prefix) < len(text))
+		caption := facebedTextCaption(displayName, prefix, isCut)
+		message := fmt.Sprintf("%s%s", caption, linkSuffix)
+
+		return telegramTextLength(message)
+	}
+	end := fitPrefixEnd(text, limit, measure)
+	fittedEnd := max(end, 0)
+	isCut := (isFacebedCut == true) || (fittedEnd < len(text))
+	result := facebedTextCaption(displayName, text[:fittedEnd], isCut)
+
+	return result
+}
+
+// isCutByFacebed reports a text facebed may have cut: raw is og:description
+// as facebed sent it (entities decoded, not trimmed or normalised), counted
+// in code points like facebed's slice.
+func isCutByFacebed(raw string) bool {
+	codePoints := utf8.RuneCountInString(raw)
+	result := (codePoints >= facebedTextLimit)
+
+	return result
+}
+
+// facebedTextCaption formats the escaped author line and the plain text
+// (escaped as it is), ended with the truncation marker when isCut.
+func facebedTextCaption(displayName, text string, isCut bool) string {
+	escaped := escapeCaptionLines(text, false, html.EscapeString)
+
+	if isCut == true {
+		escaped = fmt.Sprintf("%s%s", escaped, facebedTruncationMarker)
+	}
+
+	result := FormatAuthorCaption(FacebookPlatform, displayName, "", escaped)
+
+	return result
+}
+
+// telegramTextLength is how Telegram counts an HTML message: tags become
+// entities and leave the text, entities are decoded, the rest is counted
+// in UTF-16 code units.
+func telegramTextLength(htmlText string) int {
+	withoutTags := telegramTagPattern.ReplaceAllString(htmlText, "")
+	text := html.UnescapeString(withoutTags)
+	runes := []rune(text)
+	units := utf16.Encode(runes)
+	result := len(units)
 
 	return result
 }
@@ -830,13 +1023,15 @@ func wrapFacebedBroken(err error) error {
 	return result
 }
 
-// reportFacebedOutcome feeds the outage tracker: a success, or a failure
-// marked errFacebedBroken (not the login card, another post, refused shapes
-// or posts without photos).
+// reportFacebedOutcome feeds the outage tracker: a success (a text post
+// kept as a last resort too), or a failure marked errFacebedBroken (not the
+// login card, another post, refused shapes, video or empty posts).
 func reportFacebedOutcome(err error) {
 	isBroken := errors.Is(err, errFacebedBroken)
+	keptMedia := lastResortMediaOf(nil, err)
+	isSuccess := (err == nil) || (keptMedia != nil)
 
-	if err == nil {
+	if isSuccess == true {
 		ReportServiceSuccess(facebedServiceName)
 	}
 
@@ -846,11 +1041,11 @@ func reportFacebedOutcome(err error) {
 	}
 }
 
-// facebedCaption formats author and text (escaped for HTML), the text fitted
-// into what the caption limit leaves next to the author line and the
-// original link.
+// facebedCaption formats author and text (plain text, escaped for HTML),
+// the text fitted into what the caption limit leaves next to the author line
+// and the original link.
 func facebedCaption(post facebedPost, postURL string) string {
-	caption := authorCaption{Platform: FacebookPlatform, DisplayName: post.Author, Text: post.Text, PostURL: postURL}
+	caption := authorCaption{Platform: FacebookPlatform, DisplayName: post.Author, Text: post.Text, PostURL: postURL, PlainText: true}
 	result := buildAuthorCaption(caption)
 
 	return result

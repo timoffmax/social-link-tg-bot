@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html"
 	"log"
 	"os"
 	"path/filepath"
@@ -273,6 +274,10 @@ type authorCaption struct {
 	// Reserve is kept free next to the original link (e.g. a quota note).
 	Reserve int
 	Spoiler bool
+	// PlainText marks DisplayName and Text as plain text whose entities are
+	// already decoded (e.g. facebed's og tags): they are escaped without
+	// decoding entities again, so a literal "&lt;br&gt;" stays as written.
+	PlainText bool
 }
 
 // buildAuthorCaption formats the author line plus the post text (escaped for
@@ -281,7 +286,8 @@ type authorCaption struct {
 // line, the original link and Reserve, so no later cut splits a tag or an
 // entity.
 func buildAuthorCaption(caption authorCaption) string {
-	displayName := EscapeForTelegramHTML(caption.DisplayName)
+	escape := captionEscaper(caption.PlainText)
+	displayName := escape(caption.DisplayName)
 	authorLine := FormatAuthorCaption(caption.Platform, displayName, caption.Username, "")
 	linkSuffix := FormatOriginalLink(caption.PostURL)
 	budget := caption.MaxText
@@ -290,29 +296,67 @@ func buildAuthorCaption(caption authorCaption) string {
 		budget = TelegramCaptionLimitBytes - len(authorLine) - len(gatedCaptionSeparator) - len(linkSuffix) - caption.Reserve
 	}
 
-	fittedText := fitSpoilerCaption(caption.Text, budget, caption.Spoiler)
+	fittedText := fitEscapedCaption(caption.Text, budget, caption.Spoiler, escape)
 	result := FormatAuthorCaption(caption.Platform, displayName, caption.Username, fittedText)
+
+	return result
+}
+
+// captionEscaper returns the HTML escaping of caption text: plain text is
+// escaped as it is, other text has its entities decoded first so it is not
+// escaped twice.
+func captionEscaper(plainText bool) func(string) string {
+	result := EscapeForTelegramHTML
+
+	if plainText == true {
+		result = html.EscapeString
+	}
 
 	return result
 }
 
 // fitSpoilerCaption returns the escaped, spoiler-wrapped caption of the
 // longest prefix of raw (cut at a rune boundary) whose result fits budget
-// bytes. The result only grows with the prefix, so a binary search over the
-// rune boundaries finds that prefix exactly; a negative budget gives "".
+// bytes; a negative budget gives "".
 func fitSpoilerCaption(raw string, budget int, spoiler bool) string {
+	result := fitEscapedCaption(raw, budget, spoiler, EscapeForTelegramHTML)
+
+	return result
+}
+
+// fitEscapedCaption is fitSpoilerCaption with the given escaping.
+func fitEscapedCaption(raw string, budget int, spoiler bool, escape func(string) string) string {
 	result := ""
+	measure := func(prefix string) int {
+		wrapped := escapeCaptionLines(prefix, spoiler, escape)
+
+		return len(wrapped)
+	}
+	end := fitPrefixEnd(raw, budget, measure)
+
+	if end > 0 {
+		result = escapeCaptionLines(raw[:end], spoiler, escape)
+	}
+
+	return result
+}
+
+// fitPrefixEnd returns the end of the longest prefix of raw (cut at a rune
+// boundary) whose measure fits budget, or -1 when not even the empty prefix
+// fits. measure must not shrink as the prefix grows, so a binary search over
+// the rune boundaries finds that prefix exactly.
+func fitPrefixEnd(raw string, budget int, measure func(prefix string) int) int {
+	result := -1
 	boundaries := runeBoundaries(raw)
 	firstTooLong := sort.Search(len(boundaries), func(i int) bool {
 		prefix := raw[:boundaries[i]]
-		wrapped := wrapSpoilerLines(prefix, spoiler)
+		size := measure(prefix)
 
-		return (len(wrapped) > budget)
+		return (size > budget)
 	})
 
 	if firstTooLong > 0 {
-		end := boundaries[firstTooLong-1]
-		result = wrapSpoilerLines(raw[:end], spoiler)
+		result = boundaries[firstTooLong-1]
 	}
 
 	return result
@@ -336,11 +380,18 @@ func runeBoundaries(s string) []int {
 // its own spoiler, so any single line taken out of the caption (e.g. the
 // author-only caption when descriptions are off) is still balanced HTML.
 func wrapSpoilerLines(raw string, spoiler bool) string {
+	result := escapeCaptionLines(raw, spoiler, EscapeForTelegramHTML)
+
+	return result
+}
+
+// escapeCaptionLines is wrapSpoilerLines with the given escaping.
+func escapeCaptionLines(raw string, spoiler bool, escape func(string) string) string {
 	lines := strings.Split(raw, "\n")
 	wrapped := make([]string, 0, len(lines))
 
 	for _, line := range lines {
-		escaped := EscapeForTelegramHTML(line)
+		escaped := escape(line)
 		isBlank := (strings.TrimSpace(line) == "")
 		wrappedLine := ""
 

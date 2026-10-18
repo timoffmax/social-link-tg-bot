@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"html"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -20,6 +21,8 @@ const (
 	facebedTestPhotoURL = "https://www.facebook.com/photo/?fbid=29713410154913540&set=a.130784570269490"
 	facebedTestMultiURL = "https://www.facebook.com/permalink.php?story_fbid=pfbid0abc&id=100079744151043"
 	facebedTestReelURL  = "https://www.facebook.com/reel/588109690402315"
+	facebedTestTextURL  = "https://www.facebook.com/zuck/posts/10117699115562331"
+	facebedTestShareURL = "https://www.facebook.com/share/p/1AsuFXfMVm/"
 )
 
 // facebedTestImage is comfortably above redirectorMinMediaSize.
@@ -85,6 +88,56 @@ func serveFacebed(t *testing.T, fixture string, mediaHandler http.HandlerFunc) *
 func serveFacebedImage(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "image/jpeg")
 	_, _ = w.Write(facebedTestImage)
+}
+
+// serveFacebedHTML serves page for every path.
+func serveFacebedHTML(t *testing.T, page string) *facebedTestServer {
+	t.Helper()
+
+	result := &facebedTestServer{}
+	result.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		result.mu.Lock()
+		result.requests = append(result.requests, r)
+		result.mu.Unlock()
+
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write([]byte(page))
+	}))
+	t.Cleanup(result.server.Close)
+
+	return result
+}
+
+// facebedTextPageTemplate is facebed's page for a text-only post: author,
+// text and og:url, no media.
+const facebedTextPageTemplate = `<html><head>
+<meta property="og:title" content="%s"/>
+<meta property="og:description" content="%s"/>
+<meta property="og:site_name" content="facebed by pi.kt"/>
+<meta property="og:url" content="%s"/>
+</head></html>`
+
+// facebedTextPage fills facebedTextPageTemplate, escaped like facebed does.
+func facebedTextPage(author, text, canonical string) string {
+	return fmt.Sprintf(facebedTextPageTemplate, html.EscapeString(author), html.EscapeString(text), html.EscapeString(canonical))
+}
+
+// facebedKeptText returns the one text item a lastResortError keeps.
+func facebedKeptText(t *testing.T, media []*MediaInfo, err error) *MediaInfo {
+	t.Helper()
+
+	kept := lastResortMediaOf(nil, err)
+
+	if (len(media) != 0) || (len(kept) != 1) || (kept[0].Type != MediaTypeText) || (kept[0].Filename != "") {
+		t.Fatalf("want 1 text item kept as a last resort, got %d item(s), %d kept, %v", len(media), len(kept), err)
+	}
+
+	return kept[0]
+}
+
+// facebedMessage is the message the sender builds from a text item.
+func facebedMessage(item *MediaInfo) string {
+	return fmt.Sprintf("%s%s", item.Caption, FormatOriginalLink(item.URL))
 }
 
 func newTestFacebedExtractor(t *testing.T, server *facebedTestServer) *FacebookFacebedExtractor {
@@ -234,7 +287,7 @@ func TestParseFacebedPhotoPage(t *testing.T) {
 		t.Errorf("photos %v, want [%s]", post.Photos, wantPhoto)
 	}
 
-	if (post.HasVideo == true) || (checkFacebedPhotoPost(post) != nil) {
+	if (post.HasVideo == true) || (checkFacebedPost(post, facebedTestPhotoURL) != nil) {
 		t.Errorf("a photo post must pass the photo check")
 	}
 }
@@ -270,7 +323,7 @@ func TestParseFacebedVideoPageHasNoPhoto(t *testing.T) {
 		t.Fatalf("want a parsed video post, got %+v %v", post, err)
 	}
 
-	if errors.Is(checkFacebedPhotoPost(post), errFacebedNoPhoto) == false {
+	if errors.Is(checkFacebedPost(post, facebedTestReelURL), errFacebedNoPhoto) == false {
 		t.Fatalf("a video post must fail the photo check")
 	}
 }
@@ -382,7 +435,7 @@ func TestFacebedExtractorDownloadsEveryDistinctPhoto(t *testing.T) {
 	}
 }
 
-func TestFacebedExtractorFailsWithoutAPhoto(t *testing.T) {
+func TestFacebedExtractorFailsWithoutAnythingToSend(t *testing.T) {
 	cases := []struct {
 		name    string
 		fixture string
@@ -390,7 +443,12 @@ func TestFacebedExtractorFailsWithoutAPhoto(t *testing.T) {
 		wantErr error
 	}{
 		{name: "login card", fixture: "facebed_login.html", url: facebedTestPhotoURL, wantErr: errFacebedLoginCard},
+		{name: "login card on a text post link", fixture: "facebed_login.html", url: facebedTestTextURL, wantErr: errFacebedLoginCard},
 		{name: "video post", fixture: "facebed_video.html", url: facebedTestReelURL, wantErr: errFacebedNoPhoto},
+		{name: "post without text", fixture: "facebed_text_empty.html", url: facebedTestTextURL, wantErr: errFacebedEmptyPost},
+		{name: "photo link answered without a photo", fixture: "facebed_text.html", url: "https://www.facebook.com/photo/?fbid=10117699115562331", wantErr: errFacebedNoPhoto},
+		{name: "reel link answered without a video", fixture: "facebed_text.html", url: "https://www.facebook.com/reel/10117699115562331", wantErr: errFacebedNoPhoto},
+		{name: "text page about another post", fixture: "facebed_text.html", url: "https://www.facebook.com/zuck/posts/10117699115562399", wantErr: errFacebedWrongPost},
 	}
 
 	for _, testCase := range cases {
@@ -408,6 +466,249 @@ func TestFacebedExtractorFailsWithoutAPhoto(t *testing.T) {
 				t.Errorf("a post without a photo is not an outage, tracker holds %d", got)
 			}
 		})
+	}
+}
+
+func TestFacebedExtractorKeepsATextPostAsALastResort(t *testing.T) {
+	// facebed_text.html is facebed's answer for Zuckerberg's text-only post
+	// 10117699115562331, captured from the server.
+	urls := []string{
+		facebedTestTextURL,
+		"https://www.facebook.com/zuck/posts/pfbid02ty1Jsag7Wgrmh2iSNha2inTsrjgUGz382EzwvSfUHHXPLp1h9xBpx1UcurKj4EnRl",
+		"https://www.facebook.com/zuck/posts/will-cathcart-just-announced/10117699115562331/",
+		"https://www.facebook.com/permalink.php?story_fbid=10117699115562331&id=4",
+		"https://m.facebook.com/story.php?story_fbid=10117699115562331&id=4&mibextid=x",
+		facebedTestShareURL,
+	}
+
+	for _, postURL := range urls {
+		t.Run(postURL, func(t *testing.T) {
+			isolateFacebedTracker(t)
+			server := serveFacebed(t, "facebed_text.html", serveFacebedImage)
+
+			media, err := newTestFacebedExtractor(t, server).ExtractMedia(context.Background(), postURL)
+			item := facebedKeptText(t, media, err)
+
+			if item.URL != postURL {
+				t.Fatalf("unexpected item %+v", item)
+			}
+
+			if strings.HasPrefix(item.Caption, "📘 Mark Zuckerberg\n\nWill Cathcart just announced that he&#39;s stepping down") == false {
+				t.Errorf("caption %q", item.Caption)
+			}
+
+			if strings.HasSuffix(item.Caption, "\n\nKunal Shah will join Meta as WhatsApp&#39;s next leader. Kunal built CRED into one of India&#39;s most important technology companies, and he brings the kind of builder mentality and global perspective that will serve him well in running the world&#39;s biggest messaging app. I look forward to working with Kunal to continue to make WhatsApp the best service for billions of people and millions of businesses.") == false {
+				t.Errorf("text not kept whole or marked cut: %q", item.Caption)
+			}
+
+			if got := len(server.requested()); got != 1 {
+				t.Errorf("want only the page request, got %d", got)
+			}
+
+			if got := probeTrackerFailures(facebedServiceName); got != 0 {
+				t.Errorf("a text post recorded %d failure(s)", got)
+			}
+		})
+	}
+}
+
+func TestFacebedExtractorMarksTextFacebedCut(t *testing.T) {
+	// facebed_text_cut.html holds the first 1024 code points of a
+	// 1263-character post, cut mid-sentence ("We are ").
+	isolateFacebedTracker(t)
+	postURL := "https://www.facebook.com/zuck/posts/10117484990869931"
+	server := serveFacebed(t, "facebed_text_cut.html", serveFacebedImage)
+
+	media, err := newTestFacebedExtractor(t, server).ExtractMedia(context.Background(), postURL)
+	item := facebedKeptText(t, media, err)
+
+	if strings.HasSuffix(item.Caption, "new open source models. We are…") == false {
+		t.Errorf("cut text without the marker: %q", item.Caption)
+	}
+}
+
+func TestFacebedTextOnlyAnswerMustNameAPost(t *testing.T) {
+	// Links without a comparable id, answered with each og:url.
+	links := []string{
+		facebedTestShareURL,
+		"https://www.facebook.com/share/1GdMNgXLSG/",
+		"https://www.facebook.com/zuck/posts/pfbid02ty1Jsag7Wgrmh2iSNha2inTsrjgUGz382EzwvSfUHHXPLp1h9xBpx1UcurKj4EnRl",
+	}
+	cases := []struct {
+		canonical string
+		wantPost  bool
+	}{
+		{canonical: "https://www.facebook.com/zuck/posts/10117699115562331", wantPost: true},
+		{canonical: "https://www.facebook.com/permalink.php?story_fbid=10117699115562331&id=4", wantPost: true},
+		{canonical: "https://www.facebook.com/story.php?story_fbid=737696361942776&id=100071072569717", wantPost: true},
+		{canonical: "https://www.facebook.com/photo?fbid=29713410154913540", wantPost: true},
+		{canonical: "https://www.facebook.com/groups/1495321534752609/posts/1796616717956421", wantPost: true},
+		{canonical: "https://www.facebook.com/zuck", wantPost: false},
+		{canonical: "https://www.facebook.com/profile.php?id=4", wantPost: false},
+		{canonical: "https://www.facebook.com/groups/1495321534752609/", wantPost: false},
+		{canonical: "https://www.facebook.com/", wantPost: false},
+		{canonical: "https://www.facebook.com/share/p/1AsuFXfMVm/", wantPost: false},
+		{canonical: "https://www.facebook.com/zuck/posts/", wantPost: false},
+		{canonical: "https://www.facebook.com/reel/588109690402315", wantPost: false},
+	}
+
+	for _, link := range links {
+		for _, testCase := range cases {
+			t.Run(fmt.Sprintf("%s answered with %s", link, testCase.canonical), func(t *testing.T) {
+				isolateFacebedTracker(t)
+				page := facebedTextPage("Mark Zuckerberg", "Some text", testCase.canonical)
+				server := serveFacebedHTML(t, page)
+
+				media, err := newTestFacebedExtractor(t, server).ExtractMedia(context.Background(), link)
+
+				if testCase.wantPost == true {
+					facebedKeptText(t, media, err)
+				}
+
+				if (testCase.wantPost == false) && ((errors.Is(err, errFacebedWrongPost) == false) || (len(media) != 0) || (lastResortMediaOf(nil, err) != nil)) {
+					t.Fatalf("want the wrong-post error, got %d item(s) %v", len(media), err)
+				}
+
+				if got := probeTrackerFailures(facebedServiceName); got != 0 {
+					t.Errorf("tracker holds %d failure(s)", got)
+				}
+			})
+		}
+	}
+}
+
+func TestFacebedTextPostKeepsAWholePostOfFacebedLength(t *testing.T) {
+	// 1024 code points (facebed's cut) of characters that escape long or
+	// take two UTF-16 units: everything arrives, ended with the marker.
+	cases := []struct {
+		name    string
+		text    string
+		escaped string
+	}{
+		{name: "quotes and emoji", text: strings.Repeat("\"😀", 512), escaped: strings.Repeat("&#34;😀", 512)},
+		{name: "ampersands and apostrophes", text: strings.Repeat("&'", 512), escaped: strings.Repeat("&amp;&#39;", 512)},
+		{name: "emoji", text: strings.Repeat("😀", facebedTextLimit), escaped: strings.Repeat("😀", facebedTextLimit)},
+		{name: "cyrillic", text: strings.Repeat("я", facebedTextLimit), escaped: strings.Repeat("я", facebedTextLimit)},
+	}
+
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			post := facebedPost{Author: "Mark Zuckerberg", Text: testCase.text}
+
+			item := facebedTextPost(post, facebedTestTextURL)[0]
+			want := fmt.Sprintf("📘 Mark Zuckerberg\n\n%s%s", testCase.escaped, facebedTruncationMarker)
+
+			if item.Caption != want {
+				t.Fatalf("caption cut or changed: %d bytes, want %d", len(item.Caption), len(want))
+			}
+
+			if length := telegramTextLength(facebedMessage(item)); length > telegramMessageLimit {
+				t.Fatalf("message is %d Telegram units, above %d", length, telegramMessageLimit)
+			}
+		})
+	}
+}
+
+func TestFacebedTextPostCountsFacebedCutBeforeNormalising(t *testing.T) {
+	cases := []struct {
+		name      string
+		text      string
+		wantCut   bool
+		wantStart string
+	}{
+		// 1024 code points as facebed sent them, 768 once CRLF is LF.
+		{name: "at the cut with CRLF", text: strings.Repeat("ab\r\n", 256), wantCut: true},
+		{name: "one below the cut with CRLF", text: strings.Repeat("ab\r\n", 255) + "abc", wantCut: false},
+		{name: "at the cut", text: strings.Repeat("x", facebedTextLimit), wantCut: true},
+		{name: "one below the cut", text: strings.Repeat("x", (facebedTextLimit - 1)), wantCut: false},
+	}
+
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			post := facebedPost{Author: "A", Text: testCase.text}
+
+			caption := facebedTextPost(post, facebedTestTextURL)[0].Caption
+			hasMarker := strings.HasSuffix(caption, facebedTruncationMarker)
+
+			if hasMarker != testCase.wantCut {
+				t.Fatalf("marker %v, want %v: %q", hasMarker, testCase.wantCut, caption[(len(caption)-20):])
+			}
+
+			if strings.Contains(caption, "\r") == true {
+				t.Fatalf("CRLF not normalised")
+			}
+		})
+	}
+}
+
+func TestFitFacebedTextMessageCutsOnlyPastTheLimit(t *testing.T) {
+	post := facebedPost{Author: "Café & <Bar>", Text: strings.Repeat("Привет & «мир» 😀 ", 20) + "end-of-post"}
+	full := fitFacebedTextMessage(post, facebedTestTextURL, telegramMessageLimit)
+	fullItem := &MediaInfo{Caption: full, URL: facebedTestTextURL}
+	fullLength := telegramTextLength(facebedMessage(fullItem))
+	cases := []struct {
+		name       string
+		limit      int
+		wantWhole  bool
+		wantLength int
+	}{
+		{name: "one above", limit: (fullLength + 1), wantWhole: true, wantLength: fullLength},
+		{name: "exactly at the limit", limit: fullLength, wantWhole: true, wantLength: fullLength},
+		// The marker takes one unit: two ASCII characters go for it.
+		{name: "one below", limit: (fullLength - 1), wantWhole: false, wantLength: (fullLength - 1)},
+		{name: "two below", limit: (fullLength - 2), wantWhole: false, wantLength: (fullLength - 2)},
+	}
+
+	if strings.HasSuffix(full, "end-of-post") == false {
+		t.Fatalf("a short post must not be cut: %q", full)
+	}
+
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			caption := fitFacebedTextMessage(post, facebedTestTextURL, testCase.limit)
+			item := &MediaInfo{Caption: caption, URL: facebedTestTextURL}
+			length := telegramTextLength(facebedMessage(item))
+			hasMarker := strings.HasSuffix(caption, facebedTruncationMarker)
+
+			if (caption == full) != testCase.wantWhole {
+				t.Fatalf("whole %v, want %v: %q", (caption == full), testCase.wantWhole, caption)
+			}
+
+			if hasMarker == testCase.wantWhole {
+				t.Fatalf("marker %v on a text cut %v", hasMarker, (testCase.wantWhole == false))
+			}
+
+			if length != testCase.wantLength {
+				t.Fatalf("message is %d units, want %d (limit %d)", length, testCase.wantLength, testCase.limit)
+			}
+		})
+	}
+}
+
+func TestFacebedTextKeepsLiteralEntities(t *testing.T) {
+	// The post's own text, as its author typed it.
+	author := "AT&amp;T"
+	text := "Write &lt;br&gt; for a break & AT&amp;T"
+	wantAuthor := "📘 AT&amp;amp;T"
+	wantText := "Write &amp;lt;br&amp;gt; for a break &amp; AT&amp;amp;T"
+	page := facebedTextPage(author, text, facebedTestTextURL)
+
+	post, err := parseFacebedPage(page)
+
+	if (err != nil) || (post.Text != text) || (post.Author != author) {
+		t.Fatalf("parsed %+v %v", post, err)
+	}
+
+	textCaption := facebedTextPost(post, facebedTestTextURL)[0].Caption
+	photoCaption := facebedCaption(post, facebedTestPhotoURL)
+	want := fmt.Sprintf("%s\n\n%s", wantAuthor, wantText)
+
+	if textCaption != want {
+		t.Errorf("text post %q, want %q", textCaption, want)
+	}
+
+	if photoCaption != want {
+		t.Errorf("photo caption %q, want %q", photoCaption, want)
 	}
 }
 
@@ -870,5 +1171,110 @@ func TestCheckFacebedPostMatchesComparesTheAnsweredPostID(t *testing.T) {
 				t.Fatalf("checkFacebedPostMatches(%q, %q) = %v, want match %v", testCase.canonical, testCase.postID, err, testCase.wantMatch)
 			}
 		})
+	}
+}
+
+// newFacebookTestDownloader runs the Facebook chain on server, with ytdlp in
+// place of yt-dlp; calls counts its runs.
+func newFacebookTestDownloader(t *testing.T, server *facebedTestServer, ytdlp func() ([]*MediaInfo, error), calls *int) *SmartDownloader {
+	extractYtDlp := func(mediaURL, platform string) ([]*MediaInfo, error) {
+		*calls++
+
+		return ytdlp()
+	}
+
+	return &SmartDownloader{facebook: newTestFacebedExtractor(t, server), extractYtDlp: extractYtDlp}
+}
+
+func failingYtDlp() ([]*MediaInfo, error) {
+	return nil, errors.New("ERROR: [facebook] 10117699115562331: Cannot parse data")
+}
+
+func TestFacebookChainSendsTheTextPostWhenYtDlpFails(t *testing.T) {
+	for _, postURL := range []string{facebedTestTextURL, facebedTestShareURL} {
+		t.Run(postURL, func(t *testing.T) {
+			isolateFacebedTracker(t)
+			calls := 0
+			server := serveFacebed(t, "facebed_text.html", serveFacebedImage)
+			downloader := newFacebookTestDownloader(t, server, failingYtDlp, &calls)
+
+			media, err := downloader.downloadMediaWithContext(context.Background(), postURL)
+
+			if (err != nil) || (len(media) != 1) || (media[0].Type != MediaTypeText) {
+				t.Fatalf("want the text post, got %d item(s) %v", len(media), err)
+			}
+
+			if strings.HasPrefix(media[0].Caption, "📘 Mark Zuckerberg\n\nWill Cathcart") == false {
+				t.Errorf("caption %q", media[0].Caption)
+			}
+
+			if calls != 1 {
+				t.Errorf("yt-dlp ran %d time(s), want 1", calls)
+			}
+		})
+	}
+}
+
+func TestFacebookChainPrefersTheYtDlpVideoToTheTextPost(t *testing.T) {
+	isolateFacebedTracker(t)
+	calls := 0
+	video := &MediaInfo{Type: MediaTypeVideo, Filename: "video.mp4"}
+	videoYtDlp := func() ([]*MediaInfo, error) {
+		return []*MediaInfo{video}, nil
+	}
+	server := serveFacebed(t, "facebed_text.html", serveFacebedImage)
+	downloader := newFacebookTestDownloader(t, server, videoYtDlp, &calls)
+
+	media, err := downloader.downloadMediaWithContext(context.Background(), facebedTestTextURL)
+
+	if (err != nil) || (len(media) != 1) || (media[0] != video) {
+		t.Fatalf("want the yt-dlp video, got %d item(s) %v", len(media), err)
+	}
+
+	if calls != 1 {
+		t.Errorf("yt-dlp ran %d time(s), want 1", calls)
+	}
+}
+
+func TestFacebookChainSendsPhotosWithoutYtDlp(t *testing.T) {
+	cases := []struct {
+		fixture string
+		url     string
+		want    int
+	}{
+		{fixture: "facebed_photo.html", url: facebedTestPhotoURL, want: 1},
+		{fixture: "facebed_multi.html", url: facebedTestMultiURL, want: 4},
+	}
+
+	for _, testCase := range cases {
+		t.Run(testCase.url, func(t *testing.T) {
+			isolateFacebedTracker(t)
+			calls := 0
+			server := serveFacebed(t, testCase.fixture, serveFacebedImage)
+			downloader := newFacebookTestDownloader(t, server, failingYtDlp, &calls)
+
+			media, err := downloader.downloadMediaWithContext(context.Background(), testCase.url)
+
+			if (err != nil) || (len(media) != testCase.want) || (media[0].Type != MediaTypePhoto) {
+				t.Fatalf("want %d photo(s), got %d %v", testCase.want, len(media), err)
+			}
+
+			if calls != 0 {
+				t.Errorf("yt-dlp ran %d time(s) for a photo post", calls)
+			}
+		})
+	}
+}
+
+func TestFacebookChainFailsWhenNothingIsFound(t *testing.T) {
+	isolateFacebedTracker(t)
+	calls := 0
+	server := serveFacebed(t, "facebed_login.html", serveFacebedImage)
+	downloader := newFacebookTestDownloader(t, server, failingYtDlp, &calls)
+
+	media, err := downloader.downloadMediaWithContext(context.Background(), facebedTestTextURL)
+
+	if (err == nil) || (len(media) != 0) || (calls != 1) {
+		t.Fatalf("want a failure after yt-dlp, got %d item(s), %d yt-dlp run(s), %v", len(media), calls, err)
 	}
 }
