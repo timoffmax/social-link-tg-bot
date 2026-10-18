@@ -69,6 +69,28 @@ func facebookExtractionStrategy(rawURL string) *ExtractionStrategy {
 	return result
 }
 
+// youtubeShortsStrategy is the chain of Shorts (the only videos detected):
+// the home relay then the paid Apify downloader when the relay is usable
+// for YouTube (isRelayUsableFor, the same check that builds its extractor),
+// else yt-dlp (YouTube blocks it from datacenter IPs since 2026-08) then
+// Apify.
+func youtubeShortsStrategy() *ExtractionStrategy {
+	methods := []ExtractionMethod{MethodYtDlp, MethodYouTubeApify}
+	isRelayOn := isRelayUsableFor(relayPlatformYouTube)
+
+	// With the relay configured the server's yt-dlp stays out of the chain
+	// even while the relay is down or disabled on its side (the owner's
+	// decision): it has not fetched a Short from the datacenter IP since
+	// 2026-08, so it would only spend chain time before Apify.
+	if isRelayOn == true {
+		methods = []ExtractionMethod{MethodYouTubeRelay, MethodYouTubeApify}
+	}
+
+	result := &ExtractionStrategy{Platform: youtubePlatform, Methods: methods, Sequential: true}
+
+	return result
+}
+
 // ExtractionMethod represents a method for extracting media
 type ExtractionMethod int
 
@@ -88,6 +110,7 @@ const (
 	MethodFacebookFacebed
 	MethodStoriesHiker
 	MethodFacebookFacebedVideo
+	MethodYouTubeRelay
 )
 
 // ExtractionStrategy defines the order of methods to try for a platform
@@ -224,17 +247,7 @@ func getPlatformExtractionStrategy(url string) *ExtractionStrategy {
 				HasFixedLink: false,
 			}
 		}
-		// Shorts (the only videos detected): yt-dlp, which YouTube blocks from
-		// datacenter IPs since 2026-08, then the paid Apify downloader.
-		return &ExtractionStrategy{
-			Platform: "youtube",
-			Methods: []ExtractionMethod{
-				MethodYtDlp,
-				MethodYouTubeApify,
-			},
-			HasFixedLink: false,
-			Sequential:   true,
-		}
+		return youtubeShortsStrategy()
 	}
 
 	// Reddit: vxreddit (works from the datacenter IP, resolves /s/ share links,
@@ -346,6 +359,8 @@ func (es *ExtractionStrategy) LogStrategy() {
 			methodNames[i] = "stories-hiker"
 		case MethodFacebookFacebedVideo:
 			methodNames[i] = "facebed-video"
+		case MethodYouTubeRelay:
+			methodNames[i] = "youtube-relay"
 		default:
 			methodNames[i] = "unknown"
 		}

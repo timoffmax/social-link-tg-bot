@@ -23,6 +23,7 @@ type SmartDownloader struct {
 	redditVx     *RedditVxredditExtractor
 	gated        GatedPostProvider
 	youtubeApify *YouTubeApifyExtractor
+	youtubeRelay *YouTubeRelayExtractor
 	storiesApify *InstagramStoriesApifyExtractor
 	storiesHiker *InstagramStoriesHikerExtractor
 	youtubePost  *YouTubePostExtractor
@@ -83,6 +84,7 @@ func NewSmartDownloader() *SmartDownloader {
 		redditVx:     NewRedditVxredditExtractor(tempDir),
 		gated:        NewGatedPostProvider(tempDir),
 		youtubeApify: NewYouTubeApifyExtractor(tempDir),
+		youtubeRelay: NewYouTubeRelayExtractor(tempDir),
 		storiesApify: NewInstagramStoriesApifyExtractor(tempDir),
 		storiesHiker: NewInstagramStoriesHikerExtractor(tempDir),
 		youtubePost:  NewYouTubePostExtractor(tempDir),
@@ -374,6 +376,11 @@ func (sd *SmartDownloader) executeStrategy(
 
 	case MethodYouTubeApify:
 		mediaInfos, err := sd.runExtractorMethod(ctx, strategy, mediaURL, "youtube-apify", sd.youtubeApifyExtract, overallStart, methodStartTime)
+
+		return mediaInfos, err
+
+	case MethodYouTubeRelay:
+		mediaInfos, err := sd.runExtractorMethod(ctx, strategy, mediaURL, "youtube-relay", sd.youtubeRelayExtract, overallStart, methodStartTime)
 
 		return mediaInfos, err
 
@@ -714,6 +721,19 @@ func (sd *SmartDownloader) youtubeApifyExtract(ctx context.Context, mediaURL str
 
 	if sd.youtubeApify != nil {
 		result, err = sd.youtubeApify.ExtractMedia(ctx, mediaURL)
+	}
+
+	return result, err
+}
+
+// youtubeRelayExtract fetches a Short through the home relay when it is
+// configured for YouTube.
+func (sd *SmartDownloader) youtubeRelayExtract(ctx context.Context, mediaURL string) ([]*MediaInfo, error) {
+	var result []*MediaInfo
+	err := errRelayNotConfigured
+
+	if sd.youtubeRelay != nil {
+		result, err = sd.youtubeRelay.ExtractMedia(ctx, mediaURL)
 	}
 
 	return result, err

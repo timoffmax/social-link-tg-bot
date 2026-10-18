@@ -1,10 +1,16 @@
 package config
 
 import (
-	"github.com/joho/godotenv"
+	"errors"
+	"fmt"
+	"net"
+	"net/url"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
+
+	"github.com/joho/godotenv"
 )
 
 const tgBotTokenKey = "TG_BOT_TOKEN"
@@ -514,6 +520,151 @@ func getNonNegativeFloatEnv(key string, defaultValue float64) float64 {
 	if (raw != "") && (err == nil) && (parsed >= 0) {
 		result = parsed
 	}
+
+	return result
+}
+
+// Home relay: a loopback HTTP endpoint (an SSH tunnel to a home machine)
+// that downloads videos for the platforms that wall the server's IP. It is
+// off unless RELAY_URL, RELAY_TOKEN_FILE and RELAY_PLATFORMS are all set.
+const (
+	relayURLKey                = "RELAY_URL"
+	relayTokenFileKey          = "RELAY_TOKEN_FILE"
+	relayPlatformsKey          = "RELAY_PLATFORMS"
+	relayTimeoutSecondsKey     = "RELAY_TIMEOUT_SECONDS"
+	defaultRelayTimeoutSeconds = 45
+	relayPlatformsSeparator    = ","
+	relayURLScheme             = "http"
+	relayURLRootPath           = "/"
+)
+
+// errRelayURLNotLoopback refuses a relay URL that could reach another host.
+var errRelayURLNotLoopback = errors.New("RELAY_URL must be http://<loopback IP>[:port] without a path")
+
+// GetRelayURL returns the relay base URL without a trailing slash, "" when
+// RELAY_URL is unset, and an error (with "") for a URL that is not plain
+// http on a loopback IP: a typo must never send ids and the token to a
+// public host.
+func GetRelayURL() (string, error) {
+	result := ""
+	raw := getStringEnv(relayURLKey, "")
+	var err error
+
+	if raw != "" {
+		result, err = checkRelayURL(raw)
+	}
+
+	return result, err
+}
+
+// checkRelayURL accepts http://<loopback IP>[:port] with an empty or "/"
+// path and nothing else (no user, query or fragment, no host name).
+func checkRelayURL(raw string) (string, error) {
+	result := ""
+	parsed, err := url.Parse(raw)
+	isLoopback := false
+
+	if err == nil {
+		hostname := parsed.Hostname()
+		ip := net.ParseIP(hostname)
+		isLoopback = (ip != nil) && (ip.IsLoopback() == true)
+	}
+
+	isPlain := (err == nil) && (parsed.Scheme == relayURLScheme) && (parsed.User == nil)
+	isPlain = isPlain && (parsed.RawQuery == "") && (parsed.Fragment == "") && (parsed.Opaque == "")
+	hasNoPath := (err == nil) && ((parsed.Path == "") || (parsed.Path == relayURLRootPath))
+	isAccepted := (isPlain == true) && (isLoopback == true) && (hasNoPath == true)
+
+	if isAccepted == true {
+		result = fmt.Sprintf("%s://%s", parsed.Scheme, parsed.Host)
+	}
+
+	if isAccepted == false {
+		err = errRelayURLNotLoopback
+	}
+
+	return result, err
+}
+
+// GetRelayTokenFile returns the path of the file that holds the relay's
+// bearer token; empty turns the relay off.
+func GetRelayTokenFile() string {
+	result := getStringEnv(relayTokenFileKey, "")
+
+	return result
+}
+
+// GetRelayPlatforms returns the platforms (lower case) the bot sends to the
+// relay; none by default.
+func GetRelayPlatforms() []string {
+	raw := getStringEnv(relayPlatformsKey, "")
+	lowered := strings.ToLower(raw)
+	parts := strings.Split(lowered, relayPlatformsSeparator)
+	result := make([]string, 0, len(parts))
+
+	for _, part := range parts {
+		name := strings.TrimSpace(part)
+
+		if name != "" {
+			result = append(result, name)
+		}
+	}
+
+	return result
+}
+
+// IsRelayConfigured reports whether the relay has a valid loopback URL and
+// a token file.
+func IsRelayConfigured() bool {
+	relayURL, err := GetRelayURL()
+	tokenFile := GetRelayTokenFile()
+	result := (err == nil) && (relayURL != "") && (tokenFile != "")
+
+	return result
+}
+
+// IsRelayEnabledFor reports whether the relay is configured (a loopback
+// URL and a token file) and switched on for platform.
+func IsRelayEnabledFor(platform string) bool {
+	platforms := GetRelayPlatforms()
+	isConfigured := IsRelayConfigured()
+	result := (isConfigured == true) && (slices.Contains(platforms, platform) == true)
+
+	return result
+}
+
+// MinRelayTimeoutSeconds is the shortest relay call that can reach the
+// relay at all: its 10 s minimum deadline plus the 5 s transfer margin.
+const MinRelayTimeoutSeconds = 15
+
+// RelayTimeoutSeconds is RELAY_TIMEOUT_SECONDS as configured (Raw: the
+// default when unset, 0 or invalid) and as used (Clamped: at least
+// MinRelayTimeoutSeconds).
+type RelayTimeoutSeconds struct {
+	Raw     int
+	Clamped int
+}
+
+// IsRaised reports a configured value below MinRelayTimeoutSeconds that
+// was raised to it.
+func (t RelayTimeoutSeconds) IsRaised() bool {
+	result := (t.Clamped != t.Raw)
+
+	return result
+}
+
+// GetRelayTimeoutSeconds returns the longest time one relay call may take
+// (default 45 s, at least MinRelayTimeoutSeconds), raw and clamped; the
+// chain's remaining time can shorten it.
+func GetRelayTimeoutSeconds() RelayTimeoutSeconds {
+	raw := getIntEnv(relayTimeoutSecondsKey, defaultRelayTimeoutSeconds)
+
+	if raw == 0 {
+		raw = defaultRelayTimeoutSeconds
+	}
+
+	clamped := max(raw, MinRelayTimeoutSeconds)
+	result := RelayTimeoutSeconds{Raw: raw, Clamped: clamped}
 
 	return result
 }

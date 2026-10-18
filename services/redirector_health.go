@@ -28,9 +28,10 @@ const (
 	kkTikTokProbeVideoID      = "7633407742224469268"
 )
 
-// CheckRedirectorHealth probes each kk redirector, vxreddit and facebed once
-// and feeds the shared outage tracker, so repeated probe failures alert the
-// admin and a later success sends a recovery notice. It also reads the free
+// CheckRedirectorHealth probes each kk redirector, vxreddit, facebed and the
+// home relay (when configured) once and feeds the shared outage tracker, so
+// repeated probe failures alert the admin and a later success sends a
+// recovery notice. It also reads the free
 // HikerAPI balance (low-balance alert, skip while empty) when HikerAPI is on.
 func CheckRedirectorHealth() {
 	probeRedirector(
@@ -49,6 +50,7 @@ func CheckRedirectorHealth() {
 
 	probeVxreddit()
 	probeFacebed()
+	probeRelay()
 	CheckHikerBalance()
 }
 
