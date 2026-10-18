@@ -839,13 +839,14 @@ func GetReport(id int) (*Report, error) {
 	return &r, err
 }
 
-// ResolveReport marks a report as resolved
+// ResolveReport marks a report as resolved and records when; a report
+// resolved before keeps its resolve time
 func ResolveReport(id int) error {
 	if !IsDBInitialized() {
 		return fmt.Errorf("database not initialized")
 	}
 
-	query := `UPDATE reports SET resolved = true WHERE id = $1`
+	query := `UPDATE reports SET resolved = true, resolved_at = COALESCE(resolved_at, now()) WHERE id = $1`
 	_, err := GetDB().Exec(query, id)
 
 	return err

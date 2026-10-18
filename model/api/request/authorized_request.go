@@ -3,6 +3,7 @@ package request
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -42,17 +43,37 @@ type AuthorizedRequest struct {
 	Payload            interface{} `json:"payload"`
 }
 
+// ResponseInfo describes Telegram's answer. StatusCode is 400 for any answer
+// with ok=false and 0 when there was no answer; HTTPStatus is the answer's
+// real HTTP status (e.g. 429, 502) and RetryAfter the seconds Telegram asks
+// to wait after a 429.
 type ResponseInfo struct {
 	StatusCode int         `json:"status_code"`
+	HTTPStatus int         `json:"http_status"`
+	RetryAfter int         `json:"retry_after"`
 	Message    string      `json:"message"`
 	Payload    interface{} `json:"payload"`
 }
 
 type AbstractTgPayload struct {
-	Ok          bool        `json:"ok"`
-	Description string      `json:"description"`
-	Result      interface{} `json:"result"`
+	Ok          bool                `json:"ok"`
+	Description string              `json:"description"`
+	Parameters  *ResponseParameters `json:"parameters"`
+	Result      interface{}         `json:"result"`
 }
+
+// ResponseParameters are the parameters of a failed answer.
+type ResponseParameters struct {
+	RetryAfter int `json:"retry_after"`
+}
+
+// ErrNotSent wraps the error of a request that never left the bot (it could
+// not be built), so Telegram can not have received it.
+var ErrNotSent = errors.New("request not sent")
+
+// ClientTimeout caps one Telegram API call, from sending the request to
+// reading the answer.
+const ClientTimeout = 120 * time.Second
 
 type MediaPayload interface {
 	GetFilePath() string
@@ -83,24 +104,31 @@ func (r *AuthorizedRequest) Send(respPayload interface{}) (ResponseInfo, error) 
 	request, err := prepareRequest(r)
 	err = WithoutRequestURL(r.ApiMethod, err)
 
+	if nil != err {
+		log.Printf("❌ [TG-API] %s not sent: %v", r.ApiMethod, err)
+		err = fmt.Errorf("%w: %w", ErrNotSent, err)
+	}
+
 	if nil == err {
 		response, sendErr := sendRequest(request)
 		sendErr = WithoutRequestURL(r.ApiMethod, sendErr)
-
-		// A transport failure (timeout, dropped connection) has no response to
-		// parse: report it with StatusCode 0, since Telegram may or may not
-		// have received the request.
-		if nil != sendErr {
-			log.Printf("❌ [TG-API] %s failed without a response: %v", r.ApiMethod, sendErr)
-			err = sendErr
-		}
 
 		if nil != response {
 			defer response.Body.Close()
 		}
 
 		if nil == sendErr {
-			result = parseResponse(response, nil, &respPayload)
+			var readErr error
+			result, readErr = parseResponse(response, nil, &respPayload)
+			sendErr = answerReadError(r.ApiMethod, readErr)
+		}
+
+		// A transport failure (timeout, dropped connection, an answer cut off
+		// before its end) leaves StatusCode 0, since Telegram may or may not
+		// have received the request.
+		if nil != sendErr {
+			log.Printf("❌ [TG-API] %s failed without a response: %v", r.ApiMethod, sendErr)
+			err = sendErr
 		}
 
 		// Return error for non-200 status codes
@@ -354,7 +382,7 @@ func prepareRequestURL(r *AuthorizedRequest) string {
 // telegramHTTPClient is a shared HTTP client for all Telegram API calls.
 // Reusing a single client enables TCP connection pooling and prevents hanging requests.
 var telegramHTTPClient = &http.Client{
-	Timeout: 120 * time.Second,
+	Timeout: ClientTimeout,
 	Transport: &http.Transport{
 		MaxIdleConns:        20,
 		MaxIdleConnsPerHost: 10,
@@ -369,11 +397,13 @@ func sendRequest(r *http.Request) (*http.Response, error) {
 /*
 FIll the response general structure with the received response information
 */
-func parseResponse(response *http.Response, error error, respPayload *interface{}) ResponseInfo {
+func parseResponse(response *http.Response, error error, respPayload *interface{}) (ResponseInfo, error) {
 	result := ResponseInfo{}
-	tgPayload := bodyToTgPayload(response, respPayload)
+	tgPayload, readErr := bodyToTgPayload(response, respPayload)
 
 	result.StatusCode = response.StatusCode
+	result.HTTPStatus = response.StatusCode
+	result.RetryAfter = retryAfter(tgPayload)
 
 	// Check Telegram API's 'ok' field for API-level errors
 	if !tgPayload.Ok {
@@ -392,23 +422,52 @@ func parseResponse(response *http.Response, error error, respPayload *interface{
 		result.Message = error.Error()
 	}
 
+	// An answer cut off before its end is no answer: StatusCode stays 0.
+	if nil != readErr {
+		result = ResponseInfo{HTTPStatus: response.StatusCode}
+	}
+
+	return result, readErr
+}
+
+// answerReadError names the method of an answer that could not be read to
+// its end (timeout, dropped connection); nil when it was read.
+func answerReadError(apiMethod string, readErr error) error {
+	var result error
+
+	if nil != readErr {
+		result = fmt.Errorf("%s answer cut off: %w", apiMethod, readErr)
+	}
+
+	return result
+}
+
+// retryAfter returns the seconds a failed answer asks to wait, 0 for none.
+func retryAfter(tgPayload AbstractTgPayload) int {
+	result := 0
+
+	if nil != tgPayload.Parameters {
+		result = tgPayload.Parameters.RetryAfter
+	}
+
 	return result
 }
 
 /*
-Parses response body like a standard JSON Telegram response
+Parses response body like a standard JSON Telegram response; the error is a
+failure to read the body to its end
 */
-func bodyToTgPayload(response *http.Response, respPayload *interface{}) AbstractTgPayload {
+func bodyToTgPayload(response *http.Response, respPayload *interface{}) (AbstractTgPayload, error) {
 	result := AbstractTgPayload{
 		Result: respPayload,
 	}
 
-	body, _ := ioutil.ReadAll(response.Body)
+	body, readErr := ioutil.ReadAll(response.Body)
 	err := json.Unmarshal(body, &result)
 
 	if nil != err {
 		result.Result = body
 	}
 
-	return result
+	return result, readErr
 }

@@ -41,7 +41,9 @@ func Run() {
 		cancel()
 	}()
 
+	startReportReplyOutbox(ctx)
 	listenForUpdates(ctx)
+	waitForReportReplyOutbox()
 	log.Printf("👋 Bot stopped gracefully")
 }
 

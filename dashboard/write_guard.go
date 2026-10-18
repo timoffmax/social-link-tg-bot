@@ -10,9 +10,9 @@ import (
 	"strings"
 )
 
-// Request headers and values a blog write must carry. A cross-site page
-// cannot send the custom header without a CORS preflight, which the
-// dashboard never answers.
+// Request headers and values a blog or report write must carry. A
+// cross-site page cannot send the custom header without a CORS preflight,
+// which the dashboard never answers.
 const (
 	headerOrigin           = "Origin"
 	headerForwardedProto   = "X-Forwarded-Proto"
@@ -25,7 +25,7 @@ const (
 	forwardedListSeparator = ","
 )
 
-// maxRequestBody caps a blog write's JSON body (64 KiB).
+// maxRequestBody caps a write's JSON body (64 KiB).
 const maxRequestBody = 64 << 10
 
 // Error messages of rejected writes.

@@ -1,7 +1,6 @@
 import {
   useEffect,
   useId,
-  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -23,14 +22,11 @@ import {
 } from '../api';
 import {
   errorField,
-  FORMAT_TOOLS,
   isSameDraft,
   TITLE_MAX_CHARS,
   titleLength,
-  wrapSelection,
   type Draft,
   type DraftField,
-  type FormatTool,
 } from '../editing';
 import { formatClock, formatNumber, formatTimestamp } from '../format';
 import type { PostRef } from '../hooks';
@@ -43,6 +39,7 @@ import {
   type TgParseResult,
 } from '../telegramHtml';
 import { PublishBadge } from './Bits';
+import { LengthCounter, Toolbar, useFormatTools } from './TelegramEditing';
 import { TelegramPreview } from './TelegramPreview';
 
 type Busy = 'save' | 'publish' | 'delete' | 'reload';
@@ -56,7 +53,6 @@ interface FieldError {
 const EMPTY_DRAFT: Draft = { title: '', content: '' };
 const HTTP_BAD_REQUEST = 400;
 const NEW_POST: PostRef = 'new';
-const TOOL_SHORTCUTS: Record<string, string> = { b: 'bold', i: 'italic', u: 'underline' };
 const SAVE_SHORTCUT = 's';
 const COUNTER_HINT = `Characters Telegram counts (the text without tags, entities decoded). The limit is below Telegram’s ${TELEGRAM_TEXT_LIMIT} because the bot’s Broadcast preview adds up to ${BROADCAST_FRAME_LENGTH} around the post.`;
 const GONE_MESSAGE = 'This post no longer exists: it was deleted elsewhere. Copy your text if you still need it.';
@@ -523,49 +519,11 @@ interface ContentFieldProps {
 }
 
 function ContentField({ id, editor, parsed, textarea, error }: ContentFieldProps) {
-  const pendingSelection = useRef<[number, number] | null>(null);
   const problem = parsed.problem;
   const isOver = (problem === null) && (parsed.length > BROADCAST_CONTENT_LIMIT);
   const describedBy = `${id}-problems`;
-
-  useLayoutEffect(() => {
-    const element = textarea.current;
-    const selection = pendingSelection.current;
-
-    if ((element !== null) && (selection !== null)) {
-      element.setSelectionRange(selection[0], selection[1]);
-      pendingSelection.current = null;
-    }
-  }, [editor.draft.content, textarea]);
-
-  const applyTool = (tool: FormatTool) => {
-    const element = textarea.current;
-
-    if ((element !== null) && (editor.isCreating === false)) {
-      const { selectionStart, selectionEnd, value } = element;
-      const wrapped = wrapSelection(value, selectionStart, selectionEnd, tool);
-      pendingSelection.current = [wrapped.selectionStart, wrapped.selectionEnd];
-      element.focus();
-      // insertText keeps the browser's undo history; the fallback sets the value directly.
-      const inserted = document.execCommand('insertText', false, wrapped.insert);
-
-      if (inserted === false) {
-        const next = `${value.slice(0, selectionStart)}${wrapped.insert}${value.slice(selectionEnd)}`;
-        editor.edit({ ...editor.draft, content: next });
-      }
-    }
-  };
-
-  const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
-    const toolId = TOOL_SHORTCUTS[event.key.toLowerCase()];
-    const tool = FORMAT_TOOLS.find((candidate) => (candidate.id === toolId));
-    const isShortcut = (event.ctrlKey || event.metaKey) && (event.altKey === false) && (tool !== undefined);
-
-    if (isShortcut && (tool !== undefined)) {
-      event.preventDefault();
-      applyTool(tool);
-    }
-  };
+  const setContent = (content: string) => editor.edit({ ...editor.draft, content });
+  const tools = useFormatTools(textarea, editor.draft.content, setContent, editor.isCreating);
 
   const showProblem = () => {
     const element = textarea.current;
@@ -581,9 +539,9 @@ function ContentField({ id, editor, parsed, textarea, error }: ContentFieldProps
     <div className="field">
       <div className="field__label-row">
         <label className="field__label" htmlFor={id}>Content</label>
-        <LengthCounter parsed={parsed} />
+        <LengthCounter parsed={parsed} limit={BROADCAST_CONTENT_LIMIT} hint={COUNTER_HINT} />
       </div>
-      <Toolbar controls={id} disabled={editor.isCreating} onApply={applyTool} />
+      <Toolbar controls={id} disabled={editor.isCreating} onApply={tools.applyTool} />
       <textarea
         id={id}
         ref={textarea}
@@ -591,7 +549,7 @@ function ContentField({ id, editor, parsed, textarea, error }: ContentFieldProps
         rows={14}
         value={editor.draft.content}
         onChange={(event) => editor.edit({ ...editor.draft, content: event.target.value })}
-        onKeyDown={onKeyDown}
+        onKeyDown={tools.onKeyDown}
         readOnly={editor.isCreating}
         aria-invalid={(problem !== null) || isOver || (error !== null)}
         aria-describedby={describedBy}
@@ -612,49 +570,6 @@ function ContentField({ id, editor, parsed, textarea, error }: ContentFieldProps
         )}
         {(error !== null) && <p className="field__error" role="alert">Not saved: {error}</p>}
       </div>
-    </div>
-  );
-}
-
-function LengthCounter({ parsed }: { parsed: TgParseResult }) {
-  const isCounted = (parsed.problem === null);
-  const isOver = isCounted && (parsed.length > BROADCAST_CONTENT_LIMIT);
-  const shown = isCounted ? formatNumber(parsed.length) : '–';
-
-  return (
-    <span
-      className={isOver ? 'field__count is-over' : 'field__count'}
-      title={COUNTER_HINT}
-    >
-      {shown} / {formatNumber(BROADCAST_CONTENT_LIMIT)}
-    </span>
-  );
-}
-
-interface ToolbarProps {
-  controls: string;
-  disabled: boolean;
-  onApply: (tool: FormatTool) => void;
-}
-
-function Toolbar({ controls, disabled, onApply }: ToolbarProps) {
-  return (
-    <div className="toolbar" role="toolbar" aria-label="Formatting" aria-controls={controls}>
-      {FORMAT_TOOLS.map((tool) => (
-        <button
-          key={tool.id}
-          type="button"
-          className={`toolbar__button toolbar__button--${tool.id}`}
-          title={`${tool.title}: ${tool.open}…${tool.close}`}
-          aria-label={tool.title}
-          // Keep the textarea's selection: a mouse press would otherwise move focus first.
-          onMouseDown={(event) => event.preventDefault()}
-          onClick={() => onApply(tool)}
-          disabled={disabled}
-        >
-          {tool.label}
-        </button>
-      ))}
     </div>
   );
 }

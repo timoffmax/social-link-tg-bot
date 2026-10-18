@@ -17,8 +17,8 @@ const (
 	blogPostPrefix   = "/api/blog-posts/"
 	publishedSegment = "published"
 	pathSeparator    = "/"
-	blogIDBase       = 10
-	blogIDBits       = 32
+	rowIDBase        = 10
+	rowIDBits        = 32
 )
 
 // Allow headers of the blog routes.
@@ -60,13 +60,15 @@ const (
 	errPublishedRequired = "published is required: true or false"
 )
 
-// blogHandler serves one method of a blog route; id is 0 for the list.
-type blogHandler func(w http.ResponseWriter, r *http.Request, id int64)
+// routeHandler serves one method of a write route (blog posts, reports);
+// id is the row of the path, 0 for a collection.
+type routeHandler func(w http.ResponseWriter, r *http.Request, id int64)
 
-// blogRoute is a matched blog path with the handlers of its methods.
-type blogRoute struct {
+// writeRoute is a matched blog or report path with the handlers of its
+// methods.
+type writeRoute struct {
 	id       int64
-	handlers map[string]blogHandler
+	handlers map[string]routeHandler
 	allow    string
 }
 
@@ -91,16 +93,16 @@ type blogPublishedRequest struct {
 
 // newBlogRoutes binds the blog handlers of the server.
 func (s *Server) newBlogRoutes() {
-	s.blogCollection = blogRoute{
-		handlers: map[string]blogHandler{
+	s.blogCollection = writeRoute{
+		handlers: map[string]routeHandler{
 			http.MethodGet:  s.handleListBlogPosts,
 			http.MethodHead: s.handleListBlogPosts,
 			http.MethodPost: s.handleCreateBlogPost,
 		},
 		allow: allowBlogCollection,
 	}
-	s.blogPost = blogRoute{
-		handlers: map[string]blogHandler{
+	s.blogPost = writeRoute{
+		handlers: map[string]routeHandler{
 			http.MethodGet:    s.handleGetBlogPost,
 			http.MethodHead:   s.handleGetBlogPost,
 			http.MethodPut:    s.handleUpdateBlogPost,
@@ -108,15 +110,15 @@ func (s *Server) newBlogRoutes() {
 		},
 		allow: allowBlogPost,
 	}
-	s.blogPublished = blogRoute{
-		handlers: map[string]blogHandler{http.MethodPut: s.handleSetBlogPostPublished},
+	s.blogPublished = writeRoute{
+		handlers: map[string]routeHandler{http.MethodPut: s.handleSetBlogPostPublished},
 		allow:    allowBlogPublished,
 	}
 }
 
 // matchBlogRoute finds the blog route of a path; false for any other path,
 // which then stays GET/HEAD only.
-func (s *Server) matchBlogRoute(urlPath string) (blogRoute, bool) {
+func (s *Server) matchBlogRoute(urlPath string) (writeRoute, bool) {
 	result := s.blogCollection
 	isMatch := (urlPath == blogPostsPath)
 	rest, isItem := strings.CutPrefix(urlPath, blogPostPrefix)
@@ -129,9 +131,9 @@ func (s *Server) matchBlogRoute(urlPath string) (blogRoute, bool) {
 }
 
 // matchBlogItem matches "{id}" and "{id}/published".
-func (s *Server) matchBlogItem(rest string) (blogRoute, bool) {
+func (s *Server) matchBlogItem(rest string) (writeRoute, bool) {
 	idText, suffix, hasSuffix := strings.Cut(rest, pathSeparator)
-	id, isID := parseBlogPostID(idText)
+	id, isID := parseRowID(idText)
 	result := s.blogPost
 
 	if hasSuffix == true {
@@ -145,18 +147,18 @@ func (s *Server) matchBlogItem(rest string) (blogRoute, bool) {
 	return result, isMatch
 }
 
-// parseBlogPostID accepts a canonical positive SERIAL id ("7", not "07").
-func parseBlogPostID(text string) (int64, bool) {
-	id, err := strconv.ParseInt(text, blogIDBase, blogIDBits)
-	canonical := strconv.FormatInt(id, blogIDBase)
+// parseRowID accepts a canonical positive SERIAL id ("7", not "07").
+func parseRowID(text string) (int64, bool) {
+	id, err := strconv.ParseInt(text, rowIDBase, rowIDBits)
+	canonical := strconv.FormatInt(id, rowIDBase)
 	isValid := (err == nil) && (id > 0) && (canonical == text)
 
 	return id, isValid
 }
 
-// serveBlog checks the method and, for a write, that the dashboard page
-// sent it; blog answers are never cached.
-func (s *Server) serveBlog(w http.ResponseWriter, r *http.Request, route blogRoute) {
+// serveWriteRoute checks the method and, for a write, that the dashboard
+// page sent it; these answers are never cached.
+func (s *Server) serveWriteRoute(w http.ResponseWriter, r *http.Request, route writeRoute) {
 	w.Header().Set(headerCacheControl, cacheNoStore)
 	handler, isAllowed := route.handlers[r.Method]
 	isRead := (r.Method == http.MethodGet) || (r.Method == http.MethodHead)

@@ -74,7 +74,8 @@ const (
 )
 
 // PGStore reads the dashboard data from the bot's PostgreSQL database in
-// read-only transactions; only the blog writes use read-write ones.
+// read-only transactions; only the blog and report writes use read-write
+// ones.
 type PGStore struct {
 	db       *sql.DB
 	timezone string
@@ -145,8 +146,8 @@ func (s *PGStore) readOnly(ctx context.Context, fn func(q readTx) error) error {
 	return err
 }
 
-// writeTx runs the statements of one blog write; only the blog write
-// methods get one.
+// writeTx runs the statements of one blog or report write; only those
+// write methods get one.
 type writeTx struct {
 	readTx
 }
@@ -682,9 +683,9 @@ func loadCredits(q readTx, credits *Credits) error {
 }
 
 // Reports loads the report totals, the weekly counts and the latest
-// reports.
-func (s *PGStore) Reports(ctx context.Context, limit int, weeks int) (Reports, error) {
-	result := Reports{Limit: limit, Weeks: weeks, Weekly: []ReportWeek{}, Latest: []Report{}}
+// reports matching status (open, resolved or all) with their replies.
+func (s *PGStore) Reports(ctx context.Context, limit int, weeks int, status string) (Reports, error) {
+	result := Reports{Limit: limit, Weeks: weeks, Status: status, Weekly: []ReportWeek{}, Latest: []Report{}}
 	now := s.currentTime()
 	err := s.readOnly(ctx, func(q readTx) error {
 		dest := []interface{}{&result.Totals.Open, &result.Totals.Resolved}
@@ -695,7 +696,7 @@ func (s *PGStore) Reports(ctx context.Context, limit int, weeks int) (Reports, e
 		}
 
 		if loadErr == nil {
-			result.Latest, loadErr = loadLatestReports(q, limit)
+			result.Latest, loadErr = loadLatestReports(q, limit, status)
 		}
 
 		return loadErr
@@ -718,28 +719,21 @@ func (s *PGStore) loadReportsWeekly(q readTx, now time.Time, weeks int) ([]Repor
 	return result, err
 }
 
-// loadLatestReports reads the newest reports.
-func loadLatestReports(q readTx, limit int) ([]Report, error) {
+// loadLatestReports reads the newest reports matching status, with their
+// replies.
+func loadLatestReports(q readTx, limit int, status string) ([]Report, error) {
 	result := []Report{}
+	resolvedFilter := reportStatusFilter(status)
 	err := q.rows(latestReportsSQL, func(rows *sql.Rows) error {
-		item := Report{}
-		var createdAt sql.NullTime
-		scanErr := rows.Scan(
-			&item.ID,
-			&createdAt,
-			&item.UserID,
-			&item.Username,
-			&item.FirstName,
-			&item.ChatID,
-			&item.ChatTitle,
-			&item.Message,
-			&item.Resolved,
-		)
-		item.CreatedAt = formatNullTime(createdAt)
+		item, scanErr := scanReport(rows)
 		result = append(result, item)
 
 		return scanErr
-	}, limit)
+	}, limit, resolvedFilter)
+
+	if err == nil {
+		err = attachReportReplies(q, result)
+	}
 
 	return result, err
 }

@@ -12,6 +12,8 @@ type SendMessage struct {
 	Payload         payload.TgPlSendMessage
 	ResponsePayload *response.TgMessage
 	Request         request.AuthorizedRequest
+	Response        request.ResponseInfo
+	Err             error
 }
 
 func NewSendMessage(payload payload.TgPlSendMessage) *SendMessage {
@@ -31,7 +33,7 @@ func NewSendMessage(payload payload.TgPlSendMessage) *SendMessage {
 }
 
 func (service *SendMessage) send() *response.TgMessage {
-	service.Request.Send(service.ResponsePayload)
+	service.Response, service.Err = service.Request.Send(service.ResponsePayload)
 
 	return service.ResponsePayload
 }

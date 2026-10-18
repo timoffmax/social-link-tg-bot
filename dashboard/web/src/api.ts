@@ -185,6 +185,37 @@ export interface ReportWeek {
   resolved: number;
 }
 
+/**
+ * queued: waits for the bot's outbox (again, after a passing refusal); sending: claimed by it; sent;
+ * failed: refused by Telegram or never sent (error says why); unknown: no answer from Telegram, so it
+ * may have been delivered. Failed and unknown replies are never sent again automatically.
+ */
+export type ReplyStatus = 'queued' | 'sending' | 'sent' | 'failed' | 'unknown';
+
+/** dashboard: queued on this page; telegram: sent with /reply in the bot. */
+export type ReplySource = 'dashboard' | 'telegram';
+
+export interface ReportReply {
+  id: number;
+  /** Telegram HTML, sent below the "Reply from the developer" heading. */
+  text: string;
+  source: ReplySource;
+  status: ReplyStatus;
+  /** The bot resolves the report once it has delivered this reply. */
+  resolve_on_send: boolean;
+  /** Sends refused for a passing reason (429, 5xx) so far. */
+  attempts: number;
+  /** A queued reply refused for a passing reason is not sent before this. */
+  next_attempt_at: Timestamp | null;
+  /**
+   * Why a reply is failed or unknown (e.g. "Forbidden: bot was blocked by the user"), or the last
+   * passing refusal of a queued one.
+   */
+  error: string | null;
+  created_at: Timestamp | null;
+  sent_at: Timestamp | null;
+}
+
 export interface Report {
   id: number;
   created_at: Timestamp | null;
@@ -195,14 +226,42 @@ export interface Report {
   chat_title: string;
   message: string;
   resolved: boolean;
+  /** When it was resolved; null when open and for reports resolved before this was recorded. */
+  resolved_at: Timestamp | null;
+  /** Oldest first. */
+  replies: ReportReply[];
 }
+
+export const REPORT_STATUSES = ['open', 'resolved', 'all'] as const;
+export type ReportStatusFilter = (typeof REPORT_STATUSES)[number];
 
 export interface ReportsResponse extends ResponseMeta {
   limit: number;
   weeks: number;
+  /** The filter of latest; totals and weekly always count every report. */
+  status: ReportStatusFilter;
+  /** The heading the bot puts above a reply (Telegram HTML); the reply text follows it. */
+  reply_prefix: string;
+  /** The longest reply text, as Telegram counts it, that fits one message with the heading. */
+  reply_text_limit: number;
   totals: ReportTotals;
   weekly: ReportWeek[];
   latest: Report[];
+}
+
+export interface ReportResponse extends ResponseMeta {
+  report: Report;
+}
+
+export interface ReportReplyRequest {
+  text: string;
+  /** Let the bot resolve the report once the reply is delivered. */
+  resolve: boolean;
+}
+
+export interface ReportReplyResponse extends ResponseMeta {
+  reply: ReportReply;
+  report: Report;
 }
 
 export interface BlogPost {
@@ -263,8 +322,9 @@ export const REPORTS_LIMIT = 50;
 export const REPORTS_WEEKS = 26;
 
 type Query = Record<string, number>;
+type PathQuery = Record<string, number | string>;
 
-function buildPath(endpoint: string, query: Query): string {
+function buildPath(endpoint: string, query: PathQuery): string {
   const params = new URLSearchParams();
 
   for (const [key, value] of Object.entries(query)) {
@@ -336,10 +396,6 @@ export function getMoney(months: number, signal?: AbortSignal): Promise<MoneyRes
   return fetchJson<MoneyResponse>('money', { months }, signal);
 }
 
-export function getReports(limit: number, weeks: number, signal?: AbortSignal): Promise<ReportsResponse> {
-  return fetchJson<ReportsResponse>('reports', { limit, weeks }, signal);
-}
-
 export type WriteMethod = 'POST' | 'PUT' | 'DELETE';
 type Method = 'GET' | WriteMethod;
 
@@ -404,4 +460,30 @@ export function setBlogPostPublished(id: number, published: boolean): Promise<Bl
 
 export function deleteBlogPost(id: number): Promise<void> {
   return request<void>('DELETE', blogPostPath(id), undefined);
+}
+
+const REPORTS_PATH = '/api/reports';
+
+function reportPath(id: number): string {
+  return `${REPORTS_PATH}/${id}`;
+}
+
+export function getReports(limit: number, weeks: number, status: ReportStatusFilter, signal?: AbortSignal): Promise<ReportsResponse> {
+  const path = buildPath('reports', { limit, weeks, status });
+
+  return request<ReportsResponse>('GET', path, undefined, signal);
+}
+
+/** One report with its replies; the Reports tab polls it while a reply waits for the bot. */
+export function getReport(id: number, signal?: AbortSignal): Promise<ReportResponse> {
+  return request<ReportResponse>('GET', reportPath(id), undefined, signal);
+}
+
+/** Queues a reply for the bot to send to the reporter (it never sends from here). */
+export function queueReportReply(id: number, reply: ReportReplyRequest): Promise<ReportReplyResponse> {
+  return request<ReportReplyResponse>('POST', `${reportPath(id)}/replies`, reply);
+}
+
+export function setReportResolved(id: number, resolved: boolean): Promise<ReportResponse> {
+  return request<ReportResponse>('PUT', `${reportPath(id)}/resolved`, { resolved });
 }

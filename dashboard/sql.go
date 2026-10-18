@@ -443,9 +443,8 @@ FROM weeks w
 LEFT JOIN counts c ON c.week = w.week
 ORDER BY w.week`
 
-// latestReportsSQL: $1 limit.
-const latestReportsSQL = `SELECT
-    id,
+// reportColumns are the columns every report query returns.
+const reportColumns = `id,
     created_at,
     user_id,
     COALESCE(username, ''),
@@ -453,10 +452,48 @@ const latestReportsSQL = `SELECT
     chat_id,
     COALESCE(chat_title, ''),
     message,
-    resolved
+    resolved,
+    resolved_at`
+
+// latestReportsSQL: $1 limit, $2 resolved flag to keep (NULL keeps all).
+const latestReportsSQL = `SELECT ` + reportColumns + `
 FROM reports
+WHERE $2::boolean IS NULL OR resolved = $2::boolean
 ORDER BY created_at DESC NULLS LAST, id DESC
 LIMIT $1::int`
+
+// reportSQL: $1 id.
+const reportSQL = `SELECT ` + reportColumns + `
+FROM reports
+WHERE id = $1::int`
+
+// replyColumns are the columns every report reply query returns, after its
+// report_id.
+const replyColumns = `id, text, source, status, resolve_on_send, attempts, next_attempt_at, error, created_at, sent_at`
+
+// reportRepliesSQL lists the replies of the given reports, oldest first:
+// $1 report ids.
+const reportRepliesSQL = `SELECT report_id, ` + replyColumns + `
+FROM report_replies
+WHERE report_id = ANY($1::int[])
+ORDER BY created_at NULLS FIRST, id`
+
+// queueReportReplySQL queues a reply for the bot's outbox; no row when the
+// report does not exist: $1 report id, $2 text, $3 source, $4 status,
+// $5 resolve the report once the bot has delivered it.
+const queueReportReplySQL = `INSERT INTO report_replies (report_id, text, source, status, resolve_on_send)
+SELECT id, $2::text, $3::text, $4::text, $5::boolean
+FROM reports
+WHERE id = $1::int
+RETURNING report_id, ` + replyColumns
+
+// setReportResolvedSQL sets the flag and stamps resolved_at (keeping the
+// time of a report already resolved) or clears it: $1 id, $2 resolved.
+const setReportResolvedSQL = `UPDATE reports
+SET resolved = $2::boolean,
+    resolved_at = CASE WHEN $2::boolean THEN COALESCE(resolved_at, now()) ELSE NULL END
+WHERE id = $1::int
+RETURNING ` + reportColumns
 
 // blogPostColumns are the columns every blog post query returns.
 const blogPostColumns = `id, title, content, published, created_at, updated_at`

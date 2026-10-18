@@ -931,6 +931,170 @@ button {
   font-weight: 550;
 }
 
+/* Report replies: a thread under the message, the actions and the composer. */
+.panel__head:has(.segmented) {
+  flex-wrap: wrap;
+}
+
+.report__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.report__resolved {
+  margin-top: 8px;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.report__error {
+  margin-top: 8px;
+}
+
+.replies {
+  display: grid;
+  gap: 10px;
+  margin: 10px 0 0;
+  padding: 0 0 0 12px;
+  border-left: 2px solid var(--grid);
+  list-style: none;
+  max-width: 75ch;
+}
+
+.reply {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.reply__meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.reply__text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.reply--failed .reply__text {
+  color: var(--text-secondary);
+}
+
+.reply__error {
+  padding: 6px 10px;
+  border-radius: var(--radius-control);
+  background: var(--danger-wash);
+  color: var(--bad-text);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.badge--reply-queued .badge__icon,
+.badge--reply-sending .badge__icon {
+  background: var(--status-warning);
+  color: #12161c;
+}
+
+.badge--reply-sent .badge__icon {
+  background: var(--status-good);
+}
+
+.badge--reply-failed .badge__icon {
+  background: var(--status-critical);
+}
+
+.badge--reply-failed {
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+
+.badge--reply-unknown .badge__icon {
+  background: var(--status-warning);
+  color: #12161c;
+}
+
+.badge--reply-unknown {
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+
+.reply__error--unknown {
+  background: var(--warning-wash);
+  color: inherit;
+}
+
+.reply__note {
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.composer {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--surface-sunk);
+}
+
+.composer .input--code.composer__text {
+  min-height: 140px;
+}
+
+.composer__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 16px;
+}
+
+.composer__buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.checkbox {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 38px;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.checkbox input {
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+@media (max-width: 640px) {
+  .composer {
+    margin-right: -4px;
+    margin-left: -4px;
+    padding: 10px;
+  }
+
+  .composer__buttons,
+  .composer__buttons .button {
+    flex: 1 1 auto;
+  }
+
+  .report__actions .button {
+    flex: 1 1 0;
+  }
+}
+
 .message {
   margin-top: 4px;
   color: var(--text-primary);

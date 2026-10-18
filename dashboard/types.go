@@ -5,16 +5,18 @@ import (
 	"time"
 )
 
-// Store reads the dashboard data and edits the blog posts. PGStore is the
+// Store reads the dashboard data, edits the blog posts and queues report
+// replies. PGStore is the
 // PostgreSQL implementation; tests use a stub.
 type Store interface {
 	BlogStore
+	ReportStore
 	Ping(ctx context.Context) error
 	Overview(ctx context.Context, days int) (Overview, error)
 	Platforms(ctx context.Context, days int) (Platforms, error)
 	Chats(ctx context.Context, days int, limit int) (Chats, error)
 	Money(ctx context.Context, months int) (Money, error)
-	Reports(ctx context.Context, limit int, weeks int) (Reports, error)
+	Reports(ctx context.Context, limit int, weeks int, status string) (Reports, error)
 }
 
 // Meta is part of every response.
@@ -240,31 +242,81 @@ type ReportWeek struct {
 	Resolved int64  `json:"resolved"`
 }
 
-// Report is one user report.
+// Report is one user report with its replies, oldest first. ResolvedAt is
+// null for an open report and for one resolved before resolved_at existed.
 type Report struct {
-	ID        int64   `json:"id"`
-	CreatedAt *string `json:"created_at"`
-	UserID    int64   `json:"user_id"`
-	Username  string  `json:"username"`
-	FirstName string  `json:"first_name"`
-	ChatID    int64   `json:"chat_id"`
-	ChatTitle string  `json:"chat_title"`
-	Message   string  `json:"message"`
-	Resolved  bool    `json:"resolved"`
+	ID         int64         `json:"id"`
+	CreatedAt  *string       `json:"created_at"`
+	UserID     int64         `json:"user_id"`
+	Username   string        `json:"username"`
+	FirstName  string        `json:"first_name"`
+	ChatID     int64         `json:"chat_id"`
+	ChatTitle  string        `json:"chat_title"`
+	Message    string        `json:"message"`
+	Resolved   bool          `json:"resolved"`
+	ResolvedAt *string       `json:"resolved_at"`
+	Replies    []ReportReply `json:"replies"`
 }
 
-// Reports is the /api/reports answer.
+// ReportReply is one report_replies row: a reply queued here or sent with
+// /reply in Telegram. Status is queued, sending, sent, failed (refused by
+// Telegram or never sent) or unknown (no answer from Telegram, so it may
+// have been delivered); Error is the reason, or the last passing refusal of
+// a queued reply waiting for its next attempt (NextAttemptAt). ResolveOnSend
+// resolves the report once the bot has delivered the reply.
+type ReportReply struct {
+	ID            int64   `json:"id"`
+	Text          string  `json:"text"`
+	Source        string  `json:"source"`
+	Status        string  `json:"status"`
+	ResolveOnSend bool    `json:"resolve_on_send"`
+	Attempts      int64   `json:"attempts"`
+	NextAttemptAt *string `json:"next_attempt_at"`
+	Error         *string `json:"error"`
+	CreatedAt     *string `json:"created_at"`
+	SentAt        *string `json:"sent_at"`
+}
+
+// Reports is the /api/reports answer; Status is the filter of Latest.
+// ReplyPrefix is the heading the bot puts above a reply and ReplyTextLimit
+// the longest reply text, so the page previews and counts like the bot.
 type Reports struct {
 	Meta
-	Limit  int          `json:"limit"`
-	Weeks  int          `json:"weeks"`
-	Totals ReportTotals `json:"totals"`
-	Weekly []ReportWeek `json:"weekly"`
-	Latest []Report     `json:"latest"`
+	Limit          int          `json:"limit"`
+	Weeks          int          `json:"weeks"`
+	Status         string       `json:"status"`
+	ReplyPrefix    string       `json:"reply_prefix"`
+	ReplyTextLimit int          `json:"reply_text_limit"`
+	Totals         ReportTotals `json:"totals"`
+	Weekly         []ReportWeek `json:"weekly"`
+	Latest         []Report     `json:"latest"`
+}
+
+// ReportStore reads one report and makes the dashboard's report writes:
+// queuing a reply for the bot to send and resolving or reopening.
+type ReportStore interface {
+	Report(ctx context.Context, id int64) (Report, error)
+	QueueReportReply(ctx context.Context, id int64, text string, resolve bool) (ReportReply, Report, error)
+	SetReportResolved(ctx context.Context, id int64, resolved bool) (Report, error)
+}
+
+// ReportAnswer is the answer about one report.
+type ReportAnswer struct {
+	Meta
+	Report Report `json:"report"`
+}
+
+// ReportReplyAnswer is the POST /api/reports/{id}/replies answer: the
+// queued reply and the report after the write.
+type ReportReplyAnswer struct {
+	Meta
+	Reply  ReportReply `json:"reply"`
+	Report Report      `json:"report"`
 }
 
 // BlogStore reads and edits blog_posts, the drafts the bot's owner panel
-// sends under /owner -> Broadcast. Its write methods are the only writes of the dashboard.
+// sends under /owner -> Broadcast. Its write methods and ReportStore's are
+// the only writes of the dashboard.
 type BlogStore interface {
 	BlogPosts(ctx context.Context) ([]BlogPost, error)
 	BlogPost(ctx context.Context, id int64) (BlogPost, error)

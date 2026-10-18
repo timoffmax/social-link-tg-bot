@@ -71,9 +71,12 @@ type Server struct {
 	now            func() time.Time
 	routes         map[string]http.HandlerFunc
 	allowedHosts   map[string]bool
-	blogCollection blogRoute
-	blogPost       blogRoute
-	blogPublished  blogRoute
+	blogCollection writeRoute
+	blogPost       writeRoute
+	blogPublished  writeRoute
+	reportItem     writeRoute
+	reportReplies  writeRoute
+	reportResolved writeRoute
 }
 
 // NewServer returns the handler serving the API from store and the SPA from
@@ -91,29 +94,42 @@ func NewServer(store Store, timezone string, allowedHosts []string, assets fs.FS
 		reportsPath:   result.handleReports,
 	}
 	result.newBlogRoutes()
+	result.newReportRoutes()
 
 	return result
 }
 
 // ServeHTTP sets the security headers, refuses an unknown Host (a
-// DNS-rebinding page) and routes the request: the blog routes accept their
-// own methods, every other path only GET and HEAD. No response carries
-// CORS headers.
+// DNS-rebinding page) and routes the request: the blog and report write
+// routes accept their own methods, every other path only GET and HEAD. No
+// response carries CORS headers.
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	header := w.Header()
 	setSecurityHeaders(header)
 	host := strings.ToLower(r.Host)
 	isKnownHost := s.allowedHosts[host]
-	route, isBlog := s.matchBlogRoute(r.URL.Path)
+	route, isWriteRoute := s.matchWriteRoute(r.URL.Path)
 
 	switch {
 	case isKnownHost == false:
 		writeError(w, http.StatusForbidden, errForbidden)
-	case isBlog == true:
-		s.serveBlog(w, r, route)
+	case isWriteRoute == true:
+		s.serveWriteRoute(w, r, route)
 	default:
 		s.serveReadOnly(w, r)
 	}
+}
+
+// matchWriteRoute finds the blog or report route of a path; false for any
+// other path, which then stays GET/HEAD only.
+func (s *Server) matchWriteRoute(urlPath string) (writeRoute, bool) {
+	result, isMatch := s.matchBlogRoute(urlPath)
+
+	if isMatch == false {
+		result, isMatch = s.matchReportRoute(urlPath)
+	}
+
+	return result, isMatch
 }
 
 // hostSet indexes the allowed hosts, lower-cased.
@@ -281,10 +297,13 @@ func (s *Server) respondLoaded(w http.ResponseWriter, r *http.Request, status in
 }
 
 // writeLoadError answers 404 or 409 for a missing or concurrently changed
-// blog post; any other error is logged and answered with a generic 500.
+// blog post and 404 for a missing report; any other error is logged and
+// answered with a generic 500.
 func writeLoadError(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
 	case errors.Is(err, ErrBlogPostNotFound):
+		writeError(w, http.StatusNotFound, errNotFound)
+	case errors.Is(err, ErrReportNotFound):
 		writeError(w, http.StatusNotFound, errNotFound)
 	case errors.Is(err, ErrBlogPostChanged):
 		writeError(w, http.StatusConflict, errChangedElsewhere)

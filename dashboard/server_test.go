@@ -19,8 +19,10 @@ type stubStore struct {
 	limit  int
 	months int
 	weeks  int
+	status string
 	calls  int
 	blog   blogStub
+	report reportStub
 }
 
 func (s *stubStore) Ping(ctx context.Context) error {
@@ -58,12 +60,13 @@ func (s *stubStore) Money(ctx context.Context, months int) (Money, error) {
 	return Money{Months: months}, s.err
 }
 
-func (s *stubStore) Reports(ctx context.Context, limit int, weeks int) (Reports, error) {
+func (s *stubStore) Reports(ctx context.Context, limit int, weeks int, status string) (Reports, error) {
 	s.calls++
 	s.limit = limit
 	s.weeks = weeks
+	s.status = status
 
-	return Reports{Limit: limit, Weeks: weeks}, s.err
+	return Reports{Limit: limit, Weeks: weeks, Status: status}, s.err
 }
 
 // testHost is the Host of httptest requests.

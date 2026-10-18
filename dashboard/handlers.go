@@ -71,14 +71,17 @@ func (s *Server) handleMoney(w http.ResponseWriter, r *http.Request) {
 	s.respond(w, r, err, load)
 }
 
-// handleReports serves GET /api/reports?limit=&weeks=.
+// handleReports serves GET /api/reports?limit=&weeks=&status=.
 func (s *Server) handleReports(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query()
 	limit, limitErr := reportsLimitParam.parse(query)
 	weeks, weeksErr := reportsWeeksParam.parse(query)
-	err := firstError(limitErr, weeksErr)
+	status, statusErr := parseReportStatus(r)
+	err := firstError(limitErr, weeksErr, statusErr)
 	load := func(ctx context.Context) (payload, error) {
-		data, loadErr := s.store.Reports(ctx, limit, weeks)
+		data, loadErr := s.store.Reports(ctx, limit, weeks, status)
+		data.ReplyPrefix = ReplyMessagePrefix
+		data.ReplyTextLimit = ReplyTextLimit
 
 		return &data, loadErr
 	}

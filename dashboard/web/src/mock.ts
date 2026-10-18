@@ -5,9 +5,18 @@
 // Append ?mock=empty or ?mock=error to the page URL (before the #) to check
 // the empty and error states; ?mock=conflict makes the first save of each blog
 // post answer 409, as if the post had been edited in Telegram meanwhile.
-// Blog writes change an in-memory store that lasts until the page reloads.
+// Blog and report writes change in-memory stores that last until the page
+// reloads. A queued reply is "sent" a few seconds later (resolving its report
+// when it was queued with resolve), except to Dmytro (report #6), who has
+// blocked the bot, so it fails.
 
 import type {
+  Report,
+  ReportReply,
+  ReportReplyRequest,
+  ReportReplyResponse,
+  ReportResponse,
+  ReportStatusFilter,
   BlogPost,
   BlogPostDraft,
   BlogPostResponse,
@@ -316,29 +325,6 @@ function money(months: number, empty: boolean): MoneyResponse {
   };
 }
 
-function reports(limit: number, weeks: number, empty: boolean): ReportsResponse {
-  const longText = 'The video from this TikTok link came without sound. I tried twice, the second time the bot sent the same file. '
-    + 'Other links in the same chat work fine, so it is probably something about this particular post. '
-    + 'It is a slideshow with music, if that helps. <b>Not bold</b> & not HTML either.\nSecond line of the report.';
-
-  return {
-    ...meta(),
-    limit,
-    weeks,
-    totals: { open: empty ? 0 : 2, resolved: empty ? 0 : 5 },
-    weekly: weeksBack(weeks).map((week, index) => ({
-      week,
-      open: ((empty === false) && (index >= weeks - 2)) ? 1 : 0,
-      resolved: ((empty === false) && ((index % 5) === 0)) ? 1 : 0,
-    })),
-    latest: empty ? [] : [
-      { id: 7, created_at: hoursAgo(2), user_id: 100_200, username: 'olena_k', first_name: 'Olena', chat_id: -1_001_234_567_000, chat_title: 'Meme Lab', message: longText, resolved: false },
-      { id: 6, created_at: hoursAgo(30), user_id: 100_205, username: '', first_name: 'Dmytro', chat_id: 100_205, chat_title: '', message: 'Instagram story link returns nothing.', resolved: false },
-      { id: 5, created_at: hoursAgo(200), user_id: 100_201, username: 'max_dev', first_name: 'Max', chat_id: -1_001_234_567_003, chat_title: 'Dev chat 🛠', message: 'Reddit gallery only shows the first image.', resolved: true },
-    ],
-  };
-}
-
 function wait(signal?: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
     const timer = window.setTimeout(resolve, LATENCY_MS);
@@ -366,7 +352,6 @@ export async function mockResponse(endpoint: string, query: Record<string, numbe
     platforms: () => platforms(days, empty),
     chats: () => chats(days, query.limit ?? 20, empty),
     money: () => money(query.months ?? 12, empty),
-    reports: () => reports(query.limit ?? 50, query.weeks ?? 26, empty),
   } as Record<string, () => unknown>)[endpoint];
 
   if (result === undefined) {
@@ -566,7 +551,7 @@ const BLOG_ROUTES: Record<string, BlogHandler> = {
   'DELETE /:id': (id) => deletePost(id),
 };
 
-/** Answers the blog endpoints like the server, including 400/404/409. */
+/** Answers the blog and report endpoints like the server, including 400/404/409. */
 export async function mockRequest(method: string, path: string, body: unknown, signal?: AbortSignal): Promise<unknown> {
   await wait(signal);
 
@@ -574,10 +559,235 @@ export async function mockRequest(method: string, path: string, body: unknown, s
     throw new ApiError(500, 'internal error');
   }
 
+  if (path.startsWith(REPORTS_PREFIX)) {
+    return reportRequest(method, path, body);
+  }
+
   const rest = path.startsWith(BLOG_PREFIX) ? path.slice(BLOG_PREFIX.length) : null;
   const id = Number(/^\/([0-9]+)/.exec(rest ?? '')?.[1] ?? 0);
   const pattern = (rest ?? '').replace(/^\/[0-9]+/, '/:id');
   const handler = (rest === null) ? undefined : BLOG_ROUTES[`${method} ${pattern}`];
+
+  if (handler === undefined) {
+    throw new ApiError(HTTP_NOT_FOUND, 'not found');
+  }
+
+  return handler(id, body);
+}
+
+// Reports: an in-memory table; queued replies move on as the bot's outbox would.
+
+const REPORTS_PREFIX = '/api/reports';
+const SEND_DELAY_MS = 6_000;
+const BLOCKED_USER_ID = 100_205;
+const BLOCKED_ERROR = 'Forbidden: bot was blocked by the user';
+const INTERRUPTED_ERROR = 'interrupted, delivery unknown, not resent';
+
+/** The server's reply_prefix and reply_text_limit (the bot's heading), as GET /api/reports returns them. */
+const MOCK_REPLY_PREFIX = '💬 <b>Reply from the developer:</b>\n\n';
+const MOCK_REPLY_TEXT_LIMIT = TELEGRAM_TEXT_LIMIT - parseTelegramHtml(MOCK_REPLY_PREFIX).length;
+
+const REPLY_ERRORS: Partial<Record<ReportReply['status'], string>> = {
+  failed: BLOCKED_ERROR,
+  unknown: INTERRUPTED_ERROR,
+};
+
+interface ReportStore {
+  reports: Report[];
+  nextReplyId: number;
+  /** When each queued reply was queued, to move it on after SEND_DELAY_MS. */
+  queuedAt: Map<number, number>;
+}
+
+let reportStore: ReportStore | null = null;
+
+const LONG_REPORT = 'The video from this TikTok link came without sound. I tried twice, the second time the bot sent the same file. '
+  + 'Other links in the same chat work fine, so it is probably something about this particular post. '
+  + 'It is a slideshow with music, if that helps. <b>Not bold</b> & not HTML either.\nSecond line of the report.';
+
+function reply(id: number, text: string, source: ReportReply['source'], status: ReportReply['status'], hours: number): ReportReply {
+  const isSent = (status === 'sent');
+
+  return {
+    id,
+    text,
+    source,
+    status,
+    resolve_on_send: false,
+    attempts: 0,
+    next_attempt_at: null,
+    error: REPLY_ERRORS[status] ?? null,
+    created_at: hoursAgo(hours),
+    sent_at: isSent ? hoursAgo(hours) : null,
+  };
+}
+
+function seedReports(mode: Mode): ReportStore {
+  const reports: Report[] = (mode === 'empty') ? [] : [
+    { id: 7, created_at: hoursAgo(2), user_id: 100_200, username: 'olena_k', first_name: 'Olena', chat_id: -1_001_234_567_000, chat_title: 'Meme Lab', message: LONG_REPORT, resolved: false, resolved_at: null, replies: [] },
+    {
+      id: 6, created_at: hoursAgo(30), user_id: BLOCKED_USER_ID, username: '', first_name: 'Dmytro', chat_id: BLOCKED_USER_ID, chat_title: '', message: 'Instagram story link returns nothing.', resolved: false, resolved_at: null,
+      replies: [
+        reply(2, 'Thanks! Could you send the link again?', 'dashboard', 'failed', 20),
+        reply(3, 'Could you send the link once more?', 'dashboard', 'unknown', 10),
+      ],
+    },
+    {
+      id: 5, created_at: hoursAgo(200), user_id: 100_201, username: 'max_dev', first_name: 'Max', chat_id: -1_001_234_567_003, chat_title: 'Dev chat 🛠', message: 'Reddit gallery only shows the first image.', resolved: true, resolved_at: hoursAgo(150),
+      replies: [reply(1, 'Fixed: <b>galleries</b> now come as albums. Thanks for the report!', 'telegram', 'sent', 150)],
+    },
+    { id: 4, created_at: hoursAgo(400), user_id: 100_207, username: 'ira', first_name: 'Ira', chat_id: 100_207, chat_title: '', message: 'Threads link sent a fixed link instead of the video.', resolved: true, resolved_at: null, replies: [] },
+  ];
+
+  return { reports, nextReplyId: 4, queuedAt: new Map() };
+}
+
+function reportsTable(): ReportStore {
+  if (reportStore === null) {
+    reportStore = seedReports(mockMode());
+  }
+
+  return reportStore;
+}
+
+/**
+ * Moves queued replies on: sent after a few seconds (resolving the report when the reply asked for it,
+ * keeping an earlier resolve time), failed for the user who blocked the bot.
+ */
+function advanceReplies(store: ReportStore): void {
+  const now = Date.now();
+
+  for (const report of store.reports) {
+    for (const item of report.replies) {
+      const queuedAt = store.queuedAt.get(item.id) ?? now;
+      const isDue = (item.status === 'queued') && ((now - queuedAt) >= SEND_DELAY_MS);
+      const isBlocked = (report.user_id === BLOCKED_USER_ID);
+
+      if (isDue) {
+        item.status = isBlocked ? 'failed' : 'sent';
+        item.error = isBlocked ? BLOCKED_ERROR : null;
+        item.sent_at = isBlocked ? null : new Date(now).toISOString();
+      }
+
+      if (isDue && (isBlocked === false) && item.resolve_on_send) {
+        report.resolved = true;
+        report.resolved_at = report.resolved_at ?? item.sent_at;
+      }
+    }
+  }
+}
+
+function copyReport(report: Report): Report {
+  return { ...report, replies: report.replies.map((item) => ({ ...item })) };
+}
+
+function findReport(id: number): Report {
+  const store = reportsTable();
+  advanceReplies(store);
+  const result = store.reports.find((report) => (report.id === id));
+
+  if (result === undefined) {
+    throw new ApiError(HTTP_NOT_FOUND, 'not found');
+  }
+
+  return result;
+}
+
+function listReports(path: string): ReportsResponse {
+  const store = reportsTable();
+  advanceReplies(store);
+  const params = new URLSearchParams(path.split('?')[1] ?? '');
+  const limit = Number(params.get('limit') ?? 50);
+  const weeks = Number(params.get('weeks') ?? 26);
+  const status = (params.get('status') ?? 'all') as ReportStatusFilter;
+  const keep: Record<ReportStatusFilter, (report: Report) => boolean> = {
+    all: () => true,
+    open: (report) => (report.resolved === false),
+    resolved: (report) => report.resolved,
+  };
+  const open = store.reports.filter(keep.open).length;
+  const resolved = store.reports.length - open;
+  const isEmpty = (store.reports.length === 0);
+
+  return {
+    ...meta(),
+    limit,
+    weeks,
+    status,
+    reply_prefix: MOCK_REPLY_PREFIX,
+    reply_text_limit: MOCK_REPLY_TEXT_LIMIT,
+    totals: { open, resolved },
+    weekly: weeksBack(weeks).map((week, index) => ({
+      week,
+      open: ((isEmpty === false) && (index >= weeks - 2)) ? 1 : 0,
+      resolved: ((isEmpty === false) && ((index % 5) === 0)) ? 1 : 0,
+    })),
+    latest: store.reports.filter(keep[status]).slice(0, limit).map(copyReport),
+  };
+}
+
+function queueReply(id: number, body: ReportReplyRequest): ReportReplyResponse {
+  const store = reportsTable();
+  const report = findReport(id);
+  const text = body.text.trim();
+  const parsed = parseTelegramHtml(text);
+  const problem = parsed.problem;
+  const checks: [boolean, string][] = [
+    [(text === ''), 'text is required'],
+    [(problem !== null), `text: line ${problem?.line}, column ${problem?.column}: ${problem?.message}`],
+    [(parsed.length > MOCK_REPLY_TEXT_LIMIT), `text is too long: ${parsed.length} characters after formatting, at most ${MOCK_REPLY_TEXT_LIMIT}`],
+  ];
+  const failed = checks.find(([isFailed]) => isFailed);
+
+  if (failed !== undefined) {
+    throw new ApiError(HTTP_BAD_REQUEST, failed[1]);
+  }
+
+  const now = new Date().toISOString();
+  const item: ReportReply = {
+    id: store.nextReplyId,
+    text,
+    source: 'dashboard',
+    status: 'queued',
+    resolve_on_send: body.resolve,
+    attempts: 0,
+    next_attempt_at: null,
+    error: null,
+    created_at: now,
+    sent_at: null,
+  };
+  store.nextReplyId += 1;
+  store.queuedAt.set(item.id, Date.now());
+  report.replies.push(item);
+
+  return { ...meta(), reply: { ...item }, report: copyReport(report) };
+}
+
+function resolveReport(id: number, body: { resolved: boolean }): ReportResponse {
+  const report = findReport(id);
+  const resolvedAt = report.resolved_at ?? new Date().toISOString();
+  report.resolved = body.resolved;
+  report.resolved_at = body.resolved ? resolvedAt : null;
+
+  return { ...meta(), report: copyReport(report) };
+}
+
+const REPORT_ROUTES: Record<string, BlogHandler> = {
+  'GET /:id': (id) => ({ ...meta(), report: copyReport(findReport(id)) }),
+  'POST /:id/replies': (id, body) => queueReply(id, body as ReportReplyRequest),
+  'PUT /:id/resolved': (id, body) => resolveReport(id, body as { resolved: boolean }),
+};
+
+function reportRequest(method: string, path: string, body: unknown): unknown {
+  const rest = path.slice(REPORTS_PREFIX.length);
+  const isList = (method === 'GET') && ((rest === '') || rest.startsWith('?'));
+  const id = Number(/^\/([0-9]+)/.exec(rest)?.[1] ?? 0);
+  const pattern = rest.replace(/^\/[0-9]+/, '/:id');
+  const handler = REPORT_ROUTES[`${method} ${pattern}`];
+
+  if (isList) {
+    return listReports(path);
+  }
 
   if (handler === undefined) {
     throw new ApiError(HTTP_NOT_FOUND, 'not found');

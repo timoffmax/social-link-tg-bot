@@ -4934,73 +4934,156 @@ func executeBroadcast(chatID int64, messageID int, postID int, audience string) 
 	}
 }
 
-// handleReplyCommand handles /reply command - owner replies to a report
+// Owner texts of /reply.
+const (
+	replyUsageText     = "Usage: <code>/reply [report_id] your answer</code>"
+	replyInvalidIDText = "Invalid report ID."
+	replyNotFoundText  = "Report #%d not found."
+	replySentText      = "✅ Reply sent to user %d (report #%d resolved)."
+	replyFailedText    = "❌ Reply to user %d was not sent, report #%d stays open.\n\nReason: %s"
+	replyUnknownText   = "⚠️ Reply to user %d may have been delivered, report #%d stays open. Check before sending it again.\n\n%s"
+)
+
+// replyMinArgs are "/reply", the report id and at least one word of text.
+const replyMinArgs = 3
+
+// handleReplyCommand handles /reply command - owner replies to a report. The
+// reply is recorded in report_replies (source 'telegram'); the report is
+// resolved only when the reply reached the user.
 func handleReplyCommand(origMessage *response.TgMessage, origChat *response.TgChat, origUser *response.TgUser) {
-	if !isOwner(origUser.Id) {
-		return
-	}
-
-	// Parse: /reply <report_id> <text>
-	args := strings.Fields(origMessage.Text)
-	if len(args) < 3 {
+	if isOwner(origUser.Id) == true {
+		ownerText := replyCommandOutcome(origMessage.Text)
 		msg := payload.TgPlSendMessage{
 			ChatId:    origChat.Id,
 			ParseMode: payload.ParseModeHTML,
-			Text:      "Usage: <code>/reply [report_id] your answer</code>",
+			Text:      ownerText,
 		}
 
 		message.NewSendMessage(msg)
-		return
+	}
+}
+
+// replyCommandOutcome runs "/reply <report_id> <text>" and returns the text
+// for the owner.
+func replyCommandOutcome(commandText string) string {
+	result := replyUsageText
+	args := strings.Fields(commandText)
+
+	if len(args) >= replyMinArgs {
+		result = replyToReportByArgs(commandText, args)
 	}
 
+	return result
+}
+
+// replyToReportByArgs parses the report id and replies to that report.
+func replyToReportByArgs(commandText string, args []string) string {
+	result := replyInvalidIDText
 	reportID, err := strconv.Atoi(args[1])
+
+	if err == nil {
+		withoutCommand := textAfterField(commandText, args[0])
+		replyText := textAfterField(withoutCommand, args[1])
+		result = replyToReport(reportID, replyText)
+	}
+
+	return result
+}
+
+// textAfterField returns text without its leading field and the spaces around
+// it; the line breaks inside the rest are kept.
+func textAfterField(text, field string) string {
+	trimmed := strings.TrimSpace(text)
+	rest := strings.TrimPrefix(trimmed, field)
+	result := strings.TrimSpace(rest)
+
+	return result
+}
+
+// replyToReport sends the owner's reply to the reporter.
+func replyToReport(reportID int, replyText string) string {
+	result := fmt.Sprintf(replyNotFoundText, reportID)
+	report, err := getReport(reportID)
+
+	if err == nil {
+		result = deliverOwnerReply(report, replyText)
+	}
+
+	return result
+}
+
+// deliverOwnerReply records the reply as 'sending', sends it, records the
+// outcome and resolves the report when it was sent.
+func deliverOwnerReply(report *services.Report, replyText string) string {
+	reply, recordErr := createReportReply(report.ID, replyText, services.ReportReplySourceTelegram, services.ReportReplyStatusSending)
+
+	if recordErr != nil {
+		log.Printf("❌ Failed to record the reply to report #%d: %v", report.ID, recordErr)
+	}
+
+	messageID, sendErr := sendReplyToReporter(report.UserID, replyText)
+	isRecorded := (recordErr == nil)
+	result := fmt.Sprintf(replySentText, report.UserID, report.ID)
+
+	if (sendErr == nil) && (isRecorded == true) {
+		recordReplySent(reply.ID, messageID)
+	}
+
+	if sendErr == nil {
+		resolveOwnerReport(report.ID)
+		log.Printf("💬 Owner replied to report #%d (user %d)", report.ID, report.UserID)
+	}
+
+	if (sendErr != nil) && (isRecorded == true) {
+		recordOwnerReplyUndelivered(reply.ID, sendErr)
+	}
+
+	if sendErr != nil {
+		reason := sendErr.Error()
+		escapedReason := html.EscapeString(reason)
+		failedText := ownerReplyFailedText(sendErr)
+		result = fmt.Sprintf(failedText, report.UserID, report.ID, escapedReason)
+		log.Printf("❌ Owner reply to report #%d (user %d) failed: %v", report.ID, report.UserID, sendErr)
+	}
+
+	return result
+}
+
+// recordOwnerReplyUndelivered stores a /reply send that did not get through:
+// delivery unknown without an answer, failed otherwise (the owner sees the
+// reason and can send it again, so a passing refusal is not retried).
+func recordOwnerReplyUndelivered(replyID int, sendErr error) {
+	reason := sendErr.Error()
+	isUnknown := isReplyDeliveryUnknown(sendErr)
+
+	if isUnknown == true {
+		recordReplyUnknown(replyID, reason)
+	}
+
+	if isUnknown == false {
+		recordReplyFailed(replyID, reason)
+	}
+}
+
+// ownerReplyFailedText picks the owner's answer for a failed send: a send
+// without an answer from Telegram may have reached the user.
+func ownerReplyFailedText(sendErr error) string {
+	result := replyFailedText
+
+	if isReplyDeliveryUnknown(sendErr) == true {
+		result = replyUnknownText
+	}
+
+	return result
+}
+
+// resolveOwnerReport resolves a report after a delivered reply.
+func resolveOwnerReport(reportID int) {
+	err := resolveReport(reportID)
+
 	if err != nil {
-		msg := payload.TgPlSendMessage{
-			ChatId:    origChat.Id,
-			ParseMode: payload.ParseModeHTML,
-			Text:      "Invalid report ID.",
-		}
-
-		message.NewSendMessage(msg)
-		return
+		log.Printf("❌ Failed to resolve report #%d: %v", reportID, err)
 	}
-
-	report, err := services.GetReport(reportID)
-	if err != nil {
-		msg := payload.TgPlSendMessage{
-			ChatId:    origChat.Id,
-			ParseMode: payload.ParseModeHTML,
-			Text:      fmt.Sprintf("Report #%d not found.", reportID),
-		}
-
-		message.NewSendMessage(msg)
-		return
-	}
-
-	// Extract reply text (everything after "/reply <id> ")
-	replyText := strings.TrimSpace(origMessage.Text[len(args[0])+len(args[1])+2:])
-
-	// Send reply to the user
-	userMsg := payload.TgPlSendMessage{
-		ChatId:    report.UserID,
-		ParseMode: payload.ParseModeHTML,
-		Text:      fmt.Sprintf("💬 <b>Reply from the developer:</b>\n\n%s", replyText),
-	}
-
-	message.NewSendMessage(userMsg)
-
-	// Mark as resolved
-	services.ResolveReport(reportID)
-
-	// Confirm to owner
-	confirmMsg := payload.TgPlSendMessage{
-		ChatId:    origChat.Id,
-		ParseMode: payload.ParseModeHTML,
-		Text:      fmt.Sprintf("✅ Reply sent to user %d (report #%d resolved).", report.UserID, reportID),
-	}
-
-	message.NewSendMessage(confirmMsg)
-	log.Printf("💬 Owner replied to report #%d (user %d)", reportID, report.UserID)
 }
 
 // handleReportsCallback shows open reports in owner panel

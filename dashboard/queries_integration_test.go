@@ -302,7 +302,7 @@ func TestIntegrationEmptyDatabase(t *testing.T) {
 		t.Errorf("money: %v", err)
 	}
 
-	if _, err := store.Reports(ctx, 50, 26); err != nil {
+	if _, err := store.Reports(ctx, 50, 26, ReportStatusAll); err != nil {
 		t.Errorf("reports: %v", err)
 	}
 }
@@ -490,7 +490,7 @@ func TestIntegrationReports(t *testing.T) {
 (3, 44, 'x', 'X', 44, NULL, 'monday in Kyiv', false, '2026-10-11T21:30:00Z'),
 (4, 45, 'y', 'Y', 45, NULL, 'old week', true, '2026-10-06T10:00:00Z'),
 (5, 46, 'z', 'Z', 46, NULL, 'long ago', false, '2026-09-01T10:00:00Z')`)
-	got, err := d.store(kyiv).Reports(context.Background(), 2, 2)
+	got, err := d.store(kyiv).Reports(context.Background(), 2, 2, ReportStatusAll)
 
 	if err != nil {
 		t.Fatalf("reports: %v", err)
@@ -502,8 +502,8 @@ func TestIntegrationReports(t *testing.T) {
 		{Week: "2026-10-12", Open: 2, Resolved: 1},
 	})
 	assertEqual(t, "latest", got.Latest, []Report{
-		{ID: 1, CreatedAt: text("2026-10-15T11:00:00Z"), UserID: 42, Username: "name", FirstName: "N", ChatID: -1001, ChatTitle: "Group", Message: "text", Resolved: false},
-		{ID: 2, CreatedAt: text("2026-10-13T12:00:00Z"), UserID: 43, ChatID: 43, Message: "second", Resolved: true},
+		{ID: 1, CreatedAt: text("2026-10-15T11:00:00Z"), UserID: 42, Username: "name", FirstName: "N", ChatID: -1001, ChatTitle: "Group", Message: "text", Resolved: false, Replies: []ReportReply{}},
+		{ID: 2, CreatedAt: text("2026-10-13T12:00:00Z"), UserID: 43, ChatID: 43, Message: "second", Resolved: true, Replies: []ReportReply{}},
 	})
 }
 
