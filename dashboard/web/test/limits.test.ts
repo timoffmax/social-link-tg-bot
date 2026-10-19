@@ -4,6 +4,8 @@ import { describe, it } from 'node:test';
 import type { ApifyService, HikerService, LimitRow, PublishedComponent, RelayHistory, RelayStatus, SettingRequest } from '../src/api.ts';
 import {
   aboveCeilingNote,
+  APPLY_NOTE,
+  APPROVAL_NOTE,
   accountLimitText,
   apifySpendText,
   BLOCK_USER_WARNING,
@@ -39,6 +41,8 @@ import {
   STALE_BOT_TEXT,
   stateLabel,
   UNLIMITED_NOTE,
+  UNLIMITED_ON_WARNING,
+  unlimitedSwitch,
   usageAge,
   WAITING_TEXT,
   WRITE_GUARD_TEXT,
@@ -225,6 +229,39 @@ describe('limitConfirm', () => {
   });
 });
 
+describe('unlimited switch', () => {
+  const rules = { ...RULES, unlimited: true };
+  const unlimitedRow = row({ stored_limit: -1, effective_limit: -1, limit_source: 'unlimited', state: 'unlimited', used: 40 });
+
+  it('offers on for a limited row, off for an unlimited one, nothing on an older bot', () => {
+    assert.equal(unlimitedSwitch(row(), rules), 'on');
+    assert.equal(unlimitedSwitch(unlimitedRow, rules), 'off');
+    assert.equal(unlimitedSwitch(row(), RULES), null);
+    assert.equal(unlimitedSwitch(row(), null), null);
+  });
+
+  it('asks to make a row unlimited', () => {
+    const confirm = limitConfirm(row(), -1, DEFAULTS);
+    assert.equal(confirm.question, 'Make the special downloads of @alice unlimited? The limit is the default (20) now.');
+    assert.equal(confirm.action, 'Ask to make unlimited');
+    assert.equal(confirm.warning, UNLIMITED_ON_WARNING);
+    assert.equal(confirm.note, APPROVAL_NOTE);
+    assert.equal(confirm.danger, false);
+  });
+
+  it('asks to turn unlimited off, warning when the default is already used up', () => {
+    const confirm = limitConfirm(unlimitedRow, null, DEFAULTS);
+    assert.equal(confirm.question, 'Turn off unlimited for @alice? They go back to the default (20 a month).');
+    assert.equal(confirm.action, 'Turn off unlimited');
+    assert.equal(confirm.note, APPLY_NOTE);
+    assert.equal(confirm.danger, true);
+  });
+
+  it('lowers an unlimited row to a number', () => {
+    assert.equal(limitConfirm(unlimitedRow, 100, DEFAULTS).action, 'Lower to 100');
+  });
+});
+
 describe('canChange', () => {
   const page = { applying: true, rules: RULES };
   const request = { id: 1, kind: 'special_limit', key: 'user:7', status: 'queued' } as SettingRequest;
@@ -235,6 +272,11 @@ describe('canChange', () => {
     assert.equal(canChange(row(), { ...page, rules: null }), NOT_SUPPORTED_TEXT);
     assert.equal(canChange(row({ limit_source: 'unlimited' }), page), UNLIMITED_NOTE);
     assert.equal(canChange(row({ open_request: request }), page), WAITING_TEXT);
+  });
+
+  it('lets an unlimited row be changed when the bot takes unlimited', () => {
+    const unlimitedRow = row({ stored_limit: -1, effective_limit: -1, limit_source: 'unlimited', state: 'unlimited' });
+    assert.equal(canChange(unlimitedRow, { ...page, rules: { ...RULES, unlimited: true } }), null);
   });
 
   it('notes the ceiling', () => {

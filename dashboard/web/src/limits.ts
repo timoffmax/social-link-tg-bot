@@ -27,7 +27,8 @@ export const LIMITS_REFRESH_MS = 30_000;
 /** A relay check older than this is stale (the bot checks every minute). */
 export const RELAY_STALE_MS = 3 * 60_000;
 
-const UNLIMITED = -1;
+/** The stored limit of an unlimited person or group. */
+export const UNLIMITED = -1;
 const MINUTE_MS = 60_000;
 const HOUR_MS = 3_600_000;
 const DAY_MS = 86_400_000;
@@ -43,12 +44,16 @@ export const RAISE_QUESTION = 'Raise the monthly special downloads of {name} fro
 export const LOWER_QUESTION = 'Lower the monthly special downloads of {name} from {old} to {new}?';
 export const SET_QUESTION = 'Set the monthly special downloads of {name} to {new}? It is {old} now.';
 export const RESET_QUESTION = 'Set {name} back to the default ({default} a month)?';
+export const UNLIMITED_ON_QUESTION = 'Make the special downloads of {name} unlimited? The limit is {old} now.';
+export const UNLIMITED_OFF_QUESTION = 'Turn off unlimited for {name}? They go back to the default ({default} a month).';
+export const UNLIMITED_ON_WARNING = 'Unlimited also skips the bot-wide monthly cap; only the paid services’ budgets still stop them.';
 export const APPLY_NOTE = 'Applies within a few seconds, without approval in Telegram. It is logged and listed in your Telegram change digest.';
+export const APPROVAL_NOTE = 'The bot asks you to approve this in Telegram first (15 minutes to answer). It is logged and listed in your Telegram change digest.';
 export const BELOW_USED_WARNING = 'They used {used} this month already, so they get no more special downloads until {resets} (bonus credits still apply).';
 export const BLOCK_USER_WARNING = 'A limit of 0 blocks this person: their bonus credits can’t be used either.';
 export const GROUP_OFF_WARNING = 'A limit of 0 turns special downloads off in this group.';
 export const GROUP_DISABLED_NOTE = 'Special downloads are switched off in this group (/gated off). A new limit applies once it is switched on in Telegram.';
-export const UNLIMITED_NOTE = 'Unlimited, set with /gated. Change it in Telegram.';
+export const UNLIMITED_NOTE = 'Unlimited, set with /gated. The running bot takes no unlimited changes from here yet: change it in Telegram.';
 export const aboveCeilingNote = (max: number): string => `Set above ${max} with /gated; here it can only be lowered.`;
 export const ceilingReachedNote = (max: number): string => `At the ${max}-a-month ceiling.`;
 export const WAITING_TEXT = 'A change is waiting for the bot.';
@@ -123,12 +128,20 @@ export function canChange(row: LimitRow, page: { applying: boolean; rules: Speci
   const checks: [boolean, string][] = [
     [(page.applying === false), STALE_BOT_TEXT],
     [(page.rules === null), NOT_SUPPORTED_TEXT],
-    [(row.limit_source === 'unlimited'), UNLIMITED_NOTE],
+    [((row.limit_source === 'unlimited') && (page.rules?.unlimited !== true)), UNLIMITED_NOTE],
     [(row.open_request !== null), WAITING_TEXT],
   ];
   const failed = checks.find(([isFailed]) => isFailed);
 
   return (failed === undefined) ? null : failed[1];
+}
+
+/** The unlimited switch a row offers: on for a limited row, off for an unlimited one; null when the bot takes no -1. */
+export function unlimitedSwitch(row: LimitRow, rules: SpecialLimitRules | null): 'on' | 'off' | null {
+  const isAllowed = (rules?.unlimited === true);
+  const isUnlimited = (row.limit_source === 'unlimited');
+
+  return isAllowed ? (isUnlimited ? 'off' : 'on') : null;
 }
 
 /** The use against the limit in words: "12 of 20 (default)", "12 · unlimited", "Off". */
@@ -206,19 +219,22 @@ export interface LimitConfirm {
   warning: string | null;
   danger: boolean;
   action: string;
+  /** How the change is applied: at once, or after the owner's approval in Telegram. */
+  note: string;
 }
 
 /** What a change to next (null: back to the default) does, for the confirmation. */
 export function limitConfirm(row: LimitRow, next: number | null, defaults: LimitDefaults, resets: string = 'the 1st of next month'): LimitConfirm {
   const defaultLimit = (row.scope === 'chat') ? defaults.chat : defaults.user;
   const target = next ?? defaultLimit;
-  const current = row.effective_limit ?? 0;
+  const isUnlimitedNow = (row.limit_source === 'unlimited');
+  const current = isUnlimitedNow ? Number.POSITIVE_INFINITY : (row.effective_limit ?? 0);
   const name = rowName(row);
   const values = { name, old: storedLimitText(row.stored_limit, defaultLimit), new: formatInteger(next ?? 0), default: (defaultLimit === null) ? '?' : formatInteger(defaultLimit) };
   const isZero = (target === 0);
   const isBelowUsed = (target !== null) && (target > 0) && (target <= row.used) && (row.used > 0);
   const isChat = (row.scope === 'chat');
-  let result: LimitConfirm = { question: fill(SET_QUESTION, values), warning: null, danger: false, action: `Set to ${values.new}` };
+  let result: LimitConfirm = { question: fill(SET_QUESTION, values), warning: null, danger: false, action: `Set to ${values.new}`, note: APPLY_NOTE };
 
   if ((next !== null) && (next > current)) {
     result = { ...result, question: fill(RAISE_QUESTION, values), action: `Raise to ${values.new}` };
@@ -230,6 +246,14 @@ export function limitConfirm(row: LimitRow, next: number | null, defaults: Limit
 
   if (next === null) {
     result = { ...result, question: fill(RESET_QUESTION, values), action: 'Reset to default' };
+  }
+
+  if ((next === null) && isUnlimitedNow) {
+    result = { ...result, question: fill(UNLIMITED_OFF_QUESTION, values), action: 'Turn off unlimited' };
+  }
+
+  if (next === UNLIMITED) {
+    result = { ...result, question: fill(UNLIMITED_ON_QUESTION, values), warning: UNLIMITED_ON_WARNING, action: 'Ask to make unlimited', note: APPROVAL_NOTE };
   }
 
   if (isBelowUsed) {

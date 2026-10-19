@@ -33,10 +33,10 @@ const settingsTestDSNKey = "SETTINGS_TEST_DSN"
 const migrationsSource = "file://../../migrations"
 
 // settingsMigrationVersion is migration 011; latestMigrationVersion is the
-// last migration (013).
+// last migration (014).
 const (
 	settingsMigrationVersion = 11
-	latestMigrationVersion   = 13
+	latestMigrationVersion   = 14
 )
 
 // pgFixture is a schema with the migrations applied.

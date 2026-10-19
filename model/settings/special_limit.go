@@ -18,17 +18,18 @@ const (
 	SpecialLimitKeySeparator = ":"
 )
 
-// SpecialLimitMin and SpecialLimitMax bound a limit set by a request; -1
-// (unlimited) and higher values are set only with /gated in Telegram.
+// SpecialLimitMin and SpecialLimitMax bound a limit set by a request, which
+// may also be SpecialLimitUnlimited; higher values only come from /gated.
 const (
-	SpecialLimitMin = int64(0)
-	SpecialLimitMax = int64(CeilingGatedMonthlyQuota)
+	SpecialLimitMin       = int64(0)
+	SpecialLimitMax       = int64(CeilingGatedMonthlyQuota)
+	SpecialLimitUnlimited = int64(-1)
 )
 
 // Errors of a limit request (shown in the dashboard as the rejection reason).
 const (
 	errSpecialLimitKey    = "invalid limit key %q: user:<id> with id above 0 or chat:<id> with id below 0"
-	errSpecialLimitValue  = "the monthly limit must be a whole number from %d to %d (unlimited and higher only with /gated in Telegram)"
+	errSpecialLimitValue  = "the monthly limit must be a whole number from %d to %d, or %d for unlimited (higher only with /gated in Telegram)"
 	errSpecialLimitStored = "the stored limit %s is not a whole number or null"
 )
 
@@ -42,16 +43,17 @@ type SpecialLimitTarget struct {
 }
 
 // SpecialLimitRules are published in the registry so the dashboard checks
-// requests against the running bot's rules.
+// requests against the running bot's rules; Unlimited: -1 is accepted too.
 type SpecialLimitRules struct {
-	Kind string `json:"kind"`
-	Min  int64  `json:"min"`
-	Max  int64  `json:"max"`
+	Kind      string `json:"kind"`
+	Min       int64  `json:"min"`
+	Max       int64  `json:"max"`
+	Unlimited bool   `json:"unlimited"`
 }
 
 // SpecialLimits returns the rules of a limit request.
 func SpecialLimits() SpecialLimitRules {
-	result := SpecialLimitRules{Kind: KindSpecialLimit, Min: SpecialLimitMin, Max: SpecialLimitMax}
+	result := SpecialLimitRules{Kind: KindSpecialLimit, Min: SpecialLimitMin, Max: SpecialLimitMax, Unlimited: true}
 
 	return result
 }
@@ -77,7 +79,8 @@ func ParseSpecialLimitKey(key string) (SpecialLimitTarget, error) {
 }
 
 // ValidateSpecialLimit checks a requested limit: nil is a reset (back to the
-// default), else a whole number from SpecialLimitMin to SpecialLimitMax.
+// default), else SpecialLimitUnlimited or a whole number from
+// SpecialLimitMin to SpecialLimitMax.
 func ValidateSpecialLimit(raw json.RawMessage) (*int64, error) {
 	var result *int64
 	var err error
@@ -86,12 +89,13 @@ func ValidateSpecialLimit(raw json.RawMessage) (*int64, error) {
 		result, err = decodeWholeNumber(raw)
 	}
 
-	isOutOfRange := (result != nil) && ((*result < SpecialLimitMin) || (*result > SpecialLimitMax))
+	isUnlimited := (result != nil) && (*result == SpecialLimitUnlimited)
+	isOutOfRange := (result != nil) && (isUnlimited == false) && ((*result < SpecialLimitMin) || (*result > SpecialLimitMax))
 	isRefused := (raw != nil) && ((err != nil) || (result == nil) || (isOutOfRange == true))
 
 	if isRefused == true {
 		result = nil
-		err = fmt.Errorf(errSpecialLimitValue, SpecialLimitMin, SpecialLimitMax)
+		err = fmt.Errorf(errSpecialLimitValue, SpecialLimitMin, SpecialLimitMax, SpecialLimitUnlimited)
 	}
 
 	return result, err

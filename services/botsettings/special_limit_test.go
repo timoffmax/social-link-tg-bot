@@ -119,7 +119,7 @@ func TestSpecialLimitSameValueIsRejected(t *testing.T) {
 }
 
 func TestSpecialLimitOutOfRangeIsRejected(t *testing.T) {
-	for _, value := range []string{"-1", "1001", "10.5", `"10"`, "null"} {
+	for _, value := range []string{"-2", "1001", "10.5", `"10"`, "null"} {
 		decision := decideRequest(limitRequest(testLimitUserKey, value, "null", "null"), false)
 
 		if (decision.Status != settings.StatusRejected) || (strings.Contains(decision.Error, "whole number from 0 to 1000") == false) {
@@ -134,7 +134,7 @@ func TestSpecialLimitOutOfRangeIsRejected(t *testing.T) {
 	}
 }
 
-func TestSpecialLimitNeverWaitsForApproval(t *testing.T) {
+func TestNumericSpecialLimitNeverWaitsForApproval(t *testing.T) {
 	for _, canAsk := range []bool{false, true} {
 		request := limitRequest(testLimitUserKey, "1000", "null", "null")
 		request.AwaitingCount = maxAwaitingApproval
@@ -143,6 +143,36 @@ func TestSpecialLimitNeverWaitsForApproval(t *testing.T) {
 		if (decision.IsApplied() == false) || (decision.NeedsApproval == true) {
 			t.Fatalf("canAsk %v: got %+v", canAsk, decision)
 		}
+	}
+}
+
+func TestTurningUnlimitedOnWaitsForApproval(t *testing.T) {
+	decision := decideRequest(limitRequest(testLimitUserKey, "-1", "null", "null"), true)
+
+	if (decision.IsAwaitingApproval() == false) || (decision.NeedsApproval == false) {
+		t.Fatalf("got %+v", decision)
+	}
+
+	decision = decideRequest(limitRequest(testLimitUserKey, "-1", "null", "null"), false)
+
+	if (decision.Status != settings.StatusRejected) || (decision.Error != requestNoApproverError) || (decision.NeedsApproval == false) {
+		t.Fatalf("without an approver: %+v", decision)
+	}
+
+	full := limitRequest(testLimitUserKey, "-1", "null", "null")
+	full.AwaitingCount = maxAwaitingApproval
+	decision = decideRequest(full, true)
+
+	if (decision.Status != settings.StatusRejected) || (decision.Error != requestTooManyAwaiting) {
+		t.Fatalf("with %d waiting: %+v", maxAwaitingApproval, decision)
+	}
+}
+
+func TestTurningUnlimitedOffNeedsNoApproval(t *testing.T) {
+	decision := decideRequest(limitRequest(testLimitUserKey, "", "-1", "-1"), false)
+
+	if (decision.IsApplied() == false) || (decision.NeedsApproval == true) {
+		t.Fatalf("got %+v", decision)
 	}
 }
 

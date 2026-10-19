@@ -22,7 +22,6 @@ import { formatNumber, formatTimestamp, platformLabel } from '../format';
 import { useApi, useVisibleTick, type Query } from '../hooks';
 import {
   accountLimitText,
-  APPLY_NOTE,
   apifySpendText,
   breakerText,
   canChange,
@@ -58,6 +57,8 @@ import {
   limitChangeText,
   limitTargetKey,
   TRUNCATED_TEXT,
+  UNLIMITED,
+  unlimitedSwitch,
   usageAge,
   type RelayPlatformHistory,
   type RelayWindowStats,
@@ -548,6 +549,7 @@ function LimitItem({ row, context }: { row: LimitRow; context: LimitsContext }) 
   const base = row.effective_limit ?? 0;
   const parsed = (context.rules === null) ? null : parseLimitInput(text, context.rules);
   const ceiling = ceilingNote(row, context.rules);
+  const unlimited = unlimitedSwitch(row, context.rules);
   const change = lastChangeText(row, context);
   const isWaitingReason = (reason !== null) && (openRequest !== null) && (request !== null);
 
@@ -625,6 +627,12 @@ function LimitItem({ row, context }: { row: LimitRow; context: LimitsContext }) 
         {(row.limit_source === 'custom') && (
           <button type="button" className="button button--quiet" disabled={isLocked} onClick={() => propose(null)}>Reset to default</button>
         )}
+        {(unlimited === 'on') && (
+          <button type="button" className="button button--quiet" disabled={isLocked} onClick={() => propose(UNLIMITED)}>Make unlimited</button>
+        )}
+        {(unlimited === 'off') && (
+          <button type="button" className="button" disabled={isLocked} onClick={() => propose(null)}>Turn off unlimited</button>
+        )}
       </div>
       {isEditing && (context.rules !== null) && (
         <form className="limit-set" onSubmit={submitSet} noValidate aria-label={`Set the limit of ${rowName(row)}`}>
@@ -689,7 +697,7 @@ function ConfirmLimit({ row, next, context, busy, onConfirm, onCancel }: Confirm
     <div className={text.danger ? 'notice notice--danger' : 'notice notice--warning'} role="alertdialog" aria-label={`Confirm: ${text.question}`}>
       <p><strong>{text.question}</strong></p>
       {(text.warning !== null) && <p>{text.warning}</p>}
-      <p className="limit-confirm__note">{APPLY_NOTE}</p>
+      <p className="limit-confirm__note">{text.note}</p>
       <div className="notice__actions">
         <button ref={cancelButton} type="button" className="button button--quiet" onClick={onCancel} disabled={busy}>Cancel</button>
         <button type="button" className={text.danger ? 'button button--danger' : 'button button--primary'} onClick={onConfirm} disabled={busy}>

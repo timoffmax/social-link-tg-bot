@@ -702,13 +702,15 @@ export type LimitScope = 'user' | 'chat';
 /** full, near and ok count against a limit; off: a group switched off or at 0; blocked: a person at 0. */
 export type LimitState = 'ok' | 'near' | 'full' | 'blocked' | 'off' | 'unlimited';
 
-/** custom: stored for this person or group; unlimited: -1, set with /gated. */
+/** custom: stored for this person or group; unlimited: -1. */
 export type LimitSource = 'default' | 'custom' | 'unlimited';
 
 export interface SpecialLimitRules {
   kind: string;
   min: number;
   max: number;
+  /** The bot also takes -1 (unlimited); false or missing on an older bot. */
+  unlimited?: boolean;
 }
 
 export interface LimitDefaults {

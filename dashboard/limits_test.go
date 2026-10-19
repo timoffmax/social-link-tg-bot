@@ -289,6 +289,28 @@ func TestLimitRequestResetSendsSQLNull(t *testing.T) {
 	}
 }
 
+func TestLimitRequestUnlimitedQueuedWhenTheBotAllowsIt(t *testing.T) {
+	store := &stubStore{}
+	store.settings.registry = limitsRegistry(t)
+	store.settings.registry.SpecialLimit.Unlimited = true
+	recorder := limitRequest(`{"scope": "user", "id": 7, "limit": -1, "expected": null}`).do(newTestServer(store))
+	draft := store.limits.draft
+
+	if (recorder.Code != http.StatusAccepted) || (draft == nil) || (string(draft.Value) != "-1") {
+		t.Fatalf("status = %d, draft = %+v", recorder.Code, draft)
+	}
+
+	store = &stubStore{}
+	store.settings.registry = limitsRegistry(t)
+	store.settings.registry.SpecialLimit.Unlimited = true
+	recorder = limitRequest(`{"scope": "user", "id": 7, "limit": -2, "expected": null}`).do(newTestServer(store))
+	message, _ := decodeBody(t, recorder)["error"].(string)
+
+	if (recorder.Code != http.StatusBadRequest) || (strings.Contains(message, "-1 for unlimited") == false) {
+		t.Errorf("-2: status = %d, error = %q", recorder.Code, message)
+	}
+}
+
 func TestBadLimitRequestsAre400(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -299,7 +321,7 @@ func TestBadLimitRequestsAre400(t *testing.T) {
 		{"person sign", `{"scope": "user", "id": -7, "limit": 30, "expected": null}`, errLimitID},
 		{"group sign", `{"scope": "chat", "id": 7, "limit": 30, "expected": null}`, errLimitID},
 		{"above the max", `{"scope": "user", "id": 7, "limit": 1001, "expected": null}`, "from 0 to 1000"},
-		{"unlimited", `{"scope": "user", "id": 7, "limit": -1, "expected": null}`, "unlimited only with /gated"},
+		{"unlimited from an older bot", `{"scope": "user", "id": 7, "limit": -1, "expected": null}`, "unlimited (-1) only with /gated"},
 		{"not whole", `{"scope": "user", "id": 7, "limit": 10.5, "expected": null}`, "from 0 to 1000"},
 		{"text", `{"scope": "user", "id": 7, "limit": "10", "expected": null}`, "from 0 to 1000"},
 		{"missing limit", `{"scope": "user", "id": 7, "expected": null}`, "limit is required"},

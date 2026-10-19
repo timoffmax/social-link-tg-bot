@@ -51,7 +51,7 @@ func decideRequest(request ChangeRequest, canAskApproval bool) Decision {
 	case settings.KindSetting:
 		result = decideSettingRequest(request, canAskApproval)
 	case settings.KindSpecialLimit:
-		result = decideSpecialLimitRequest(request)
+		result = decideSpecialLimitRequest(request, canAskApproval)
 	}
 
 	return result

@@ -20,14 +20,17 @@ const (
 )
 
 // decideSpecialLimitRequest applies a limit request while the stored limit
-// still equals expected and the new limit is valid and different; it never
-// waits for approval (the owner raises limits himself; the digest reports it).
-func decideSpecialLimitRequest(request ChangeRequest) Decision {
+// still equals expected and the new limit is valid and different; only
+// turning unlimited on waits for the owner's approval, because an unlimited
+// scope also skips the bot-wide cap (whose raise needs approval too).
+func decideSpecialLimitRequest(request ChangeRequest, canAskApproval bool) Decision {
 	target, keyErr := settings.ParseSpecialLimitKey(request.Key)
 	current, currentErr := settings.ParseStoredSpecialLimit(request.StoredCurrent)
 	expected, expectedErr := settings.ParseStoredSpecialLimit(request.Expected)
 	next, nextErr := settings.ValidateSpecialLimit(request.Value)
 	change := specialLimitChange{Target: target, Old: current, New: next}
+	needsApproval := (next != nil) && (*next == settings.SpecialLimitUnlimited)
+	isFull := (request.AwaitingCount >= maxAwaitingApproval)
 	result := Decision{Status: settings.StatusApplied, TypedValue: change}
 
 	switch {
@@ -43,6 +46,14 @@ func decideSpecialLimitRequest(request ChangeRequest) Decision {
 		result = rejectedf("%v", nextErr)
 	case sameLimit(current, next) == true:
 		result = rejectedf(requestSpecialLimitUnchanged, limitText(current))
+	case (needsApproval == true) && (canAskApproval == false):
+		result = rejected(requestNoApproverError)
+		result.NeedsApproval = true
+	case (needsApproval == true) && (isFull == true):
+		result = rejected(requestTooManyAwaiting)
+		result.NeedsApproval = true
+	case needsApproval == true:
+		result = Decision{Status: settings.StatusAwaitingApproval, NeedsApproval: true, TypedValue: change}
 	}
 
 	return result

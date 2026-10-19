@@ -232,7 +232,7 @@ func TestPGSpecialLimitChecksRefuseBadKeyValueAndExpected(t *testing.T) {
 		{"user:05", "30", "null"},
 		{"gated.user:1", "30", "null"},
 		{"user:7", "1001", "null"},
-		{"user:7", "-1", "null"},
+		{"user:7", "-2", "null"},
 		{"user:7", "10.5", "null"},
 		{"user:7", `"10"`, "null"},
 		{"user:7", `{"a":1}`, "null"},
@@ -252,6 +252,7 @@ func TestPGSpecialLimitChecksRefuseBadKeyValueAndExpected(t *testing.T) {
 
 	fixture.queueLimitRequest(t, "user:7", "1000", "1500")
 	fixture.queueLimitRequest(t, "chat:-1001234567890", "0", "-1")
+	fixture.queueLimitRequest(t, "user:8", "-1", "null")
 }
 
 func TestPGOneOpenSpecialLimitPerScope(t *testing.T) {
@@ -297,6 +298,43 @@ func TestPGSpecialLimitApplyWritesPolicyAndAudit(t *testing.T) {
 	entries := harness.manager.digest.entries
 
 	if (len(entries) != 1) || (entries[0].Text != "Special downloads a month, group -1001: default (20) → 30") {
+		t.Fatalf("digest %+v", entries)
+	}
+}
+
+func TestPGSpecialLimitUnlimitedOnAfterApprovalOffWithout(t *testing.T) {
+	fixture := openPGFixture(t)
+	harness := loadedPGHarness(t, fixture)
+	approver := newFakeApprover()
+	harness.manager.approver = approver
+	onID := fixture.queueLimitRequest(t, "user:7", "-1", "null")
+	harness.manager.processRequests(context.Background())
+	waiting, _ := fixture.requestStatus(t, onID)
+	_, _, isWritten := fixture.policy(t, "user", 7)
+
+	if (waiting != settings.StatusAwaitingApproval) || (approver.askCount() != 1) || (isWritten == true) {
+		t.Fatalf("on: %s, %d asks, policy written %v", waiting, approver.askCount(), isWritten)
+	}
+
+	answer := harness.manager.handleTap(context.Background(), approvalTap{requestID: onID, isApprove: true})
+	onStatus, onReason := fixture.requestStatus(t, onID)
+	_, limit, isFound := fixture.policy(t, "user", 7)
+
+	if (answer != tapAppliedText) || (onStatus != settings.StatusApplied) || (isFound == false) || (limit.Int64 != -1) {
+		t.Fatalf("approved: %q %s (%s), policy %v %v", answer, onStatus, onReason, limit, isFound)
+	}
+
+	offID := fixture.queueLimitRequest(t, "user:7", nil, "-1")
+	harness.manager.processRequests(context.Background())
+	offStatus, offReason := fixture.requestStatus(t, offID)
+	_, _, isStillFound := fixture.policy(t, "user", 7)
+	entries := harness.manager.digest.entries
+
+	if (offStatus != settings.StatusApplied) || (isStillFound == true) || (approver.askCount() != 1) {
+		t.Fatalf("off: %s (%s), row kept %v, %d asks", offStatus, offReason, isStillFound, approver.askCount())
+	}
+
+	if (len(entries) != 2) || (entries[0].Text != "Special downloads a month, user 7: default (20) → unlimited") || (entries[1].Text != "Special downloads a month, user 7: unlimited → default (20)") {
 		t.Fatalf("digest %+v", entries)
 	}
 }

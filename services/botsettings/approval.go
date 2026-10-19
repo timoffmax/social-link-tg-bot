@@ -165,9 +165,8 @@ func settingApprovalLine(request ChangeRequest) string {
 	return result
 }
 
-// specialLimitApprovalLine renders a limit request from its key, expected
-// and value (a special limit never waits for approval; this keeps a
-// manually edited awaiting row readable).
+// specialLimitApprovalLine renders a limit request (turning unlimited on)
+// from its key, expected and value.
 func specialLimitApprovalLine(request ChangeRequest) string {
 	target, _ := settings.ParseSpecialLimitKey(request.Key)
 	oldLimit, _ := settings.ParseStoredSpecialLimit(request.Expected)

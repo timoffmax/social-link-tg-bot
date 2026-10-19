@@ -42,7 +42,6 @@ const (
 	digestSpecialChat      = "group %d"
 	digestSpecialDefault   = "default (%d)"
 	digestSpecialUnlimited = "unlimited"
-	digestSpecialUnlimit   = int64(-1)
 )
 
 // Owner timezone of the digest times; UTC when the system has no zone data.
@@ -282,7 +281,7 @@ func specialLimitText(limit *int64, scope string) string {
 	case limit == nil:
 		defaultLimit := specialLimitDefault(scope)
 		result = fmt.Sprintf(digestSpecialDefault, defaultLimit)
-	case *limit == digestSpecialUnlimit:
+	case *limit == settings.SpecialLimitUnlimited:
 		result = digestSpecialUnlimited
 	default:
 		result = fmt.Sprintf("%d", *limit)

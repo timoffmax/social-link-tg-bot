@@ -1758,7 +1758,7 @@ function limitsMeta(): Pick<LimitsResponse, 'bot' | 'applying' | 'rules' | 'defa
       is_stale: isStale,
     },
     applying: (mode !== 'empty') && (isStale === false),
-    rules: (mode === 'oldbot') ? null : { kind: 'special_limit', min: 0, max: LIMIT_MAX },
+    rules: (mode === 'oldbot') ? null : { kind: 'special_limit', min: 0, max: LIMIT_MAX, unlimited: true },
     defaults: { user: DEFAULT_USER_LIMIT, chat: DEFAULT_CHAT_LIMIT },
   };
 }
@@ -1813,14 +1813,14 @@ function queueLimit(body: LimitDraft): SettingRequestResponse {
   const store = limitsTable();
   advanceLimitRequests(store);
   const key = limitKeyOf(body.scope, body.id);
-  const isWhole = (body.limit === null) || (Number.isInteger(body.limit) && (body.limit >= 0) && (body.limit <= LIMIT_MAX));
+  const isWhole = (body.limit === null) || (body.limit === -1) || (Number.isInteger(body.limit) && (body.limit >= 0) && (body.limit <= LIMIT_MAX));
 
   if (mockMode() === 'oldbot') {
     throw new ApiError(HTTP_CONFLICT, LIMIT_NOT_SUPPORTED_ERROR);
   }
 
   if (isWhole === false) {
-    throw new ApiError(HTTP_BAD_REQUEST, `limit must be a whole number from 0 to ${LIMIT_MAX}, or null for the default; unlimited only with /gated in Telegram`);
+    throw new ApiError(HTTP_BAD_REQUEST, `limit must be a whole number from 0 to ${LIMIT_MAX}, -1 for unlimited, or null for the default`);
   }
 
   if (openLimitRequest(store, key) !== null) {

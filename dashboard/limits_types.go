@@ -35,7 +35,7 @@ const (
 	limitStateUnlimited  = "unlimited"
 )
 
-// The stored monthly_limit of an unlimited scope (set only with /gated).
+// The stored monthly_limit of an unlimited scope.
 const limitUnlimited = int64(-1)
 
 // Effective settings the Limits tab reads from the 'settings' component.
@@ -73,9 +73,10 @@ type LimitsSnapshot struct {
 // SpecialLimitRules are the limit request rules the bot publishes in
 // registry.special_limit.
 type SpecialLimitRules struct {
-	Kind string `json:"kind"`
-	Min  int64  `json:"min"`
-	Max  int64  `json:"max"`
+	Kind      string `json:"kind"`
+	Min       int64  `json:"min"`
+	Max       int64  `json:"max"`
+	Unlimited bool   `json:"unlimited"`
 }
 
 // LimitDefaults are the default monthly limits; null until the bot has

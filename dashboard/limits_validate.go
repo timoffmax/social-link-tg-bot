@@ -22,7 +22,8 @@ const (
 	errLimitID           = "id must be a person's id (above 0) or a group's id (below 0)"
 	errLimitRequired     = "limit is required (null sets the default again)"
 	errLimitExpected     = "expected is required: send the stored limit the page showed (null when none)"
-	errLimitValue        = "limit must be a whole number from %d to %d, or null for the default; unlimited only with /gated in Telegram"
+	errLimitValue        = "limit must be a whole number from %d to %d, or null for the default; unlimited (%d) only with /gated in Telegram"
+	errLimitValueOrUnlim = "limit must be a whole number from %d to %d, %d for unlimited, or null for the default"
 	errLimitExpectedForm = "expected must be null or a whole number from -1"
 	errLimitRejectedByDB = "the database refused this limit request"
 )
@@ -40,7 +41,8 @@ func limitRequestDraft(body limitRequestBody, rules *SpecialLimitRules) (Setting
 	expected, isExpectedNull, expectedErr := parseLimitJSON(body.Expected)
 	isScope := (scope == limitScopeUser) || (scope == limitScopeChat)
 	isLimitInRange := (rules != nil) && (limit >= rules.Min) && (limit <= rules.Max)
-	isLimitValid := (isLimitNull == true) || ((limitErr == nil) && (isLimitInRange == true))
+	isUnlimited := (rules != nil) && (rules.Unlimited == true) && (limit == limitUnlimited)
+	isLimitValid := (isLimitNull == true) || ((limitErr == nil) && ((isLimitInRange == true) || (isUnlimited == true)))
 	isExpectedValid := (isExpectedNull == true) || ((expectedErr == nil) && (expected >= limitExpectedMin))
 
 	switch {
@@ -54,8 +56,10 @@ func limitRequestDraft(body limitRequestBody, rules *SpecialLimitRules) (Setting
 		err = badRequest(errLimitRequired)
 	case len(body.Expected) == 0:
 		err = badRequest(errLimitExpected)
+	case (isLimitValid == false) && (rules.Unlimited == true):
+		err = badRequest(errLimitValueOrUnlim, rules.Min, rules.Max, limitUnlimited)
 	case isLimitValid == false:
-		err = badRequest(errLimitValue, rules.Min, rules.Max)
+		err = badRequest(errLimitValue, rules.Min, rules.Max, limitUnlimited)
 	case isExpectedValid == false:
 		err = badRequest(errLimitExpectedForm)
 	}

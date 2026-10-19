@@ -54,12 +54,24 @@ func TestValidateSpecialLimitAcceptsZeroToCeilingAndReset(t *testing.T) {
 }
 
 func TestValidateSpecialLimitRefusesOutOfRangeAndNonIntegers(t *testing.T) {
-	for _, raw := range []string{"-1", "1001", "10.5", `"10"`, "true", "null", "1e2", "{}", "1 2"} {
+	for _, raw := range []string{"-2", "1001", "10.5", `"10"`, "true", "null", "1e2", "{}", "1 2"} {
 		got, err := ValidateSpecialLimit(json.RawMessage(raw))
 
 		if (err == nil) || (got != nil) {
 			t.Fatalf("%s: got %v, %v; want an error", raw, got, err)
 		}
+	}
+}
+
+func TestValidateSpecialLimitAcceptsUnlimited(t *testing.T) {
+	got, err := ValidateSpecialLimit(json.RawMessage("-1"))
+
+	if (err != nil) || (got == nil) || (*got != SpecialLimitUnlimited) {
+		t.Fatalf("got %v, %v", got, err)
+	}
+
+	if SpecialLimits().Unlimited == false {
+		t.Fatalf("the published rules must allow unlimited")
 	}
 }
 
