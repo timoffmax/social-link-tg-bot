@@ -77,6 +77,10 @@ type Server struct {
 	reportItem     writeRoute
 	reportReplies  writeRoute
 	reportResolved writeRoute
+	// settingRequests and settingRequest are /api/settings/requests and
+	// /api/settings/requests/{id}.
+	settingRequests writeRoute
+	settingRequest  writeRoute
 }
 
 // NewServer returns the handler serving the API from store and the SPA from
@@ -95,13 +99,14 @@ func NewServer(store Store, timezone string, allowedHosts []string, assets fs.FS
 	}
 	result.newBlogRoutes()
 	result.newReportRoutes()
+	result.newSettingsRoutes()
 
 	return result
 }
 
 // ServeHTTP sets the security headers, refuses an unknown Host (a
-// DNS-rebinding page) and routes the request: the blog and report write
-// routes accept their own methods, every other path only GET and HEAD. No
+// DNS-rebinding page) and routes the request: the blog, report and settings
+// request routes accept their own methods, every other path only GET and HEAD. No
 // response carries CORS headers.
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	header := w.Header()
@@ -120,13 +125,17 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// matchWriteRoute finds the blog or report route of a path; false for any
-// other path, which then stays GET/HEAD only.
+// matchWriteRoute finds the blog, report or settings request route of a
+// path; false for any other path, which then stays GET/HEAD only.
 func (s *Server) matchWriteRoute(urlPath string) (writeRoute, bool) {
 	result, isMatch := s.matchBlogRoute(urlPath)
 
 	if isMatch == false {
 		result, isMatch = s.matchReportRoute(urlPath)
+	}
+
+	if isMatch == false {
+		result, isMatch = s.matchSettingsRoute(urlPath)
 	}
 
 	return result, isMatch
@@ -296,11 +305,25 @@ func (s *Server) respondLoaded(w http.ResponseWriter, r *http.Request, status in
 	}
 }
 
-// writeLoadError answers 404 or 409 for a missing or concurrently changed
-// blog post and 404 for a missing report; any other error is logged and
-// answered with a generic 500.
+// writeLoadError answers a client error found while loading with its own
+// status, 404 or 409 for a missing or concurrently changed blog post, 404
+// for a missing report or settings request, 409 while a change of the
+// setting is already waiting, 400 for a value too large to store; any other
+// error is logged and answered with a generic 500.
 func writeLoadError(w http.ResponseWriter, r *http.Request, err error) {
+	var clientErr *requestError
+
 	switch {
+	case errors.As(err, &clientErr):
+		writeError(w, clientErr.status, clientErr.message)
+	case errors.Is(err, ErrSettingRequestNotFound):
+		writeError(w, http.StatusNotFound, errNotFound)
+	case errors.Is(err, ErrSettingRequestOpen):
+		message := ErrSettingRequestOpen.Error()
+		writeError(w, http.StatusConflict, message)
+	case errors.Is(err, ErrSettingValueTooLarge):
+		message := ErrSettingValueTooLarge.Error()
+		writeError(w, http.StatusBadRequest, message)
 	case errors.Is(err, ErrBlogPostNotFound):
 		writeError(w, http.StatusNotFound, errNotFound)
 	case errors.Is(err, ErrReportNotFound):

@@ -10,7 +10,7 @@ import (
 
 // settingsManager is the settings goroutine: it loads the owner-set values
 // before the startup checks (so the first profile push already follows
-// them), then applies requests and reloads until shutdown.
+// them), then applies the dashboard's requests and reloads until shutdown.
 var settingsManager *botsettings.Manager
 
 // initSettings loads the owner-set values: without a database configured
@@ -28,12 +28,11 @@ func initSettings(dbErr error) {
 
 	databaseErr := unavailableDatabaseErr(isInitialized, dbErr)
 	options := botsettings.Options{
-		Store:       store,
-		DatabaseErr: databaseErr,
-		Notify:      services.NotifyAdminUnthrottled,
-		PushProfile: pushBotProfile,
-		// Off until the dashboard's Settings tab and the change digest (M2).
-		ApplyRequests: false,
+		Store:         store,
+		DatabaseErr:   databaseErr,
+		Notify:        services.NotifyAdminUnthrottled,
+		PushProfile:   pushBotProfile,
+		ApplyRequests: true,
 	}
 	settingsManager = botsettings.New(options)
 	ctx := context.Background()

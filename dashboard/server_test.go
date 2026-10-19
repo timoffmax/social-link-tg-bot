@@ -14,15 +14,16 @@ import (
 
 // stubStore records the parameters it was called with.
 type stubStore struct {
-	err    error
-	days   int
-	limit  int
-	months int
-	weeks  int
-	status string
-	calls  int
-	blog   blogStub
-	report reportStub
+	err      error
+	days     int
+	limit    int
+	months   int
+	weeks    int
+	status   string
+	calls    int
+	blog     blogStub
+	report   reportStub
+	settings settingsStub
 }
 
 func (s *stubStore) Ping(ctx context.Context) error {
@@ -404,8 +405,9 @@ func TestHandlersPassDefaultsAndClampedParams(t *testing.T) {
 		}
 
 		got := stubStore{days: store.days, limit: store.limit, months: store.months, weeks: store.weeks}
+		isSame := (got.days == tc.want.days) && (got.limit == tc.want.limit) && (got.months == tc.want.months) && (got.weeks == tc.want.weeks)
 
-		if got != tc.want {
+		if isSame == false {
 			t.Errorf("%s: store got %+v, want %+v", tc.target, got, tc.want)
 		}
 	}

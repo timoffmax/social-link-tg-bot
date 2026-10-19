@@ -535,3 +535,49 @@ RETURNING ` + blogPostColumns
 const deleteBlogPostSQL = `DELETE FROM blog_posts
 WHERE id = $1::int
 RETURNING id`
+
+// statusComponentsSQL reads the bot's published state: $1 component names.
+const statusComponentsSQL = `SELECT component, data, updated_at
+FROM bot_runtime_status
+WHERE component = ANY($1::text[])`
+
+// storedSettingsSQL reads the values the owner set.
+const storedSettingsSQL = `SELECT key, value, updated_at, updated_by
+FROM bot_settings`
+
+// settingRequestColumns is the column list scanSettingRequest reads.
+const settingRequestColumns = `id, key, status, value, expected, needs_approval, error, created_at, expires_at, decided_at`
+
+// openSettingRequestsSQL reads the requests waiting for the bot or for the
+// owner's approval: $1 kind, $2 statuses.
+const openSettingRequestsSQL = `SELECT ` + settingRequestColumns + `
+FROM settings_change_requests
+WHERE kind = $1::text AND status = ANY($2::text[])`
+
+// settingRequestSQL: $1 id.
+const settingRequestSQL = `SELECT ` + settingRequestColumns + `
+FROM settings_change_requests
+WHERE id = $1::bigint`
+
+// queueSettingRequestSQL inserts a request with only the columns the
+// dashboard may set; status, source, role and expiry come from the
+// defaults: $1 kind, $2 key, $3 value (NULL resets), $4 expected.
+const queueSettingRequestSQL = `INSERT INTO settings_change_requests (kind, key, value, expected)
+VALUES ($1::text, $2::text, $3::jsonb, $4::jsonb)
+RETURNING ` + settingRequestColumns
+
+// settingsAuditColumns is the column list scanSettingsAudit reads.
+const settingsAuditColumns = `id, key, old_value, new_value, actor, db_role, request_id, note, created_at`
+
+// lastSettingChangesSQL reads the newest audit row of every key.
+const lastSettingChangesSQL = `SELECT DISTINCT ON (key) ` + settingsAuditColumns + `
+FROM settings_audit
+ORDER BY key, created_at DESC, id DESC`
+
+// settingsAuditSQL pages the audit, newest first: $1 keys (NULL for all),
+// $2 before id (0 for the newest), $3 rows.
+const settingsAuditSQL = `SELECT ` + settingsAuditColumns + `
+FROM settings_audit
+WHERE ($1::text[] IS NULL OR key = ANY($1::text[])) AND ($2::bigint = 0 OR id < $2::bigint)
+ORDER BY id DESC
+LIMIT $3::int`

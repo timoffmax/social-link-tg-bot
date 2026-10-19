@@ -37,6 +37,7 @@ type botStatus struct {
 	SettingsLoadedAt time.Time `json:"settings_loaded_at"`
 	SettingsSource   string    `json:"settings_source"`
 	SettingsCount    int       `json:"settings_count"`
+	AppliesRequests  bool      `json:"applies_requests"`
 }
 
 // secretsStatus is the 'secrets' component: which secrets are set, never
@@ -129,6 +130,7 @@ func (m *Manager) botStatus() botStatus {
 		SettingsLoadedAt: m.loadedAt,
 		SettingsSource:   m.origin,
 		SettingsCount:    snapshotCount,
+		AppliesRequests:  m.applyRequests,
 	}
 
 	return result

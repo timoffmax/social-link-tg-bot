@@ -1,6 +1,7 @@
 // Command social-link-dashboard serves the owner's statistics dashboard (a
 // React page and a JSON API) from the bot's database. It only reads, except
-// the Blog tab, which creates, edits, publishes and deletes blog posts.
+// the Blog tab (blog posts), the Reports tab (queued replies, resolving) and
+// the Settings tab (queued change requests the bot applies).
 package main
 
 import (
@@ -9,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -143,19 +145,33 @@ func newHTTPServer(addr string, handler http.Handler) *http.Server {
 	return result
 }
 
-// listenUntilSignal serves until the listener fails or a signal arrives.
+// listenUntilSignal opens the listener (TCP or unix socket) and serves until
+// it fails or a signal arrives.
 func listenUntilSignal(server *http.Server, config dashboard.Config) error {
+	listener, err := dashboard.Listen(config)
+
+	if err == nil {
+		err = serveUntilSignal(server, listener, config)
+	}
+
+	return err
+}
+
+// serveUntilSignal serves on listener until it fails or a signal arrives;
+// shutting down closes the listener, which removes a unix socket.
+func serveUntilSignal(server *http.Server, listener net.Listener, config dashboard.Config) error {
 	background := context.Background()
 	ctx, stop := signal.NotifyContext(background, os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	failed := make(chan error, 1)
 
 	go func() {
-		failed <- server.ListenAndServe()
+		failed <- server.Serve(listener)
 	}()
 
 	hosts := strings.Join(config.AllowedHosts, allowedHostsLogSeparator)
-	log.Printf("dashboard: listening on http://%s (timezone %s, hosts %s)", config.Addr, config.Timezone, hosts)
+	address := listenAddress(config)
+	log.Printf("dashboard: listening on %s (timezone %s, hosts %s)", address, config.Timezone, hosts)
 	var err error
 
 	select {
@@ -169,6 +185,17 @@ func listenUntilSignal(server *http.Server, config dashboard.Config) error {
 	}
 
 	return err
+}
+
+// listenAddress names the listener in the start-up log line.
+func listenAddress(config dashboard.Config) string {
+	result := fmt.Sprintf("http://%s", config.Addr)
+
+	if config.SocketPath != "" {
+		result = config.Addr
+	}
+
+	return result
 }
 
 // shutdown lets running requests finish.

@@ -312,6 +312,7 @@ export const RANGE_DAYS = [7, 30, 90, 180, 365] as const;
 export type RangeDays = (typeof RANGE_DAYS)[number];
 export const DEFAULT_RANGE_DAYS: RangeDays = 90;
 
+export const HTTP_BAD_REQUEST = 400;
 export const HTTP_NOT_FOUND = 404;
 export const HTTP_CONFLICT = 409;
 const HTTP_NO_CONTENT = 204;
@@ -486,4 +487,217 @@ export function queueReportReply(id: number, reply: ReportReplyRequest): Promise
 
 export function setReportResolved(id: number, resolved: boolean): Promise<ReportResponse> {
   return request<ReportResponse>('PUT', `${reportPath(id)}/resolved`, { resolved });
+}
+
+// Settings: the registry and the effective values come from what the bot publishes; the dashboard
+// only queues change requests, which the bot validates and applies itself.
+
+export type SettingType = 'bool' | 'int' | 'decimal' | 'enum' | 'host' | 'ordered_list';
+
+/** Which changes wait for the owner's Approve in Telegram; every other change applies directly. */
+export type ApprovalRule = 'never' | 'raise' | 'lower' | 'to_true' | 'always';
+
+/**
+ * db: set here; cache: the value set here, from the bot's cache file (the database was down at its
+ * start); safe: the safe value of a money key whose stored value is no longer valid; env; default.
+ */
+export type SettingSource = 'db' | 'cache' | 'safe' | 'env' | 'default';
+
+export type SettingActor = 'dashboard' | 'telegram' | 'bot' | 'manual';
+
+export type SettingValue = boolean | number | string | string[];
+
+/** queued and awaiting_approval are open; applied, rejected and expired are final. */
+export type SettingRequestStatus = 'queued' | 'awaiting_approval' | 'applied' | 'rejected' | 'expired';
+
+export interface EffectiveSetting {
+  value: SettingValue;
+  source: SettingSource;
+  /** Whether the setting's .env variable is set (its value is not published). */
+  env_set: boolean;
+}
+
+export interface StoredSetting {
+  value: SettingValue;
+  updated_at: Timestamp;
+  updated_by: SettingActor;
+}
+
+export interface OpenSettingRequest {
+  id: number;
+  status: SettingRequestStatus;
+  /** null: a reset to .env / default. */
+  value: SettingValue | null;
+  created_at: Timestamp;
+  expires_at: Timestamp;
+}
+
+export interface SettingChange {
+  id: number;
+  created_at: Timestamp;
+  actor: SettingActor;
+  old_value: SettingValue | null;
+  new_value: SettingValue | null;
+}
+
+/** One managed setting: the registry fields as the bot published them, then its state. */
+export interface SettingRow {
+  key: string;
+  group: string;
+  type: SettingType;
+  env_var?: string;
+  default: SettingValue;
+  min?: number;
+  min_exclusive?: boolean;
+  max?: number;
+  /** The hard ceiling: going above it needs a code change. */
+  ceiling?: number;
+  /** Decimals allowed. */
+  scale?: number;
+  enum?: string[];
+  approval: ApprovalRule;
+  safe_value?: SettingValue;
+  label: string;
+  impact: string;
+  /** null until the bot has published its values. */
+  effective: EffectiveSetting | null;
+  stored: StoredSetting | null;
+  open_request: OpenSettingRequest | null;
+  last_change: SettingChange | null;
+}
+
+export interface BotHeartbeat {
+  started_at: Timestamp;
+  heartbeat_at: Timestamp;
+  commit?: string;
+  commit_modified?: boolean;
+  settings_loaded_at: Timestamp;
+  settings_source: 'db' | 'cache' | 'none';
+  settings_count: number;
+  /** The heartbeat is older than 3 minutes: the bot is probably not running. */
+  is_stale: boolean;
+}
+
+export interface ProfileStatus {
+  pushed_at: Timestamp | null;
+  methods: string[] | null;
+  error?: string;
+  pending_at?: Timestamp | null;
+  attempts: number;
+}
+
+/** Which secrets the bot has; never their values. */
+export interface SecretsStatus {
+  tg_bot_token: boolean;
+  admin_user_id: boolean;
+  apify_token: boolean;
+  hiker_token: boolean;
+  proxies: number;
+  relay_url: boolean;
+  relay_token_file: boolean;
+}
+
+export interface SettingsPlatform {
+  id: string;
+  label: string;
+}
+
+export interface SettingsResponse extends ResponseMeta {
+  bot: BotHeartbeat | null;
+  profile: ProfileStatus | null;
+  secrets: SecretsStatus | null;
+  groups: string[];
+  platforms: SettingsPlatform[];
+  /** Whether the bot applies queued changes; until then they expire. */
+  applying: boolean;
+  /** Registry order; empty until the bot has published its registry. */
+  settings: SettingRow[];
+}
+
+export interface SettingRequest {
+  id: number;
+  key: string;
+  status: SettingRequestStatus;
+  value: SettingValue | null;
+  expected: SettingValue;
+  needs_approval: boolean | null;
+  /** Why the bot rejected or expired it. */
+  error: string | null;
+  created_at: Timestamp;
+  expires_at: Timestamp;
+  decided_at: Timestamp | null;
+}
+
+export interface SettingRequestResponse extends ResponseMeta {
+  request: SettingRequest;
+}
+
+export interface SettingChangeDraft {
+  key: string;
+  /** null: reset to .env / default. */
+  value: SettingValue | null;
+  /** The effective value the page showed: the bot applies the change only while it still holds. */
+  expected: SettingValue;
+}
+
+export interface AuditEntry {
+  id: number;
+  key: string;
+  old_value: SettingValue | null;
+  new_value: SettingValue | null;
+  actor: SettingActor;
+  /** The database role that wrote it, which the writer can not forge. */
+  db_role: string;
+  request_id: number | null;
+  note: string | null;
+  created_at: Timestamp;
+}
+
+export interface AuditResponse extends ResponseMeta {
+  entries: AuditEntry[];
+  /** Pass as before for the next, older page; null on the last page. */
+  next_before: number | null;
+}
+
+export interface AuditFilter {
+  key?: string;
+  group?: string;
+  before?: number;
+  limit?: number;
+}
+
+export const AUDIT_LIMIT = 50;
+
+const SETTINGS_PATH = '/api/settings';
+const SETTINGS_REQUESTS_PATH = `${SETTINGS_PATH}/requests`;
+
+export function getSettings(signal?: AbortSignal): Promise<SettingsResponse> {
+  return request<SettingsResponse>('GET', SETTINGS_PATH, undefined, signal);
+}
+
+/** Queues a change for the bot (202); 409 while another change of the key is waiting. */
+export function queueSettingChange(draft: SettingChangeDraft): Promise<SettingRequestResponse> {
+  return request<SettingRequestResponse>('POST', SETTINGS_REQUESTS_PATH, draft);
+}
+
+export function getSettingRequest(id: number, signal?: AbortSignal): Promise<SettingRequestResponse> {
+  return request<SettingRequestResponse>('GET', `${SETTINGS_REQUESTS_PATH}/${id}`, undefined, signal);
+}
+
+export function getSettingsAudit(filter: AuditFilter, signal?: AbortSignal): Promise<AuditResponse> {
+  const query: PathQuery = { limit: filter.limit ?? AUDIT_LIMIT };
+
+  if (filter.key !== undefined) {
+    query.key = filter.key;
+  }
+
+  if (filter.group !== undefined) {
+    query.group = filter.group;
+  }
+
+  if (filter.before !== undefined) {
+    query.before = filter.before;
+  }
+
+  return request<AuditResponse>('GET', buildPath('settings/audit', query), undefined, signal);
 }

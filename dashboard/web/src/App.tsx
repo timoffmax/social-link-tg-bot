@@ -10,6 +10,7 @@ import { MoneyTab } from './tabs/Money';
 import { OverviewTab } from './tabs/Overview';
 import { PlatformsTab } from './tabs/Platforms';
 import { ReportsTab } from './tabs/Reports';
+import { SettingsTab } from './tabs/Settings';
 import type { TabProps } from './tabs/types';
 
 interface TabSpec {
@@ -26,6 +27,7 @@ const TAB_SPECS: Record<Tab, TabSpec> = {
   money: { label: 'Money', component: MoneyTab, fixedScope: 'Last 12 months' },
   reports: { label: 'Reports', component: ReportsTab, fixedScope: 'Last 26 weeks' },
   blog: { label: 'Blog', component: BlogTab, fixedScope: 'Posts for the bot’s owner-panel Broadcast' },
+  settings: { label: 'Settings', component: SettingsTab, fixedScope: 'Applied by the bot within seconds; every change is logged' },
 };
 
 const RANGE_OPTIONS: SegmentOption<RangeDays>[] = RANGE_DAYS.map((days) => ({ value: days, label: `${days} d` }));

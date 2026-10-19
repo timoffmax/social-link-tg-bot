@@ -26,6 +26,10 @@ const (
 	DefaultTimezone    = "Europe/Kyiv"
 )
 
+// unixAddrPrefix marks a DASHBOARD_ADDR that is a unix socket path
+// ("unix:/run/social-link-dashboard/dashboard.sock").
+const unixAddrPrefix = "unix:"
+
 // allowPublicValue is the only value of EnvAllowPublic that allows a
 // non-loopback listen address.
 const allowPublicValue = "true"
@@ -65,9 +69,18 @@ var ErrPublicAddress = errors.New("listen address is not a loopback address")
 // ErrLocalTimezone is returned when the timezone is the "Local" alias.
 var ErrLocalTimezone = errors.New("timezone \"Local\" is not an IANA name")
 
+// Errors of a unix socket address.
+var (
+	ErrSocketPath  = errors.New("unix socket path must be absolute")
+	ErrSocketHosts = errors.New("a unix socket address needs the allowed hosts")
+)
+
 // Config is the dashboard's runtime configuration.
 type Config struct {
-	Addr        string
+	Addr string
+	// SocketPath is the unix socket to listen on when Addr is
+	// "unix:<path>"; empty for a TCP address.
+	SocketPath  string
 	DatabaseURL string
 	Timezone    string
 	Location    *time.Location
@@ -87,14 +100,52 @@ func LoadConfig(getenv func(string) string) (Config, error) {
 	}
 	allowPublicRaw := getenv(EnvAllowPublic)
 	allowPublic := (strings.TrimSpace(allowPublicRaw) == allowPublicValue)
-	err := CheckListenAddress(result.Addr, allowPublic)
+	socketPath, isSocket := strings.CutPrefix(result.Addr, unixAddrPrefix)
+	err := checkAddress(result.Addr, allowPublic, isSocket, socketPath)
 
 	if err == nil {
 		result.Location, err = loadTimezone(result.Timezone)
 	}
 
-	if err == nil {
+	if (err == nil) && (isSocket == true) {
+		result.SocketPath = socketPath
+		result.AllowedHosts, err = loadSocketHosts(getenv)
+	}
+
+	if (err == nil) && (isSocket == false) {
 		result.AllowedHosts = loadAllowedHosts(getenv, result.Addr)
+	}
+
+	return result, err
+}
+
+// checkAddress checks a TCP listen address (CheckListenAddress) or that a
+// unix socket path is absolute.
+func checkAddress(addr string, allowPublic bool, isSocket bool, socketPath string) error {
+	var result error
+	isAbsolute := strings.HasPrefix(socketPath, pathSeparator)
+
+	if isSocket == false {
+		result = CheckListenAddress(addr, allowPublic)
+	}
+
+	if (isSocket == true) && (isAbsolute == false) {
+		result = fmt.Errorf("%w: %q", ErrSocketPath, addr)
+	}
+
+	return result
+}
+
+// loadSocketHosts reads EnvAllowedHosts for a unix socket, which has no
+// host:port of its own to default to: the hosts must be set.
+func loadSocketHosts(getenv func(string) string) ([]string, error) {
+	var err error
+	configuredRaw := getenv(EnvAllowedHosts)
+	configured := strings.TrimSpace(configuredRaw)
+	result := parseAllowedHosts(configured)
+
+	if len(result) == 0 {
+		err = fmt.Errorf("%w: set %s to the Host the proxy sends, such as stats.example.com:8443", ErrSocketHosts, EnvAllowedHosts)
 	}
 
 	return result, err

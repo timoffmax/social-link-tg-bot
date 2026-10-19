@@ -11,6 +11,7 @@ import (
 type Store interface {
 	BlogStore
 	ReportStore
+	SettingsStore
 	Ping(ctx context.Context) error
 	Overview(ctx context.Context, days int) (Overview, error)
 	Platforms(ctx context.Context, days int) (Platforms, error)

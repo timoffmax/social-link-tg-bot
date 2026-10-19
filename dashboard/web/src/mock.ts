@@ -9,6 +9,11 @@
 // reloads. A queued reply is "sent" a few seconds later (resolving its report
 // when it was queued with resolve), except to Dmytro (report #6), who has
 // blocked the bot, so it fails.
+// Settings changes are applied by a pretend bot about 3 seconds after they are
+// queued; the first change of the bot-wide restricted-posts cap is rejected as
+// "changed meanwhile, reload", and the Reddit proxy has a change queued from
+// another tab at load, so changing it answers 409 until that one is applied.
+// ?mock=stale shows the bot as not running and a failed profile push.
 
 import type {
   Report,
@@ -27,9 +32,19 @@ import type {
   OverviewResponse,
   PlatformsResponse,
   ReportsResponse,
+  AuditEntry,
+  AuditResponse,
+  SettingChangeDraft,
+  SettingRequest,
+  SettingRequestResponse,
+  SettingRow,
+  SettingsResponse,
+  SettingValue,
+  StoredSetting,
 } from './api';
 import { ApiError, HTTP_CONFLICT, HTTP_NOT_FOUND } from './api';
 import { titleLength, TITLE_MAX_CHARS } from './editing';
+import { needsApproval, sameValue, validateValue } from './settings';
 import { parseTelegramHtml, TELEGRAM_TEXT_LIMIT } from './telegramHtml';
 
 const TIMEZONE = 'Europe/Kyiv';
@@ -48,8 +63,8 @@ const PLATFORM_WEIGHT: Record<string, number> = {
   unknown: 0.1,
 };
 
-type Mode = 'data' | 'empty' | 'error' | 'conflict';
-const MODES: Mode[] = ['data', 'empty', 'error', 'conflict'];
+type Mode = 'data' | 'empty' | 'error' | 'conflict' | 'stale';
+const MODES: Mode[] = ['data', 'empty', 'error', 'conflict', 'stale'];
 
 function isMode(value: string | null): value is Mode {
   return MODES.includes(value as Mode);
@@ -563,6 +578,10 @@ export async function mockRequest(method: string, path: string, body: unknown, s
     return reportRequest(method, path, body);
   }
 
+  if (path.startsWith(SETTINGS_PREFIX)) {
+    return settingsRequest(method, path, body);
+  }
+
   const rest = path.startsWith(BLOG_PREFIX) ? path.slice(BLOG_PREFIX.length) : null;
   const id = Number(/^\/([0-9]+)/.exec(rest ?? '')?.[1] ?? 0);
   const pattern = (rest ?? '').replace(/^\/[0-9]+/, '/:id');
@@ -794,4 +813,562 @@ function reportRequest(method: string, path: string, body: unknown): unknown {
   }
 
   return handler(id, body);
+}
+
+// Settings: the registry as the bot publishes it, an in-memory bot_settings table, change requests
+// the pretend bot decides a few seconds after they are queued, and the audit log of every change.
+
+const SETTINGS_PREFIX = '/api/settings';
+const APPLY_DELAY_MS = 3_000;
+const OTHER_TAB_DELAY_MS = 8_000;
+const REQUEST_TTL_MS = 10 * 60_000;
+const CHANGED_ERROR = 'changed meanwhile, reload';
+const APPROVAL_ERROR = 'needs the owner\'s approval in Telegram, which is not available yet';
+const REJECTED_ONCE_KEY = 'gated.global_monthly_cap';
+
+type RegistryEntry = Omit<SettingRow, 'effective' | 'stored' | 'open_request' | 'last_change'>;
+
+function platformEntry(id: string, label: string, envVar: string, impact: string): RegistryEntry {
+  return { key: `platform.${id}.enabled`, group: 'platforms', type: 'bool', env_var: envVar, default: true, approval: 'never', label, impact };
+}
+
+function proxyEntry(id: string, label: string, envVar: string, defaultValue: boolean): RegistryEntry {
+  return {
+    key: `proxy.${id}.enabled`,
+    group: 'proxies_services',
+    type: 'bool',
+    env_var: envVar,
+    default: defaultValue,
+    approval: 'never',
+    label,
+    impact: 'Off: this platform never uses the proxy pool. Has an effect only while Proxies is on.',
+  };
+}
+
+function hostEntry(id: string, envVar: string, host: string, label: string): RegistryEntry {
+  return {
+    key: `service.${id}.host`,
+    group: 'proxies_services',
+    type: 'host',
+    env_var: envVar,
+    default: host,
+    approval: 'always',
+    label,
+    impact: 'The bot fetches media from this host and sends it to every chat: a hostname only, no scheme, port, path or IP address.',
+  };
+}
+
+// Mirrors model/settings/registry.go.
+const REGISTRY: RegistryEntry[] = [
+  platformEntry('instagram', 'Instagram', 'ENABLE_INSTAGRAM', 'Off: Instagram links are ignored in every chat.'),
+  platformEntry('tiktok', 'TikTok', 'ENABLE_TIKTOK', 'Off: TikTok links are ignored in every chat.'),
+  platformEntry('twitter', 'Twitter/X', 'ENABLE_TWITTER', 'Off: Twitter/X links are ignored in every chat.'),
+  platformEntry('youtube', 'YouTube', 'ENABLE_YOUTUBE', 'Off: YouTube Shorts and community posts are ignored in every chat.'),
+  platformEntry('reddit', 'Reddit', 'ENABLE_REDDIT', 'Off: Reddit links are ignored in every chat.'),
+  platformEntry('facebook', 'Facebook', 'ENABLE_FACEBOOK', 'Off: Facebook links are ignored in every chat.'),
+  platformEntry('9gag', '9GAG', 'ENABLE_9GAG', 'Off: 9GAG links are ignored in every chat.'),
+  platformEntry('threads', 'Threads', 'ENABLE_THREADS', 'Off: Threads links are ignored in every chat.'),
+  {
+    key: 'platform.instagram.fixed_link_service',
+    group: 'platforms',
+    type: 'enum',
+    env_var: 'INSTAGRAM_SERVICE',
+    default: 'toinstagram',
+    enum: ['toinstagram', 'onebigram'],
+    approval: 'never',
+    label: 'Instagram fixed-link service',
+    impact: 'The domain of the Instagram link the bot sends when it can not download a post.',
+  },
+  {
+    key: 'proxy.enabled',
+    group: 'proxies_services',
+    type: 'bool',
+    env_var: 'ENABLE_PROXIES',
+    default: true,
+    approval: 'never',
+    label: 'Proxies',
+    impact: 'Off: no platform uses the proxy pool (the pool itself stays in .env).',
+  },
+  proxyEntry('youtube', 'YouTube proxy', 'ENABLE_YOUTUBE_PROXY', false),
+  proxyEntry('twitter', 'Twitter/X proxy', 'ENABLE_TWITTER_PROXY', true),
+  proxyEntry('tiktok', 'TikTok proxy', 'ENABLE_TIKTOK_PROXY', true),
+  proxyEntry('facebook', 'Facebook proxy', 'ENABLE_FACEBOOK_PROXY', true),
+  proxyEntry('reddit', 'Reddit proxy', 'ENABLE_REDDIT_PROXY', true),
+  proxyEntry('9gag', '9GAG proxy', 'ENABLE_9GAG_PROXY', true),
+  hostEntry('kkinstagram', 'KKINSTAGRAM_HOST', 'kkinstagram.com', 'kkinstagram host'),
+  hostEntry('kktiktok', 'KKTIKTOK_HOST', 'kktiktok.com', 'kktiktok host'),
+  hostEntry('vxreddit', 'VXREDDIT_HOST', 'vxreddit.com', 'vxreddit host'),
+  hostEntry('facebed', 'FACEBED_HOST', 'www.facebed.com', 'facebed host'),
+  {
+    key: 'paid.apify.monthly_budget_usd',
+    group: 'paid',
+    type: 'decimal',
+    env_var: 'APIFY_MONTHLY_BUDGET_USD',
+    default: 4,
+    min: 0,
+    ceiling: 20,
+    scale: 2,
+    approval: 'raise',
+    safe_value: 0,
+    label: 'Apify monthly budget (USD)',
+    impact: 'Real-dollar cap on Apify spend a month (restricted posts, stories, the YouTube Shorts fallback); 0 turns Apify off.',
+  },
+  {
+    key: 'paid.hiker.monthly_budget_usd',
+    group: 'paid',
+    type: 'decimal',
+    env_var: 'HIKERAPI_MONTHLY_BUDGET_USD',
+    default: 1,
+    min: 0,
+    ceiling: 10,
+    scale: 2,
+    approval: 'raise',
+    safe_value: 0,
+    label: 'HikerAPI monthly budget (USD)',
+    impact: 'Cap on HikerAPI spend a month, counted by the bot\'s own ledger; 0 turns HikerAPI off.',
+  },
+  {
+    key: 'paid.hiker.price_per_request_usd',
+    group: 'paid',
+    type: 'decimal',
+    env_var: 'HIKERAPI_PRICE_PER_REQUEST_USD',
+    default: 0.001,
+    min: 0,
+    min_exclusive: true,
+    max: 1,
+    scale: 6,
+    approval: 'lower',
+    safe_value: 1,
+    label: 'HikerAPI price per request (USD)',
+    impact: 'What the ledger counts for one billed HikerAPI request; a lower price lets more requests fit in the budget.',
+  },
+  {
+    key: 'paid.instagram.provider_order',
+    group: 'paid',
+    type: 'ordered_list',
+    env_var: 'INSTAGRAM_PAID_PROVIDERS',
+    default: ['apify', 'hiker'],
+    enum: ['apify', 'hiker'],
+    approval: 'never',
+    label: 'Paid Instagram providers, in order',
+    impact: 'The paid providers tried for restricted posts and stories, first to last.',
+  },
+  {
+    key: 'alerts.hiker_low_balance_requests',
+    group: 'paid',
+    type: 'int',
+    env_var: 'HIKERAPI_LOW_BALANCE_REQUESTS',
+    default: 100,
+    min: 0,
+    max: 100_000,
+    approval: 'never',
+    label: 'HikerAPI low-balance alert (requests)',
+    impact: 'The hourly check alerts you when the HikerAPI account has fewer requests left than this.',
+  },
+  {
+    key: 'gated.global_monthly_cap',
+    group: 'restricted_posts',
+    type: 'int',
+    env_var: 'GATED_FETCH_GLOBAL_MONTHLY_CAP',
+    default: -1,
+    min: -1,
+    ceiling: 5000,
+    approval: 'never',
+    label: 'Restricted posts a month, bot-wide',
+    impact: '-1: no cap (only the dollar budgets stop them); 0 turns restricted posts off for everyone.',
+  },
+  {
+    key: 'gated.user_monthly_allowance',
+    group: 'restricted_posts',
+    type: 'int',
+    env_var: 'GATED_FETCH_USER_MONTHLY_ALLOWANCE',
+    default: 20,
+    min: 0,
+    ceiling: 1000,
+    approval: 'never',
+    label: 'Restricted posts a month per person (private chats)',
+    impact: 'The default monthly allowance in private chats; shown in the bot\'s description and /info.',
+  },
+  {
+    key: 'gated.chat_monthly_cap',
+    group: 'restricted_posts',
+    type: 'int',
+    env_var: 'GATED_FETCH_CHAT_MONTHLY_CAP',
+    default: 20,
+    min: 0,
+    ceiling: 1000,
+    approval: 'never',
+    label: 'Restricted posts a month per group',
+    impact: 'The default monthly cap of a group; shown in the bot\'s description and /info.',
+  },
+  {
+    key: 'stars.enabled',
+    group: 'stars',
+    type: 'bool',
+    env_var: 'STARS_SUPPORT_ENABLED',
+    default: false,
+    approval: 'never',
+    safe_value: false,
+    label: 'Telegram Stars support',
+    impact: 'On: /donate sells Stars support tiers and the Stars commands join the menu. Off: no new payments; bonus downloads already paid keep working.',
+  },
+  {
+    key: 'limits.default_daily_media',
+    group: 'limits',
+    type: 'int',
+    env_var: 'DEFAULT_DAILY_MEDIA_LIMIT',
+    default: 0,
+    min: 0,
+    max: 1000,
+    approval: 'never',
+    label: 'Default daily media limit per person',
+    impact: 'Media a person gets a day where no group admin set a limit; 0 means no limit.',
+  },
+];
+
+const SETTINGS_GROUPS = ['platforms', 'proxies_services', 'paid', 'restricted_posts', 'stars', 'limits'];
+
+// The .env values of the production inventory; the rest fall back to the default.
+const ENV_VALUES: Record<string, SettingValue> = {
+  'platform.instagram.enabled': true,
+  'platform.tiktok.enabled': true,
+  'platform.twitter.enabled': true,
+  'platform.youtube.enabled': true,
+  'platform.reddit.enabled': true,
+  'platform.facebook.enabled': true,
+  'platform.9gag.enabled': true,
+  'proxy.enabled': false,
+  'paid.apify.monthly_budget_usd': 4.8,
+  'stars.enabled': true,
+};
+
+interface MockRequest {
+  request: SettingRequest;
+  queuedAt: number;
+  delay: number;
+}
+
+interface SettingsStore {
+  stored: Map<string, StoredSetting>;
+  requests: Map<number, MockRequest>;
+  audit: AuditEntry[];
+  nextRequestId: number;
+  nextAuditId: number;
+  isRejectedOnce: boolean;
+}
+
+let settingsStore: SettingsStore | null = null;
+
+function findEntry(key: string): RegistryEntry | undefined {
+  return REGISTRY.find((entry) => (entry.key === key));
+}
+
+function effectiveOf(store: SettingsStore, entry: RegistryEntry): SettingRow['effective'] {
+  const stored = store.stored.get(entry.key);
+  const envValue = ENV_VALUES[entry.key];
+  const isEnvSet = (envValue !== undefined);
+  let result: SettingRow['effective'] = { value: entry.default, source: 'default', env_set: isEnvSet };
+
+  if (isEnvSet) {
+    result = { value: envValue, source: 'env', env_set: true };
+  }
+
+  if (stored !== undefined) {
+    result = { value: stored.value, source: 'db', env_set: isEnvSet };
+  }
+
+  return result;
+}
+
+function addAudit(store: SettingsStore, key: string, oldValue: SettingValue | null, newValue: SettingValue | null, actor: AuditEntry['actor'], at: string, requestId: number | null): void {
+  store.audit.unshift({
+    id: store.nextAuditId,
+    key,
+    old_value: oldValue,
+    new_value: newValue,
+    actor,
+    db_role: (actor === 'manual') ? 'postgres' : 'social_link_bot',
+    request_id: requestId,
+    note: (actor === 'manual') ? null : 'dashboard request',
+    created_at: at,
+  });
+  store.nextAuditId += 1;
+}
+
+function newRequest(store: SettingsStore, draft: SettingChangeDraft, createdAt: number, delay: number): SettingRequest {
+  const request: SettingRequest = {
+    id: store.nextRequestId,
+    key: draft.key,
+    status: 'queued',
+    value: draft.value,
+    expected: draft.expected,
+    needs_approval: null,
+    error: null,
+    created_at: new Date(createdAt).toISOString(),
+    expires_at: new Date(createdAt + REQUEST_TTL_MS).toISOString(),
+    decided_at: null,
+  };
+  store.nextRequestId += 1;
+  store.requests.set(request.id, { request, queuedAt: createdAt, delay });
+
+  return request;
+}
+
+function seedSettings(): SettingsStore {
+  const store: SettingsStore = { stored: new Map(), requests: new Map(), audit: [], nextRequestId: 40, nextAuditId: 1, isRejectedOnce: false };
+  const ninegagAt = hoursAgo(50);
+  const limitAt = hoursAgo(120);
+  addAudit(store, 'limits.default_daily_media', null, 30, 'manual', limitAt, null);
+  store.stored.set('limits.default_daily_media', { value: 30, updated_at: limitAt, updated_by: 'manual' });
+  addAudit(store, 'platform.9gag.enabled', null, false, 'dashboard', ninegagAt, 38);
+  store.stored.set('platform.9gag.enabled', { value: false, updated_at: ninegagAt, updated_by: 'dashboard' });
+  // A change queued from another tab: changing the Reddit proxy answers 409 until it is applied.
+  newRequest(store, { key: 'proxy.reddit.enabled', value: false, expected: true }, Date.now(), OTHER_TAB_DELAY_MS);
+
+  return store;
+}
+
+function settingsTable(): SettingsStore {
+  if (settingsStore === null) {
+    settingsStore = seedSettings();
+  }
+
+  return settingsStore;
+}
+
+function rejectRequest(request: SettingRequest, error: string, decidedAt: string, isApproval: boolean): void {
+  request.status = 'rejected';
+  request.error = error;
+  request.needs_approval = isApproval;
+  request.decided_at = decidedAt;
+}
+
+/** The pretend bot: decides queued requests once their delay has passed, as the real one would. */
+function decideRequest(store: SettingsStore, item: MockRequest, now: number): void {
+  const request = item.request;
+  const entry = findEntry(request.key) as RegistryEntry;
+  const current = (effectiveOf(store, entry) as NonNullable<SettingRow['effective']>).value;
+  const fallback = ENV_VALUES[entry.key] ?? entry.default;
+  const next = request.value ?? fallback;
+  const decidedAt = new Date(now).toISOString();
+  const isRejectedOnce = (request.key === REJECTED_ONCE_KEY) && (store.isRejectedOnce === false);
+  const isChanged = (sameValue(request.expected, current) === false) || isRejectedOnce;
+  const isApproval = needsApproval(entry.approval, current, next);
+  const isExpired = (now >= Date.parse(request.expires_at));
+
+  if (isRejectedOnce) {
+    store.isRejectedOnce = true;
+  }
+
+  if (isExpired) {
+    request.status = 'expired';
+    request.error = 'expired: the bot did not apply it within 10 minutes';
+    request.decided_at = decidedAt;
+  }
+
+  if ((isExpired === false) && isChanged) {
+    rejectRequest(request, CHANGED_ERROR, decidedAt, false);
+  }
+
+  if ((isExpired === false) && (isChanged === false) && isApproval) {
+    rejectRequest(request, APPROVAL_ERROR, decidedAt, true);
+  }
+
+  if ((isExpired === false) && (isChanged === false) && (isApproval === false)) {
+    const oldValue = store.stored.get(request.key)?.value ?? null;
+    request.status = 'applied';
+    request.needs_approval = false;
+    request.decided_at = decidedAt;
+    addAudit(store, request.key, oldValue, request.value, 'dashboard', decidedAt, request.id);
+
+    if (request.value === null) {
+      store.stored.delete(request.key);
+    }
+
+    if (request.value !== null) {
+      store.stored.set(request.key, { value: request.value, updated_at: decidedAt, updated_by: 'dashboard' });
+    }
+  }
+}
+
+function advanceRequests(store: SettingsStore): void {
+  const now = Date.now();
+
+  for (const item of store.requests.values()) {
+    const isDue = (item.request.status === 'queued') && ((now - item.queuedAt) >= item.delay);
+
+    if (isDue) {
+      decideRequest(store, item, now);
+    }
+  }
+}
+
+function openRequestOf(store: SettingsStore, key: string): SettingRequest | undefined {
+  const open = [...store.requests.values()].find((item) => (item.request.key === key) && ['queued', 'awaiting_approval'].includes(item.request.status));
+
+  return open?.request;
+}
+
+function lastChangeOf(store: SettingsStore, key: string): SettingRow['last_change'] {
+  const entry = store.audit.find((row) => (row.key === key));
+  const result = (entry === undefined) ? null : {
+    id: entry.id,
+    created_at: entry.created_at,
+    actor: entry.actor,
+    old_value: entry.old_value,
+    new_value: entry.new_value,
+  };
+
+  return result;
+}
+
+function settingRow(store: SettingsStore, entry: RegistryEntry): SettingRow {
+  const open = openRequestOf(store, entry.key);
+
+  return {
+    ...entry,
+    effective: effectiveOf(store, entry),
+    stored: store.stored.get(entry.key) ?? null,
+    open_request: (open === undefined) ? null : {
+      id: open.id,
+      status: open.status,
+      value: open.value,
+      created_at: open.created_at,
+      expires_at: open.expires_at,
+    },
+    last_change: lastChangeOf(store, entry.key),
+  };
+}
+
+function listSettings(): SettingsResponse {
+  const mode = mockMode();
+  const isEmpty = (mode === 'empty');
+  const isStale = (mode === 'stale');
+  const store = settingsTable();
+  advanceRequests(store);
+  const heartbeatAt = isStale ? hoursAgo(2) : new Date().toISOString();
+
+  return {
+    ...meta(),
+    bot: isEmpty ? null : {
+      started_at: hoursAgo(26),
+      heartbeat_at: heartbeatAt,
+      commit: '7f457e1c0ffee',
+      commit_modified: false,
+      settings_loaded_at: heartbeatAt,
+      settings_source: 'db',
+      settings_count: store.stored.size,
+      is_stale: isStale,
+    },
+    profile: isEmpty ? null : {
+      pushed_at: hoursAgo(26),
+      methods: ['setMyCommands', 'setMyDescription', 'setMyShortDescription'],
+      error: isStale ? 'Too Many Requests: retry after 30' : undefined,
+      pending_at: null,
+      attempts: isStale ? 5 : 0,
+    },
+    secrets: isEmpty ? null : {
+      tg_bot_token: true,
+      admin_user_id: true,
+      apify_token: true,
+      hiker_token: false,
+      proxies: 0,
+      relay_url: true,
+      relay_token_file: true,
+    },
+    groups: isEmpty ? [] : SETTINGS_GROUPS,
+    platforms: [],
+    applying: true,
+    settings: isEmpty ? [] : REGISTRY.map((entry) => settingRow(store, entry)),
+  };
+}
+
+function queueSetting(body: SettingChangeDraft): SettingRequestResponse {
+  const store = settingsTable();
+  advanceRequests(store);
+  const entry = findEntry(body.key);
+  const valueError = ((entry === undefined) || (body.value === null)) ? null : validateValue({ ...entry, effective: null, stored: null, open_request: null, last_change: null }, body.value);
+
+  if (entry === undefined) {
+    throw new ApiError(HTTP_BAD_REQUEST, `unknown setting "${body.key}"`);
+  }
+
+  if (body.expected === undefined) {
+    throw new ApiError(HTTP_BAD_REQUEST, 'expected is required');
+  }
+
+  if (valueError !== null) {
+    throw new ApiError(HTTP_BAD_REQUEST, `value ${valueError}`);
+  }
+
+  if (openRequestOf(store, body.key) !== undefined) {
+    throw new ApiError(HTTP_CONFLICT, 'a change of this setting is already waiting');
+  }
+
+  const request = newRequest(store, body, Date.now(), APPLY_DELAY_MS);
+
+  return { ...meta(), request: { ...request } };
+}
+
+function findSettingRequest(id: number): SettingRequestResponse {
+  const store = settingsTable();
+  advanceRequests(store);
+  const item = store.requests.get(id);
+
+  if (item === undefined) {
+    throw new ApiError(HTTP_NOT_FOUND, 'not found');
+  }
+
+  return { ...meta(), request: { ...item.request } };
+}
+
+function listAudit(path: string): AuditResponse {
+  const store = settingsTable();
+  advanceRequests(store);
+  const params = new URLSearchParams(path.split('?')[1] ?? '');
+  const key = params.get('key');
+  const group = params.get('group');
+  const before = Number(params.get('before') ?? 0);
+  const limit = Number(params.get('limit') ?? 50);
+  const isEmpty = (mockMode() === 'empty');
+  const matching = store.audit.filter((row) => {
+    const isKey = (key === null) || (row.key === key);
+    const isGroup = (group === null) || (findEntry(row.key)?.group === group);
+    const isBefore = (before === 0) || (row.id < before);
+
+    return isKey && isGroup && isBefore && (isEmpty === false);
+  });
+  const entries = matching.slice(0, limit);
+  const last = entries[entries.length - 1];
+  const hasMore = (matching.length > limit) && (last !== undefined);
+
+  return { ...meta(), entries, next_before: hasMore ? last.id : null };
+}
+
+function settingsRequest(method: string, path: string, body: unknown): unknown {
+  const rest = path.slice(SETTINGS_PREFIX.length);
+  const requestId = /^\/requests\/([0-9]+)$/.exec(rest)?.[1];
+  let result: unknown;
+
+  if ((method === 'GET') && (rest === '')) {
+    result = listSettings();
+  }
+
+  if ((method === 'POST') && (rest === '/requests')) {
+    result = queueSetting(body as SettingChangeDraft);
+  }
+
+  if ((method === 'GET') && (requestId !== undefined)) {
+    result = findSettingRequest(Number(requestId));
+  }
+
+  if ((method === 'GET') && rest.startsWith('/audit')) {
+    result = listAudit(path);
+  }
+
+  if (result === undefined) {
+    throw new ApiError(HTTP_NOT_FOUND, 'not found');
+  }
+
+  return result;
 }

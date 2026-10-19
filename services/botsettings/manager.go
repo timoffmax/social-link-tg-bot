@@ -59,11 +59,10 @@ type Options struct {
 	PushProfile func(known map[string]string) (map[string]string, []string, error)
 	// Now is the clock (time.Now when nil).
 	Now func() time.Time
-	// ApplyRequests lets the loop apply queued change requests. It stays off
-	// until the dashboard's Settings tab and the owner's change digest exist
-	// (M2): until then no queued request is applied, and the loop marks one
-	// expired once its expires_at has passed (checked every 2 s), so a stale
-	// request never keeps its key's one open request slot.
+	// ApplyRequests lets the loop apply queued change requests. Without it no
+	// queued request is applied, and the loop marks one expired once its
+	// expires_at has passed (checked every 2 s), so a stale request never
+	// keeps its key's one open request slot.
 	ApplyRequests bool
 }
 
@@ -89,6 +88,8 @@ type Manager struct {
 	wg             sync.WaitGroup
 
 	applyRequests bool
+	// digest collects the applied changes for the owner's message.
+	digest *changeDigest
 
 	requestEvery   time.Duration
 	reloadEvery    time.Duration
@@ -134,6 +135,7 @@ func New(options Options) *Manager {
 		startupTimeout: startupTimeout,
 
 		applyRequests: options.ApplyRequests,
+		digest:        newChangeDigest(),
 	}
 
 	return result
@@ -234,8 +236,9 @@ func (m *Manager) Wait() {
 }
 
 // Run is the loop: every 2 s the queued requests (applied when applying them
-// is on, else only the expired ones marked expired) and a due profile push;
-// a full reload with the heartbeat every 60 s. It stops once ctx is done.
+// is on, else only the expired ones marked expired), a due profile push and
+// a due change digest; a full reload with the heartbeat every 60 s. It stops
+// once ctx is done, sending the pending digest first.
 func (m *Manager) Run(ctx context.Context) {
 	defer m.wg.Done()
 	requestTicker := time.NewTicker(m.requestEvery)
@@ -248,12 +251,15 @@ func (m *Manager) Run(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			isRunning = false
+			m.flushDigest()
 			log.Println("Settings loop stopped")
 		case <-requestTicker.C:
 			m.processRequestsIfEnabled(ctx)
 			m.syncProfileIfDue(ctx)
+			m.flushDigestIfDue()
 		case <-reloadTicker.C:
 			m.reload(ctx)
+			m.flushDigestIfDue()
 		}
 	}
 }
@@ -323,6 +329,7 @@ func (m *Manager) processNextRequest(ctx context.Context) bool {
 // applyCommitted puts an applied request into the snapshot, the cache and
 // the published state.
 func (m *Manager) applyCommitted(ctx context.Context, request ChangeRequest, decision Decision) {
+	oldValue := effectiveValue(request.Key)
 	values := m.storedValues()
 	values = withoutKey(values, request.Key)
 
@@ -334,6 +341,9 @@ func (m *Manager) applyCommitted(ctx context.Context, request ChangeRequest, dec
 	m.saveCache(values)
 	m.profile.schedule()
 	m.publishSettings(ctx)
+	text := describeChange(request.Key, oldValue, decision.TypedValue, request.IsReset())
+	appliedAt := m.now()
+	m.digest.add(digestEntry{At: appliedAt, Text: text, Actor: request.Source})
 	log.Printf("⚙️ Settings request #%d applied: %s = %s (from %s)", request.ID, request.Key, describeValue(decision), request.Source)
 }
 
@@ -392,12 +402,58 @@ func (m *Manager) swapIfChanged(values []StoredValue) bool {
 	result := (m.origin != originDB) || (sameStoredValues(current, values) == false)
 
 	if result == true {
-		m.swap(values, originDB)
+		m.swapWithDigest(current, values)
 		m.profile.schedule()
 		log.Printf("⚙️ Settings reloaded: %d owner-set value(s), changed outside the bot", len(values))
 	}
 
 	return result
+}
+
+// swapWithDigest swaps in the reloaded values and adds each key whose stored
+// value changed to the digest. Without a snapshot before (.env and the
+// defaults after a failed start) there is nothing to compare, so nothing is
+// added.
+func (m *Manager) swapWithDigest(current []StoredValue, values []StoredValue) {
+	keys := []string{}
+	oldValues := map[string]any{}
+
+	if m.origin != originNone {
+		keys = changedKeys(current, values)
+	}
+
+	for _, key := range keys {
+		oldValues[key] = effectiveValue(key)
+	}
+
+	m.swap(values, originDB)
+	reloadedAt := m.now()
+	reloaded := storedByKey(values)
+
+	for _, key := range keys {
+		_, isStored := reloaded[key]
+		newValue := effectiveValue(key)
+		text := describeChange(key, oldValues[key], newValue, (isStored == false))
+		m.digest.add(digestEntry{At: reloadedAt, Text: text, Actor: digestActorOutside})
+	}
+}
+
+// flushDigestIfDue sends the pending changes once the digest window is open.
+func (m *Manager) flushDigestIfDue() {
+	now := m.now()
+
+	if m.digest.isDue(now) == true {
+		m.digest.flush(now, m.notify)
+	}
+}
+
+// flushDigest sends the pending changes at shutdown, whatever the window.
+func (m *Manager) flushDigest() {
+	now := m.now()
+
+	if len(m.digest.entries) > 0 {
+		m.digest.flush(now, m.notify)
+	}
 }
 
 // sameStoredValues compares two sets of stored values as JSON.

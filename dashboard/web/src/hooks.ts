@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type RefObject } from 'react';
 import { DEFAULT_RANGE_DAYS, RANGE_DAYS, type RangeDays } from './api';
 
-export const TABS = ['overview', 'platforms', 'chats', 'money', 'reports', 'blog'] as const;
+export const TABS = ['overview', 'platforms', 'chats', 'money', 'reports', 'blog', 'settings'] as const;
 export type Tab = (typeof TABS)[number];
 
 const DEFAULT_TAB: Tab = 'overview';
