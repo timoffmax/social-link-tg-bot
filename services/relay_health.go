@@ -35,16 +35,34 @@ const (
 // errRelayHealthNotOK marks a /healthz answer without "ok":true.
 var errRelayHealthNotOK = errors.New("healthz says ok=false")
 
-// relayHealth is the part of /healthz the bot reads.
+// relayHealth is the part of /healthz the bot reads; the probe uses ok and
+// the platforms' enabled and breaker, the relay status all of it.
 type relayHealth struct {
-	OK        bool                           `json:"ok"`
-	Platforms map[string]relayPlatformHealth `json:"platforms"`
+	OK          bool                           `json:"ok"`
+	YtDlp       string                         `json:"yt_dlp"`
+	BreakerOpen []string                       `json:"breaker_open"`
+	Global      relayHealthCounters            `json:"global"`
+	Platforms   map[string]relayPlatformHealth `json:"platforms"`
+}
+
+// relayHealthCounters are the relay's calls this hour and day against its
+// limits.
+type relayHealthCounters struct {
+	Hour        int `json:"hour"`
+	Day         int `json:"day"`
+	HourlyLimit int `json:"hourly_limit"`
+	DailyLimit  int `json:"daily_limit"`
 }
 
 // relayPlatformHealth is one platform's entry of /healthz.
 type relayPlatformHealth struct {
-	Enabled bool   `json:"enabled"`
-	Breaker string `json:"breaker"`
+	Enabled      bool   `json:"enabled"`
+	Breaker      string `json:"breaker"`
+	BreakerLeftS int    `json:"breaker_left_s"`
+	Hour         int    `json:"hour"`
+	Day          int    `json:"day"`
+	HourlyLimit  int    `json:"hourly_limit"`
+	DailyLimit   int    `json:"daily_limit"`
 }
 
 // probeRelay reads /healthz once when the relay is configured and reports

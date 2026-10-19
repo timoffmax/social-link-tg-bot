@@ -67,6 +67,12 @@ type Options struct {
 	// Approver asks the owner to approve a change in Telegram; nil (no
 	// ADMIN_USER_ID) rejects every change that needs approval.
 	Approver Approver
+	// PaidStatus returns the paid services' last computed state; it must not
+	// block (no I/O). nil, or a nil state, publishes none.
+	PaidStatus func() any
+	// RelayStatus returns the home relay's last computed state; it must not
+	// block (no I/O). nil, or a nil state, publishes none.
+	RelayStatus func() any
 }
 
 // Manager is the settings goroutine. Load runs once at start; Run is the
@@ -97,6 +103,10 @@ type Manager struct {
 	approver Approver
 	taps     chan approvalTap
 	tapWait  time.Duration
+
+	// paidStatus and relayStatus read the states other goroutines compute.
+	paidStatus  func() any
+	relayStatus func() any
 
 	requestEvery   time.Duration
 	reloadEvery    time.Duration
@@ -146,6 +156,8 @@ func New(options Options) *Manager {
 		approver:      options.Approver,
 		taps:          make(chan approvalTap),
 		tapWait:       tapWait,
+		paidStatus:    options.PaidStatus,
+		relayStatus:   options.RelayStatus,
 	}
 
 	return result
@@ -333,8 +345,14 @@ func (m *Manager) processNextRequest(ctx context.Context) bool {
 	m.recordDBResult(err, "process settings requests")
 	isAwaiting := (isClaimed == true) && (decision.IsAwaitingApproval() == true)
 	isRefused := (isClaimed == true) && (decision.IsApplied() == false) && (isAwaiting == false)
+	isApplied := (isClaimed == true) && (decision.IsApplied() == true)
+	isSpecialLimit := (request.Kind == settings.KindSpecialLimit)
 
-	if (isClaimed == true) && (decision.IsApplied() == true) {
+	if (isApplied == true) && (isSpecialLimit == true) {
+		m.applySpecialLimitCommitted(request, decision, request.Source)
+	}
+
+	if (isApplied == true) && (isSpecialLimit == false) {
 		m.applyCommitted(ctx, request, decision, request.Source)
 	}
 
@@ -368,6 +386,17 @@ func (m *Manager) applyCommitted(ctx context.Context, request ChangeRequest, dec
 	appliedAt := m.now()
 	m.digest.add(digestEntry{At: appliedAt, Text: text, Actor: actor})
 	log.Printf("⚙️ Settings request #%d applied: %s = %s (from %s)", request.ID, request.Key, describeValue(decision), request.Source)
+}
+
+// applySpecialLimitCommitted reports an applied limit request in the digest
+// and the log; the snapshot, cache and profile stay as they are, because
+// every special download reads the policy from the database.
+func (m *Manager) applySpecialLimitCommitted(request ChangeRequest, decision Decision, actor string) {
+	change, _ := decision.TypedValue.(specialLimitChange)
+	text := describeSpecialLimitChange(change)
+	appliedAt := m.now()
+	m.digest.add(digestEntry{At: appliedAt, Text: text, Actor: actor})
+	log.Printf("⚙️ Limit request #%d applied: %s (from %s)", request.ID, text, request.Source)
 }
 
 // describeValue prints an applied value; a reset says so.

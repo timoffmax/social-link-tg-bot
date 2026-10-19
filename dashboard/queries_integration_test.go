@@ -468,12 +468,6 @@ func TestIntegrationMoney(t *testing.T) {
 		{Month: "2026-09", GlobalUsed: 4, ChatsUsed: 4},
 		{Month: "2026-10", GlobalUsed: 12, ChatsUsed: 8, UsersUsed: 3},
 	})
-	chatLimit := int64(20)
-	assertEqual(t, "gated current", got.GatedCurrent, []GatedCurrent{
-		{Scope: "chat", ScopeID: -100, Title: "Group A", Used: 5, Limit: &chatLimit, Custom: true},
-		{Scope: "chat", ScopeID: -200, Title: "Group B", Used: 3, Limit: nil, Custom: false},
-		{Scope: "user", ScopeID: 1, Title: "alice", Used: 3, Limit: nil, Unlimited: true, Custom: true},
-	})
 	assertEqual(t, "stars monthly", got.StarsMonthly, []StarsMonth{
 		{Month: "2026-08"},
 		{Month: "2026-09", Payments: 1, Stars: 50},

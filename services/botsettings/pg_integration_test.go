@@ -32,8 +32,12 @@ const settingsTestDSNKey = "SETTINGS_TEST_DSN"
 
 const migrationsSource = "file://../../migrations"
 
-// settingsMigrationVersion is migration 011.
-const settingsMigrationVersion = 11
+// settingsMigrationVersion is migration 011; latestMigrationVersion is the
+// last migration (013).
+const (
+	settingsMigrationVersion = 11
+	latestMigrationVersion   = 13
+)
 
 // pgFixture is a schema with the migrations applied.
 type pgFixture struct {
@@ -155,7 +159,7 @@ func TestMigration011DownAndUpAgain(t *testing.T) {
 		}
 	}
 
-	runMigrate(t, fixture.db, func(m *migrate.Migrate) error { return m.Steps(-1) })
+	runMigrate(t, fixture.db, func(m *migrate.Migrate) error { return m.Migrate(settingsMigrationVersion - 1) })
 
 	for _, table := range settingsTables {
 		if fixture.tableExists(t, table) == true {
@@ -172,7 +176,7 @@ func TestMigration011DownAndUpAgain(t *testing.T) {
 	var isDirty bool
 	err := fixture.db.QueryRow(`SELECT version, dirty FROM schema_migrations`).Scan(&version, &isDirty)
 
-	if (err != nil) || (version != settingsMigrationVersion) || (isDirty == true) {
+	if (err != nil) || (version != latestMigrationVersion) || (isDirty == true) {
 		t.Fatalf("version %d dirty %v: %v", version, isDirty, err)
 	}
 

@@ -72,6 +72,31 @@ func (l *fakePaidLedger) MonthSpentUsd(context.Context, string, time.Time) (floa
 	return spent, l.readErr
 }
 
+func (l *fakePaidLedger) MonthStats(ctx context.Context, provider string, monthStart time.Time) (PaidMonthStats, error) {
+	spent, err := l.MonthSpentUsd(ctx, provider, monthStart)
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	result := PaidMonthStats{CostUsd: spent}
+
+	for _, row := range l.rows {
+		result.Calls++
+
+		if row.Charged == true {
+			result.ChargedCalls++
+		}
+
+		if row.Feature == paidFeatureGated {
+			result.GatedCalls++
+		}
+
+		if row.Feature == paidFeatureStory {
+			result.StoryCalls++
+		}
+	}
+
+	return result, err
+}
+
 func (l *fakePaidLedger) recorded() []PaidRequest {
 	l.mu.Lock()
 	defer l.mu.Unlock()

@@ -19,6 +19,8 @@ const (
 	ComponentSettings = "settings"
 	ComponentRegistry = "registry"
 	ComponentProfile  = "profile"
+	ComponentPaid     = "paid"
+	ComponentRelay    = "relay"
 )
 
 // Build settings go build stamps into the binary (debug.ReadBuildInfo).
@@ -56,9 +58,10 @@ type secretsStatus struct {
 // dashboard shows labels, ranges and approval rules without a copy of its
 // own.
 type registryStatus struct {
-	Groups    []settings.Group    `json:"groups"`
-	Platforms []settings.Platform `json:"platforms"`
-	Settings  []settings.Setting  `json:"settings"`
+	Groups       []settings.Group           `json:"groups"`
+	Platforms    []settings.Platform        `json:"platforms"`
+	Settings     []settings.Setting         `json:"settings"`
+	SpecialLimit settings.SpecialLimitRules `json:"special_limit"`
 }
 
 // registryGroups is the order of the Settings tab's sections.
@@ -73,20 +76,41 @@ var registryGroups = []settings.Group{
 
 // publishAll publishes every component (at start).
 func (m *Manager) publishAll(ctx context.Context) {
-	registry := registryStatus{Groups: registryGroups, Platforms: settings.Platforms(), Settings: settings.All()}
+	registry := registryStatus{
+		Groups:       registryGroups,
+		Platforms:    settings.Platforms(),
+		Settings:     settings.All(),
+		SpecialLimit: settings.SpecialLimits(),
+	}
 	m.publish(ctx, ComponentRegistry, registry)
 	m.publishHeartbeat(ctx)
 	m.publishProfile(ctx)
 }
 
-// publishHeartbeat publishes the heartbeat, the secrets and the settings
-// (every 60 s).
+// publishHeartbeat publishes the heartbeat, the secrets, the settings and
+// the last computed paid-services and relay states (every 60 s).
 func (m *Manager) publishHeartbeat(ctx context.Context) {
 	bot := m.botStatus()
 	m.publish(ctx, ComponentBot, bot)
 	secrets := currentSecrets()
 	m.publish(ctx, ComponentSecrets, secrets)
 	m.publishSettings(ctx)
+	m.publishComputed(ctx, ComponentPaid, m.paidStatus)
+	m.publishComputed(ctx, ComponentRelay, m.relayStatus)
+}
+
+// publishComputed publishes a state another goroutine computed; a nil
+// reader or a nil state publishes nothing.
+func (m *Manager) publishComputed(ctx context.Context, component string, read func() any) {
+	var state any
+
+	if read != nil {
+		state = read()
+	}
+
+	if state != nil {
+		m.publish(ctx, component, state)
+	}
 }
 
 // publishSettings publishes the effective value and source of every key.

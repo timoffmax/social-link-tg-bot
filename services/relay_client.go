@@ -160,6 +160,10 @@ var (
 	// errRelayBroken marks an answer the relay must never give (no mp4,
 	// cut short, an unknown status).
 	errRelayBroken = errors.New("relay answer rejected")
+
+	// errRelayToken marks a call that could not be sent: the token file is
+	// missing or empty.
+	errRelayToken = errors.New("relay token unreadable")
 )
 
 // relayError is one failed relay call: the relay's code (or "" for a
@@ -415,9 +419,10 @@ func relayCallBudget(ctx context.Context, maxTimeout time.Duration, now time.Tim
 	return timeout, relayDeadline, isEnough
 }
 
-// Fetch downloads one video through the relay into a checked temp file and
-// feeds the platform's outage tracker. Every error means the next method
-// should run; the caller removes the file once it is sent.
+// Fetch downloads one video through the relay into a checked temp file,
+// records a call that passed the checks in the relay history and feeds the
+// platform's outage tracker. Every error means the next method should run;
+// the caller removes the file once it is sent.
 func (c *relayClient) Fetch(ctx context.Context, platform, id string) (relayVideo, error) {
 	result := relayVideo{}
 	now := time.Now()
@@ -425,6 +430,8 @@ func (c *relayClient) Fetch(ctx context.Context, platform, id string) (relayVide
 
 	if err == nil {
 		result, err = c.fetchChecked(ctx, platform, id, budget)
+		duration := time.Since(now)
+		recordRelayCallLater(platform, result.Size, err, duration)
 	}
 
 	reportRelayOutcome(platform, err)
@@ -532,7 +539,8 @@ func (c *relayClient) readToken() (string, error) {
 
 	if err != nil {
 		detail := fmt.Sprintf("token: %v", err)
-		err = &relayError{Detail: detail, IsOutage: true, cause: err}
+		cause := fmt.Errorf("%w: %w", errRelayToken, err)
+		err = &relayError{Detail: detail, IsOutage: true, cause: cause}
 	}
 
 	return result, err

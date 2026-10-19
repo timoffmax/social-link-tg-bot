@@ -39,6 +39,7 @@ type PaidMonthStats struct {
 type paidRequestLedger interface {
 	Record(ctx context.Context, request PaidRequest) error
 	MonthSpentUsd(ctx context.Context, provider string, monthStart time.Time) (float64, error)
+	MonthStats(ctx context.Context, provider string, monthStart time.Time) (PaidMonthStats, error)
 }
 
 // pgPaidLedger is the PostgreSQL ledger (migration 010).
@@ -86,12 +87,23 @@ func (pgPaidLedger) MonthSpentUsd(ctx context.Context, provider string, monthSta
 
 // GetPaidMonthStats returns one provider's ledger totals of this UTC month.
 func GetPaidMonthStats(provider string) (PaidMonthStats, error) {
-	result := PaidMonthStats{}
-	db := GetDB()
-	err := errGatedFetchNoDatabase
 	monthStart := currentMonthStartUTC()
 	background := context.Background()
 	ctx, cancel := context.WithTimeout(background, paidLedgerTimeout)
+
+	defer cancel()
+
+	result, err := pgPaidLedger{}.MonthStats(ctx, provider, monthStart)
+
+	return result, err
+}
+
+// MonthStats implements paidRequestLedger: the provider's totals since
+// monthStart.
+func (pgPaidLedger) MonthStats(ctx context.Context, provider string, monthStart time.Time) (PaidMonthStats, error) {
+	result := PaidMonthStats{}
+	db := GetDB()
+	err := errGatedFetchNoDatabase
 	query := `
 		SELECT
 			COUNT(*),
@@ -100,8 +112,6 @@ func GetPaidMonthStats(provider string) (PaidMonthStats, error) {
 			COUNT(*) FILTER (WHERE feature = $4),
 			COALESCE(SUM(cost_usd), 0)::float8
 		FROM paid_requests WHERE provider = $1 AND created_at >= $2`
-
-	defer cancel()
 
 	if db != nil {
 		row := db.QueryRowContext(ctx, query, provider, monthStart, paidFeatureGated, paidFeatureStory)

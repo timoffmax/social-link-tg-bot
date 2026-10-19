@@ -52,8 +52,31 @@ type apifyLimitsResponse struct {
 		Current struct {
 			MonthlyUsageUsd *float64 `json:"monthlyUsageUsd"`
 		} `json:"current"`
+		Limits struct {
+			MaxMonthlyUsageUsd *float64 `json:"maxMonthlyUsageUsd"`
+		} `json:"limits"`
+		MonthlyUsageCycle struct {
+			StartAt *time.Time `json:"startAt"`
+			EndAt   *time.Time `json:"endAt"`
+		} `json:"monthlyUsageCycle"`
 	} `json:"data"`
 }
+
+// apifyUsageCache is the last Apify usage read, kept for the 'paid' status
+// so it needs no Apify call of its own.
+var apifyUsageCache = struct {
+	sync.Mutex
+	usd             float64
+	readAt          time.Time
+	errText         string
+	errAt           time.Time
+	accountLimitUsd *float64
+	cycleStart      *time.Time
+	cycleEnd        *time.Time
+}{}
+
+// apifyUsageNow is the clock of the usage cache (a variable for tests).
+var apifyUsageNow = time.Now
 
 // apifyInFlight holds the cost caps of runs started but not yet finished:
 // Apify's usage figure doesn't include them yet, so concurrent runs could
@@ -197,7 +220,32 @@ func (c *apifyClient) monthlyUsage(ctx context.Context) (float64, error) {
 		result = *usage
 	}
 
+	rememberApifyUsage(limits, err)
+
 	return result, err
+}
+
+// rememberApifyUsage keeps a usage read for the 'paid' status: a success
+// replaces the usage and the account fields, a failure keeps the last value
+// and records the error.
+func rememberApifyUsage(response apifyLimitsResponse, err error) {
+	now := apifyUsageNow()
+
+	apifyUsageCache.Lock()
+	defer apifyUsageCache.Unlock()
+
+	if err == nil {
+		apifyUsageCache.usd = *response.Data.Current.MonthlyUsageUsd
+		apifyUsageCache.readAt = now
+		apifyUsageCache.accountLimitUsd = response.Data.Limits.MaxMonthlyUsageUsd
+		apifyUsageCache.cycleStart = response.Data.MonthlyUsageCycle.StartAt
+		apifyUsageCache.cycleEnd = response.Data.MonthlyUsageCycle.EndAt
+	}
+
+	if err != nil {
+		apifyUsageCache.errText = err.Error()
+		apifyUsageCache.errAt = now
+	}
 }
 
 // do sends an authorized request and returns the body of a 2xx answer.

@@ -6,12 +6,13 @@ import (
 )
 
 // Store reads the dashboard data, edits the blog posts and queues report
-// replies. PGStore is the
-// PostgreSQL implementation; tests use a stub.
+// replies, setting changes and limit changes. PGStore is the PostgreSQL
+// implementation; tests use a stub.
 type Store interface {
 	BlogStore
 	ReportStore
 	SettingsStore
+	LimitsStore
 	Ping(ctx context.Context) error
 	Overview(ctx context.Context, days int) (Overview, error)
 	Platforms(ctx context.Context, days int) (Platforms, error)
@@ -190,18 +191,6 @@ type GatedMonth struct {
 	UsersUsed  int64  `json:"users_used"`
 }
 
-// GatedCurrent is a chat's or user's special-download usage this month.
-type GatedCurrent struct {
-	Scope   string `json:"scope"`
-	ScopeID int64  `json:"scope_id"`
-	Title   string `json:"title"`
-	Used    int64  `json:"used"`
-	// Limit is the custom monthly limit; null without one or when unlimited.
-	Limit     *int64 `json:"limit"`
-	Unlimited bool   `json:"unlimited"`
-	Custom    bool   `json:"custom"`
-}
-
 // StarsMonth is one month of Stars support payments.
 type StarsMonth struct {
 	Month         string `json:"month"`
@@ -223,11 +212,10 @@ type Credits struct {
 // Money is the /api/money answer.
 type Money struct {
 	Meta
-	Months       int            `json:"months"`
-	GatedMonthly []GatedMonth   `json:"gated_monthly"`
-	GatedCurrent []GatedCurrent `json:"gated_current"`
-	StarsMonthly []StarsMonth   `json:"stars_monthly"`
-	Credits      Credits        `json:"credits"`
+	Months       int          `json:"months"`
+	GatedMonthly []GatedMonth `json:"gated_monthly"`
+	StarsMonthly []StarsMonth `json:"stars_monthly"`
+	Credits      Credits      `json:"credits"`
 }
 
 // ReportTotals counts reports by their resolved flag.

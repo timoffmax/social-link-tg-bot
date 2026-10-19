@@ -137,19 +137,6 @@ export interface GatedMonth {
   users_used: number;
 }
 
-export type GatedScope = 'chat' | 'user';
-
-export interface GatedCurrent {
-  scope: GatedScope;
-  scope_id: number;
-  title: string;
-  used: number;
-  /** The custom monthly limit; null for the default limit and when unlimited. */
-  limit: number | null;
-  unlimited: boolean;
-  custom: boolean;
-}
-
 export interface StarsMonth {
   month: Month;
   payments: number;
@@ -169,7 +156,6 @@ export interface Credits {
 export interface MoneyResponse extends ResponseMeta {
   months: number;
   gated_monthly: GatedMonth[];
-  gated_current: GatedCurrent[];
   stars_monthly: StarsMonth[];
   credits: Credits;
 }
@@ -314,6 +300,7 @@ export const DEFAULT_RANGE_DAYS: RangeDays = 90;
 
 export const HTTP_BAD_REQUEST = 400;
 export const HTTP_NOT_FOUND = 404;
+export const HTTP_FORBIDDEN = 403;
 export const HTTP_CONFLICT = 409;
 const HTTP_NO_CONTENT = 204;
 
@@ -614,12 +601,17 @@ export interface SettingsResponse extends ResponseMeta {
   settings: SettingRow[];
 }
 
+export type SettingRequestKind = 'setting' | 'special_limit';
+
 export interface SettingRequest {
   id: number;
+  /** setting: a registry key; special_limit: user:<id> or chat:<id>. */
+  kind: SettingRequestKind;
   key: string;
   status: SettingRequestStatus;
   value: SettingValue | null;
-  expected: SettingValue;
+  /** A limit request's expected is null when no limit was stored. */
+  expected: SettingValue | null;
   needs_approval: boolean | null;
   /** Why the bot rejected or expired it. */
   error: string | null;
@@ -700,4 +692,227 @@ export function getSettingsAudit(filter: AuditFilter, signal?: AbortSignal): Pro
   }
 
   return request<AuditResponse>('GET', buildPath('settings/audit', query), undefined, signal);
+}
+
+// Limits: per-person and per-group special downloads this month, the paid services and the home
+// relay. Limit changes are queued like setting changes; the bot applies them without approval.
+
+export type LimitScope = 'user' | 'chat';
+
+/** full, near and ok count against a limit; off: a group switched off or at 0; blocked: a person at 0. */
+export type LimitState = 'ok' | 'near' | 'full' | 'blocked' | 'off' | 'unlimited';
+
+/** custom: stored for this person or group; unlimited: -1, set with /gated. */
+export type LimitSource = 'default' | 'custom' | 'unlimited';
+
+export interface SpecialLimitRules {
+  kind: string;
+  min: number;
+  max: number;
+}
+
+export interface LimitDefaults {
+  /** null until the bot has published its settings. */
+  user: number | null;
+  chat: number | null;
+}
+
+export interface GlobalUsage {
+  used: number;
+  /** null: no bot-wide cap. */
+  cap: number | null;
+  off: boolean;
+}
+
+export interface LimitChange {
+  at: Timestamp;
+  actor: SettingActor;
+  /** null: the default; -1: unlimited. */
+  old_value: number | null;
+  new_value: number | null;
+}
+
+export interface LimitRow {
+  scope: LimitScope;
+  scope_id: number;
+  title: string;
+  used: number;
+  used_last_month: number;
+  /** The stored monthly_limit (null: none); sent back as expected. */
+  stored_limit: number | null;
+  limit_source: LimitSource;
+  /** The limit the bot applies: -1 unlimited; null while the default is unknown. */
+  effective_limit: number | null;
+  remaining: number | null;
+  /** A group switched off with /gated off. */
+  enabled: boolean;
+  state: LimitState;
+  credits: number;
+  /** Groups: Stars boosts that were not refunded. */
+  boosts: number;
+  open_request: SettingRequest | null;
+  last_change: LimitChange | null;
+}
+
+/** A bot_runtime_status component as published, stale when older than 3 minutes. */
+export interface PublishedComponent<T> {
+  data: T;
+  updated_at: Timestamp;
+  is_stale: boolean;
+}
+
+export type PaidState = 'on' | 'paused' | 'off' | 'unknown';
+
+export type PaidReason =
+  | 'no_token'
+  | 'not_listed'
+  | 'budget_zero'
+  | 'budget_used'
+  | 'usage_unreadable'
+  | 'usage_not_read'
+  | 'balance_empty'
+  | 'ledger_error'
+  | 'no_database';
+
+export type PaidFeature = 'posts' | 'stories' | 'shorts';
+
+export interface ApifyService {
+  has_token: boolean;
+  is_listed: boolean;
+  budget_usd: number;
+  used_usd: number | null;
+  in_flight_usd: number;
+  usage_read_at: Timestamp | null;
+  usage_error?: string;
+  usage_error_at: Timestamp | null;
+  account_limit_usd: number | null;
+  cycle_start: Timestamp | null;
+  cycle_end: Timestamp | null;
+  state: PaidState;
+  reason?: PaidReason;
+  paused_features: PaidFeature[] | null;
+}
+
+export interface HikerService {
+  has_token: boolean;
+  is_listed: boolean;
+  budget_usd: number;
+  price_per_request_usd: number;
+  spent_usd: number | null;
+  in_flight_usd: number;
+  calls: number;
+  charged_calls: number;
+  gated_calls: number;
+  story_calls: number;
+  balance_requests: number | null;
+  balance_read_at: Timestamp | null;
+  exhausted: boolean;
+  state: PaidState;
+  reason?: PaidReason;
+}
+
+export interface PaidServicesData {
+  computed_at: Timestamp;
+  /** The gated-post provider order. */
+  order: string[];
+  apify: ApifyService;
+  hiker: HikerService;
+}
+
+export interface RelayCounters {
+  hour: number;
+  day: number;
+  hourly_limit: number;
+  daily_limit: number;
+}
+
+export interface RelayPlatform extends RelayCounters {
+  enabled: boolean;
+  breaker: 'closed' | 'open';
+  breaker_left_s: number;
+}
+
+export type RelayWindow = '24h' | '7d' | '30d';
+
+export interface RelayHistoryRow {
+  platform: string;
+  /** OK, a relay error code, or TRANSPORT / REJECTED / SKIPPED for the bot-side outcomes. */
+  code: string;
+  '24h': number;
+  '7d': number;
+  '30d': number;
+}
+
+export interface RelayHistory {
+  windows: RelayWindow[];
+  rows: RelayHistoryRow[];
+  ok_bytes: { '24h': number; '7d': number };
+  ok_avg_ms: { '24h': number | null; '7d': number | null };
+}
+
+export interface RelayStatus {
+  configured: boolean;
+  platforms_in_use: string[] | null;
+  checked_at: Timestamp | null;
+  reachable: boolean;
+  error: string;
+  yt_dlp: string;
+  breaker_open: string[] | null;
+  global: RelayCounters;
+  platforms: Record<string, RelayPlatform> | null;
+  /** null without a database. */
+  history: RelayHistory | null;
+}
+
+export interface LimitsResponse extends ResponseMeta {
+  /** "2026-10": the UTC month the counters run in. */
+  period: string;
+  resets_at: Timestamp;
+  bot: BotHeartbeat | null;
+  /** The bot runs and applies queued changes. */
+  applying: boolean;
+  /** null until a bot that takes limit changes has published its rules. */
+  rules: SpecialLimitRules | null;
+  defaults: LimitDefaults;
+  global: GlobalUsage;
+  paid: PublishedComponent<PaidServicesData> | null;
+  relay: PublishedComponent<RelayStatus> | null;
+  /** Nearest the limit first. */
+  rows: LimitRow[];
+  total: number;
+  /** More people and groups than rows: find the others by id. */
+  truncated: boolean;
+}
+
+export interface LimitScopeResponse extends ResponseMeta {
+  row: LimitRow;
+  defaults: LimitDefaults;
+  rules: SpecialLimitRules | null;
+  applying: boolean;
+}
+
+export interface LimitDraft {
+  scope: LimitScope;
+  id: number;
+  /** null: back to the default. */
+  limit: number | null;
+  /** The stored limit the page showed. */
+  expected: number | null;
+}
+
+const LIMITS_PATH = '/api/limits';
+
+export function getLimits(signal?: AbortSignal): Promise<LimitsResponse> {
+  return request<LimitsResponse>('GET', LIMITS_PATH, undefined, signal);
+}
+
+export function getLimitScope(scope: LimitScope, id: number, signal?: AbortSignal): Promise<LimitScopeResponse> {
+  const path = buildPath('limits/scope', { scope, id });
+
+  return request<LimitScopeResponse>('GET', path, undefined, signal);
+}
+
+/** Queues a limit change for the bot (202); 409 while one is waiting or before the bot supports it. */
+export function queueLimitChange(draft: LimitDraft): Promise<SettingRequestResponse> {
+  return request<SettingRequestResponse>('POST', `${LIMITS_PATH}/requests`, draft);
 }

@@ -45,11 +45,13 @@ type RegistryPlatform struct {
 }
 
 // SettingsRegistry is the published registry; empty until the bot has
-// published it.
+// published it. SpecialLimit is nil until a bot that takes limit requests
+// publishes its rules.
 type SettingsRegistry struct {
-	Groups    []string           `json:"groups"`
-	Platforms []RegistryPlatform `json:"platforms"`
-	Settings  []RegistrySetting  `json:"settings"`
+	Groups       []string           `json:"groups"`
+	Platforms    []RegistryPlatform `json:"platforms"`
+	Settings     []RegistrySetting  `json:"settings"`
+	SpecialLimit *SpecialLimitRules `json:"special_limit"`
 }
 
 // StatusComponent is one bot_runtime_status row.
@@ -66,9 +68,11 @@ type StoredSetting struct {
 }
 
 // SettingRequest is one settings_change_requests row. Value null is a
-// reset to .env / the default.
+// reset to .env / the default (for a limit request: back to the default
+// limit). Kind is "setting" or "special_limit".
 type SettingRequest struct {
 	ID            int64           `json:"id"`
+	Kind          string          `json:"kind"`
 	Key           string          `json:"key"`
 	Status        string          `json:"status"`
 	Value         json.RawMessage `json:"value"`
@@ -102,12 +106,14 @@ type SettingsAuditEntry struct {
 	CreatedAt *string         `json:"created_at"`
 }
 
-// SettingsAuditFilter selects audit rows: Keys nil for every key, Before 0
-// for the newest, at most Limit rows.
+// SettingsAuditFilter selects audit rows: Keys nil for every key, a
+// KeyPrefix (LIKE pattern) when not empty, Before 0 for the newest, at most
+// Limit rows.
 type SettingsAuditFilter struct {
-	Keys   []string
-	Before int64
-	Limit  int
+	Keys      []string
+	KeyPrefix string
+	Before    int64
+	Limit     int
 }
 
 // SettingsSnapshot is what GET /api/settings is built from, read in one

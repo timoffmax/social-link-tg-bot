@@ -32,10 +32,6 @@ const (
 	gatedPeriodTimezone = "UTC"
 )
 
-// gatedUnlimited is the monthly_limit the bot stores for a chat or user
-// without a limit of its own (services.GatedFetchUnlimited).
-const gatedUnlimited = -1
-
 // platformSettingType is the chat_settings type whose enabled flag holds the
 // value; every other type keeps it in setting_value.
 const platformSettingType = "platform"
@@ -592,15 +588,11 @@ func attachChatSettings(q readTx, chats []CustomChat, falseValues interface{}) e
 // Money loads the special-download usage, the Stars payments and the unused
 // bonus credits.
 func (s *PGStore) Money(ctx context.Context, months int) (Money, error) {
-	result := Money{Months: months, GatedMonthly: []GatedMonth{}, GatedCurrent: []GatedCurrent{}, StarsMonthly: []StarsMonth{}}
+	result := Money{Months: months, GatedMonthly: []GatedMonth{}, StarsMonthly: []StarsMonth{}}
 	now := s.currentTime()
 	err := s.readOnly(ctx, func(q readTx) error {
 		var loadErr error
 		result.GatedMonthly, loadErr = loadGatedMonthly(q, now, months)
-
-		if loadErr == nil {
-			result.GatedCurrent, loadErr = loadGatedCurrent(q, now)
-		}
 
 		if loadErr == nil {
 			result.StarsMonthly, loadErr = s.loadStarsMonthly(q, now, months)
@@ -628,36 +620,6 @@ func loadGatedMonthly(q readTx, now time.Time, months int) ([]GatedMonth, error)
 	}, now, gatedPeriodTimezone, months, gatedScopeGlobal, gatedScopeChat, gatedScopeUser)
 
 	return result, err
-}
-
-// loadGatedCurrent reads this month's per-chat and per-user usage.
-func loadGatedCurrent(q readTx, now time.Time) ([]GatedCurrent, error) {
-	result := []GatedCurrent{}
-	err := q.rows(gatedCurrentSQL, func(rows *sql.Rows) error {
-		item := GatedCurrent{}
-		var limit sql.NullInt64
-		scanErr := rows.Scan(&item.Scope, &item.ScopeID, &item.Title, &item.Used, &limit, &item.Custom)
-		item.Limit, item.Unlimited = gatedLimit(limit)
-		result = append(result, item)
-
-		return scanErr
-	}, now, gatedPeriodTimezone, gatedScopeChat, gatedScopeUser)
-
-	return result, err
-}
-
-// gatedLimit maps a stored monthly_limit to the API's limit and unlimited
-// flag: NULL (the bot's default) and the unlimited sentinel have no limit.
-func gatedLimit(stored sql.NullInt64) (*int64, bool) {
-	var limit *int64
-	isUnlimited := (stored.Valid == true) && (stored.Int64 == gatedUnlimited)
-
-	if (stored.Valid == true) && (isUnlimited == false) {
-		value := stored.Int64
-		limit = &value
-	}
-
-	return limit, isUnlimited
 }
 
 // loadStarsMonthly reads the gap-filled Stars payments per month.

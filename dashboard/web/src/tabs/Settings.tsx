@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type FormEvent, type ReactElement } from 'react';
 import {
   ApiError,
-  getSettingRequest,
   getSettings,
   getSettingsAudit,
   HTTP_BAD_REQUEST,
@@ -11,7 +10,6 @@ import {
   type AuditFilter,
   type AuditResponse,
   type SecretsStatus,
-  type SettingRequest,
   type SettingRequestStatus,
   type SettingRow,
   type SettingSource,
@@ -21,11 +19,12 @@ import {
 import type { Column } from '../components/DataTable';
 import { DataTable } from '../components/DataTable';
 import { Panel } from '../components/Panel';
+import { RequestStatus, useRequestFollow } from '../components/RequestFollow';
 import { formatRelative, formatTimestamp } from '../format';
-import { useApi } from '../hooks';
+import { useApi, useVisibleTick } from '../hooks';
+import { specialLimitLabel, specialValueText } from '../limits';
 import {
   actorLabel,
-  APPLIED_SHOWN_MS,
   approvalHint,
   clockOffset,
   conflictText,
@@ -39,9 +38,7 @@ import {
   needsApproval,
   numberStep,
   parseNumber,
-  pollDelay,
   rangeText,
-  requestStatusText,
   sameValue,
   serverNow,
   SETTINGS_REFRESH_MS,
@@ -55,6 +52,8 @@ import type { TabProps } from './types';
 const ALL_FILTER = '';
 const GROUP_FILTER_PREFIX = 'group:';
 const KEY_FILTER_PREFIX = 'key:';
+/** The audit group of the per-person and per-group limits (the server's special_limits). */
+const SPECIAL_LIMITS_GROUP = 'special_limits';
 
 function messageOf(error: unknown): string {
   const result = (error instanceof Error) ? error.message : 'Unknown error';
@@ -87,26 +86,8 @@ function sendErrorText(error: unknown, isStuck: boolean, openStatus: SettingRequ
   return result;
 }
 
-/** A counter that bumps every 30 s while the page is visible and on demand. */
-function useSettingsTick(): [number, () => void] {
-  const [tick, setTick] = useState(0);
-  const bump = useCallback(() => setTick((value) => value + 1), []);
-
-  useEffect(() => {
-    const timer = window.setInterval(() => {
-      if (document.visibilityState === 'visible') {
-        bump();
-      }
-    }, SETTINGS_REFRESH_MS);
-
-    return () => window.clearInterval(timer);
-  }, [bump]);
-
-  return [tick, bump];
-}
-
 export function SettingsTab({ tick, onLoaded }: TabProps) {
-  const [localTick, reload] = useSettingsTick();
+  const [localTick, reload] = useVisibleTick(SETTINGS_REFRESH_MS);
   const query = useApi((signal) => getSettings(signal).then(onLoaded), [tick, localTick]);
   const [auditFilter, setAuditFilter] = useState(ALL_FILTER);
   const auditPanel = useRef<HTMLDivElement>(null);
@@ -257,80 +238,6 @@ function proposalOf(setting: SettingRow, draft: Draft): Proposal {
   return { value, error };
 }
 
-/**
- * Follows one queued change until the bot decides it or it expires: every second for 15 s, then
- * every 5 s. A loop goes on only while the row is mounted and no newer loop has replaced it.
- */
-function useRequestFollow(onFinal: () => void, offset: number) {
-  const [request, setRequest] = useState<SettingRequest | null>(null);
-  const loop = useRef<{ timer: number | undefined; controller: AbortController } | null>(null);
-  const finalRef = useRef(onFinal);
-  const offsetRef = useRef(offset);
-  finalRef.current = onFinal;
-  offsetRef.current = offset;
-
-  const stop = useCallback(() => {
-    const current = loop.current;
-
-    if (current !== null) {
-      window.clearTimeout(current.timer);
-      current.controller.abort();
-    }
-
-    loop.current = null;
-  }, []);
-
-  const follow = useCallback((started: SettingRequest) => {
-    stop();
-    const startedAt = Date.now();
-    const own = { timer: undefined as number | undefined, controller: new AbortController() };
-    loop.current = own;
-    setRequest(started);
-    const isCurrent = () => (loop.current === own);
-    // The last answer: a waiting approval has a later expiry than the change had when queued.
-    let latest = started;
-    const schedule = (latest: SettingRequest) => {
-      const now = serverNow(offsetRef.current);
-      const isWaiting = shouldPollRequest(latest.status, latest.expires_at, now);
-
-      if (isCurrent() && isWaiting) {
-        own.timer = window.setTimeout(poll, pollDelay(Date.now() - startedAt));
-      }
-
-      if (isCurrent() && (isWaiting === false)) {
-        loop.current = null;
-        finalRef.current();
-      }
-    };
-    const poll = () => {
-      getSettingRequest(started.id, own.controller.signal)
-        .then((response) => {
-          if (isCurrent()) {
-            latest = response.request;
-            setRequest(latest);
-            schedule(latest);
-          }
-        })
-        .catch(() => {
-          // A failed check (network, restart) is retried until the change expires.
-          if (isCurrent()) {
-            schedule(latest);
-          }
-        });
-    };
-    schedule(started);
-  }, [stop]);
-
-  const clear = useCallback(() => {
-    stop();
-    setRequest(null);
-  }, [stop]);
-
-  useEffect(() => stop, [stop]);
-
-  return { request, follow, clear };
-}
-
 interface Confirming {
   next: SettingValue | null;
 }
@@ -372,6 +279,7 @@ function SettingItem({ setting, data, offset, onFinal, onShowHistory }: SettingI
     if (isNew && isOpenStatus(openRequest.status)) {
       followed.follow({
         ...openRequest,
+        kind: 'setting',
         key: setting.key,
         expected: openRequest.value ?? setting.default,
         needs_approval: null,
@@ -713,29 +621,6 @@ function ConfirmChange({ setting, current, next, secrets, busy, onConfirm, onCan
   );
 }
 
-/** Where a queued change stands; an applied one fades after a few seconds. */
-function RequestStatus({ request, offset }: { request: SettingRequest; offset: number }) {
-  const [isFaded, setFaded] = useState(false);
-  const now = serverNow(offset);
-  const isQueued = (request.status === 'queued') && shouldPollRequest(request.status, request.expires_at, now);
-  const isApplied = (request.status === 'applied');
-  const text = requestStatusText(request, now);
-
-  useEffect(() => {
-    const timer = (request.status === 'applied') ? window.setTimeout(() => setFaded(true), APPLIED_SHOWN_MS) : undefined;
-
-    return () => window.clearTimeout(timer);
-  }, [request.status]);
-
-  return (
-    <div className={`setting__status setting__status--${request.status}${isFaded ? ' is-faded' : ''}`} role="status">
-      {isQueued && <span className="spinner" aria-hidden="true" />}
-      {isApplied && <><span aria-hidden="true">✓</span> </>}
-      {text}
-    </div>
-  );
-}
-
 interface AuditLogProps {
   data: SettingsResponse | null;
   filter: string;
@@ -756,6 +641,20 @@ function auditFilterOf(filter: string): AuditFilter {
   }
 
   return result;
+}
+
+/** A key's label: the registry's, a limit key in words, or the key itself. */
+function auditLabel(labels: Map<string, string>, key: string): string {
+  return labels.get(key) ?? specialLimitLabel(key) ?? key;
+}
+
+/** Old -> new; a limit key's null is its default, -1 unlimited. */
+function auditChange(row: AuditEntry): string {
+  const isLimit = (specialLimitLabel(row.key) !== null);
+  const oldText = isLimit ? specialValueText(row.old_value) : formatValue(row.old_value);
+  const newText = isLimit ? specialValueText(row.new_value) : formatValue(row.new_value);
+
+  return `${oldText} → ${newText}`;
 }
 
 function AuditLog({ data, filter, onFilterChange, refreshKey }: AuditLogProps) {
@@ -787,8 +686,8 @@ function AuditLog({ data, filter, onFilterChange, refreshKey }: AuditLogProps) {
 
   const columns: Column<AuditEntry>[] = [
     { header: 'Time', cell: (row) => formatTimestamp(row.created_at, timezone) },
-    { header: 'Setting', cell: (row) => <span title={row.key}>{labels.get(row.key) ?? row.key}</span>, fill: true },
-    { header: 'Change', cell: (row) => `${formatValue(row.old_value)} → ${formatValue(row.new_value)}` },
+    { header: 'Setting', cell: (row) => <span title={row.key}>{auditLabel(labels, row.key)}</span>, fill: true },
+    { header: 'Change', cell: (row) => auditChange(row) },
     { header: 'By', cell: (row) => actorLabel(row.actor) },
     { header: 'DB role', cell: (row) => <code>{row.db_role}</code>, detail: true },
     { header: 'Note', cell: (row) => row.note ?? '—', detail: true },
@@ -802,6 +701,7 @@ function AuditLog({ data, filter, onFilterChange, refreshKey }: AuditLogProps) {
         <option value={ALL_FILTER}>All settings</option>
         <optgroup label="Groups">
           {groups.map((group) => <option key={group} value={`${GROUP_FILTER_PREFIX}${group}`}>{groupLabel(group)}</option>)}
+          <option value={`${GROUP_FILTER_PREFIX}${SPECIAL_LIMITS_GROUP}`}>Per-person / per-group limits</option>
         </optgroup>
         <optgroup label="Settings">
           {settings.map((setting) => <option key={setting.key} value={`${KEY_FILTER_PREFIX}${setting.key}`}>{setting.label}</option>)}
@@ -813,7 +713,7 @@ function AuditLog({ data, filter, onFilterChange, refreshKey }: AuditLogProps) {
   return (
     <Panel
       title="Audit log"
-      subtitle="Every change of a setting, newest first, whoever made it (also manual database edits)"
+      subtitle="Every change of a setting or of a person’s or group’s limit, newest first, whoever made it (also manual database edits)"
       loading={query.loading}
       error={query.error}
       hasData={first !== null}

@@ -52,6 +52,7 @@ func CheckRedirectorHealth() {
 	probeFacebed()
 	probeRelay()
 	CheckHikerBalance()
+	RefreshApifyUsage()
 }
 
 // facebedProbePhotoID is a known-stable public photo (Ludus Magnus Studio,

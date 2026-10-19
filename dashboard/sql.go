@@ -183,8 +183,8 @@ const chatTitlesCTE = `chat_titles AS (
 )`
 
 // topGroupsSQL: $1 timezone, $2 now, $3 days, $4 limit. Names come from a
-// LATERAL lookup per selected chat or user (here and in topUsersSQL and
-// gatedCurrentSQL): the latest non-empty chat title or username in
+// LATERAL lookup per selected chat or user (here and in topUsersSQL): the
+// latest non-empty chat title or username in
 // media_stats. The few top groups and the user_id index keep those cheap.
 const topGroupsSQL = `WITH ` + rangeCTE + `,
 totals AS (
@@ -330,42 +330,6 @@ FROM months m
 LEFT JOIN gated_fetch_usage u ON u.period = m.period
 GROUP BY m.period
 ORDER BY m.period`
-
-// gatedCurrentSQL: $1 now, $2 period timezone (UTC), $3 chat scope, $4 user
-// scope. Only a policy row with a monthly_limit is a custom limit; a NULL
-// monthly_limit means the bot's default limit applies.
-const gatedCurrentSQL = `WITH current_usage AS (
-    SELECT scope, scope_id, used
-    FROM gated_fetch_usage
-    WHERE period = date_trunc('month', $1::timestamptz AT TIME ZONE $2::text)::date
-        AND scope IN ($3::text, $4::text)
-),
-title_chats AS (
-    SELECT scope_id AS chat_id FROM current_usage WHERE scope = $3::text
-),
-` + chatTitlesCTE + `
-SELECT
-    u.scope,
-    u.scope_id,
-    CASE
-        WHEN u.scope = $3::text THEN COALESCE(lt.chat_title, NULLIF(g.chat_title, ''), '')
-        ELSE COALESCE(lu.username, '')
-    END,
-    u.used,
-    p.monthly_limit,
-    (p.monthly_limit IS NOT NULL)
-FROM current_usage u
-LEFT JOIN chat_titles lt ON u.scope = $3::text AND lt.chat_id = u.scope_id
-LEFT JOIN group_media_limits g ON u.scope = $3::text AND g.chat_id = u.scope_id
-LEFT JOIN LATERAL (
-    SELECT ms.username
-    FROM media_stats ms
-    WHERE u.scope = $4::text AND ms.user_id = u.scope_id AND COALESCE(ms.username, '') <> ''
-    ORDER BY ms.created_at DESC NULLS LAST, ms.id DESC
-    LIMIT 1
-) lu ON true
-LEFT JOIN gated_fetch_policies p ON p.scope = u.scope AND p.scope_id = u.scope_id
-ORDER BY u.used DESC, u.scope, u.scope_id`
 
 // starsMonthlySQL: $1 timezone, $2 now, $3 months. Payments and boosts
 // exclude refunded ones; refunds count in the month of the refund.
@@ -546,7 +510,7 @@ const storedSettingsSQL = `SELECT key, value, updated_at, updated_by
 FROM bot_settings`
 
 // settingRequestColumns is the column list scanSettingRequest reads.
-const settingRequestColumns = `id, key, status, value, expected, needs_approval, error, created_at, expires_at, decided_at`
+const settingRequestColumns = `id, kind, key, status, value, expected, needs_approval, error, created_at, expires_at, decided_at`
 
 // openSettingRequestsSQL reads the requests waiting for the bot or for the
 // owner's approval: $1 kind, $2 statuses.
@@ -569,15 +533,144 @@ RETURNING ` + settingRequestColumns
 // settingsAuditColumns is the column list scanSettingsAudit reads.
 const settingsAuditColumns = `id, key, old_value, new_value, actor, db_role, request_id, note, created_at`
 
-// lastSettingChangesSQL reads the newest audit row of every key.
+// lastSettingChangesSQL reads the newest audit row of every setting key;
+// the per-person and per-group limit rows (special_limit:…,
+// special_enabled:…) are left out.
 const lastSettingChangesSQL = `SELECT DISTINCT ON (key) ` + settingsAuditColumns + `
 FROM settings_audit
+WHERE key NOT LIKE 'special\_%' ESCAPE '\'
 ORDER BY key, created_at DESC, id DESC`
 
 // settingsAuditSQL pages the audit, newest first: $1 keys (NULL for all),
-// $2 before id (0 for the newest), $3 rows.
+// $2 before id (0 for the newest), $3 rows, $4 a LIKE pattern of the keys
+// (NULL for all).
 const settingsAuditSQL = `SELECT ` + settingsAuditColumns + `
 FROM settings_audit
 WHERE ($1::text[] IS NULL OR key = ANY($1::text[])) AND ($2::bigint = 0 OR id < $2::bigint)
+    AND ($4::text IS NULL OR key LIKE $4::text)
 ORDER BY id DESC
 LIMIT $3::int`
+
+// globalUsageSQL is this month's bot-wide special-download use: $1 now,
+// $2 period timezone (UTC), $3 global scope.
+const globalUsageSQL = `SELECT COALESCE((SELECT used FROM gated_fetch_usage
+    WHERE scope = $3::text AND scope_id = 0
+        AND period = date_trunc('month', $1::timestamptz AT TIME ZONE $2::text)::date), 0)`
+
+// limitPeriodsCTE is this and last month's use per person and group: $1
+// now, $2 period timezone (UTC), $3 chat scope, $4 user scope.
+const limitPeriodsCTE = `periods AS (
+    SELECT date_trunc('month', $1::timestamptz AT TIME ZONE $2::text)::date AS current_period,
+        (date_trunc('month', $1::timestamptz AT TIME ZONE $2::text) - INTERVAL '1 month')::date AS previous_period
+),
+recent_usage AS (
+    SELECT u.scope, u.scope_id,
+        COALESCE(SUM(u.used) FILTER (WHERE u.period = p.current_period), 0) AS used,
+        COALESCE(SUM(u.used) FILTER (WHERE u.period = p.previous_period), 0) AS used_last_month
+    FROM gated_fetch_usage u
+    CROSS JOIN periods p
+    WHERE u.scope IN ($3::text, $4::text) AND u.period IN (p.current_period, p.previous_period)
+    GROUP BY u.scope, u.scope_id
+)`
+
+// limitScopesCTE lists every person and group with use this or last month,
+// a non-default policy, bonus credits or an open limit request: the
+// limitPeriodsCTE parameters, $7 request kind, $8 open statuses.
+const limitScopesCTE = limitPeriodsCTE + `,
+scopes AS (
+    SELECT scope, scope_id FROM recent_usage
+    UNION
+    SELECT scope, scope_id FROM gated_fetch_policies
+    WHERE scope IN ($3::text, $4::text) AND ((monthly_limit IS NOT NULL) OR (enabled = false))
+    UNION
+    SELECT $4::text, user_id FROM gated_fetch_credits WHERE credits > 0
+    UNION
+    SELECT $3::text, chat_id FROM gated_fetch_chat_credits WHERE credits > 0
+    UNION
+    SELECT split_part(key, ':', 1), split_part(key, ':', 2)::bigint
+    FROM settings_change_requests
+    WHERE kind = $7::text AND status = ANY($8::text[])
+)`
+
+// limitOneScopeCTE is one person or group: the limitPeriodsCTE parameters,
+// $7 scope, $8 id.
+const limitOneScopeCTE = limitPeriodsCTE + `,
+scopes AS (
+    SELECT $7::text AS scope, $8::bigint AS scope_id
+)`
+
+// limitRowsBody reads the scopes CTE's rows: $5 rows, $6 audit key prefix,
+// $9 near-limit ratio (and $3 chat, $4 user scope). Rows near or at a
+// custom limit come first, so the LIMIT keeps them; then the busiest.
+// total counts every scope before the LIMIT; the newest audit row of the
+// limit is the last change.
+// Names come from chatTitlesCTE (groups) and a LATERAL lookup on the user_id
+// index (people), like the Chats tab.
+const limitRowsBody = `,
+ranked AS (
+    SELECT k.scope, k.scope_id,
+        COALESCE(u.used, 0) AS used,
+        COALESCE(u.used_last_month, 0) AS used_last_month,
+        COUNT(*) OVER () AS total
+    FROM scopes k
+    LEFT JOIN recent_usage u ON u.scope = k.scope AND u.scope_id = k.scope_id
+    LEFT JOIN gated_fetch_policies kp ON kp.scope = k.scope AND kp.scope_id = k.scope_id
+    ORDER BY
+        (kp.monthly_limit > 0 AND COALESCE(u.used, 0) >= $9::float8 * kp.monthly_limit) DESC NULLS LAST,
+        COALESCE(u.used, 0) DESC, k.scope, k.scope_id
+    LIMIT $5::int
+),
+title_chats AS (
+    SELECT scope_id AS chat_id FROM ranked WHERE scope = $3::text
+),
+` + chatTitlesCTE + `
+SELECT
+    r.scope,
+    r.scope_id,
+    CASE
+        WHEN r.scope = $3::text THEN COALESCE(lt.chat_title, NULLIF(g.chat_title, ''), '')
+        ELSE COALESCE(lu.username, '')
+    END,
+    r.used,
+    r.used_last_month,
+    p.monthly_limit,
+    COALESCE(p.enabled, true),
+    CASE WHEN r.scope = $3::text THEN COALESCE(cc.credits, 0) ELSE COALESCE(uc.credits, 0) END,
+    COALESCE(b.boosts, 0),
+    r.total,
+    sa.created_at,
+    sa.actor,
+    sa.old_value,
+    sa.new_value
+FROM ranked r
+LEFT JOIN chat_titles lt ON r.scope = $3::text AND lt.chat_id = r.scope_id
+LEFT JOIN group_media_limits g ON r.scope = $3::text AND g.chat_id = r.scope_id
+LEFT JOIN LATERAL (
+    SELECT ms.username
+    FROM media_stats ms
+    WHERE r.scope = $4::text AND ms.user_id = r.scope_id AND COALESCE(ms.username, '') <> ''
+    ORDER BY ms.created_at DESC NULLS LAST, ms.id DESC
+    LIMIT 1
+) lu ON true
+LEFT JOIN gated_fetch_policies p ON p.scope = r.scope AND p.scope_id = r.scope_id
+LEFT JOIN gated_fetch_credits uc ON r.scope = $4::text AND uc.user_id = r.scope_id
+LEFT JOIN gated_fetch_chat_credits cc ON r.scope = $3::text AND cc.chat_id = r.scope_id
+LEFT JOIN LATERAL (
+    SELECT COUNT(*) AS boosts
+    FROM support_payments sp
+    WHERE r.scope = $3::text AND sp.boosted_chat_id = r.scope_id AND sp.refunded_at IS NULL
+) b ON true
+LEFT JOIN LATERAL (
+    SELECT a.created_at, a.actor, a.old_value, a.new_value
+    FROM settings_audit a
+    WHERE a.key = $6::text || r.scope || ':' || r.scope_id
+    ORDER BY a.created_at DESC, a.id DESC
+    LIMIT 1
+) sa ON true
+ORDER BY r.used DESC, r.scope, r.scope_id`
+
+// limitRowsSQL lists the people and groups of the Limits tab.
+const limitRowsSQL = `WITH ` + limitScopesCTE + limitRowsBody
+
+// limitOneScopeSQL reads one person or group, also one nothing is stored for.
+const limitOneScopeSQL = `WITH ` + limitOneScopeCTE + limitRowsBody

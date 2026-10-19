@@ -1,34 +1,11 @@
-import { getMoney, MONEY_MONTHS, type GatedCurrent, type GatedMonth, type MoneyResponse, type StarsMonth } from '../api';
-import { Meter, StatTile, TileGroup } from '../components/Bits';
+import { getMoney, MONEY_MONTHS, type GatedMonth, type MoneyResponse, type StarsMonth } from '../api';
+import { StatTile, TileGroup } from '../components/Bits';
 import { ColumnChart, SERIES_1, SERIES_2, type Series } from '../components/Charts';
-import { DataTable, type Column } from '../components/DataTable';
+import type { Column } from '../components/DataTable';
 import { Panel } from '../components/Panel';
-import { chatLabel, formatCount, formatFullMonth, formatMonth, formatNumber, isAllZero, userLabel } from '../format';
+import { formatCount, formatFullMonth, formatMonth, formatNumber, isAllZero } from '../format';
 import { useApi, type Query } from '../hooks';
 import type { TabProps } from './types';
-
-/** " of N" after the used count, or nothing without a custom limit (default or unlimited). */
-function limitSuffix(limit: number | null): string {
-  const result = (limit === null) ? '' : ` of ${formatNumber(limit)}`;
-
-  return result;
-}
-
-const LIMIT_KINDS = { unlimited: 'Unlimited', custom: 'Custom', default: 'Default' } as const;
-
-function limitKind(row: GatedCurrent): string {
-  let result: string = LIMIT_KINDS.default;
-
-  if (row.custom === true) {
-    result = LIMIT_KINDS.custom;
-  }
-
-  if (row.unlimited === true) {
-    result = LIMIT_KINDS.unlimited;
-  }
-
-  return result;
-}
 
 const GATED_SERIES: Series[] = [{ key: 'global_used', label: 'Special downloads', color: SERIES_1 }];
 
@@ -53,28 +30,6 @@ const STARS_COLUMNS: Column<StarsMonth>[] = [
   { header: 'Refunded Stars', cell: (row) => formatNumber(row.refunded_stars), numeric: true, detail: true },
 ];
 
-function currentTitle(row: GatedCurrent): string {
-  const result = (row.scope === 'user') ? userLabel(row.title, row.scope_id) : chatLabel(row.title, row.scope_id);
-
-  return result;
-}
-
-const CURRENT_COLUMNS: Column<GatedCurrent>[] = [
-  { header: 'Chat or user', cell: (row) => <span className="cell-title" title={currentTitle(row)}>{currentTitle(row)}</span>, fill: true },
-  { header: 'Kind', cell: (row) => <span className="kind">{(row.scope === 'chat') ? 'Group' : 'User'}</span>, detail: true },
-  {
-    header: 'Used',
-    cell: (row) => (
-      <span className="used">
-        <Meter used={row.used} limit={row.limit} />
-        {formatNumber(row.used)}{limitSuffix(row.limit)}
-      </span>
-    ),
-    numeric: true,
-  },
-  { header: 'Limit', cell: limitKind, detail: true },
-];
-
 export function MoneyTab({ tick, onLoaded }: TabProps) {
   const query = useApi((signal) => getMoney(MONEY_MONTHS, signal).then(onLoaded), [tick]);
 
@@ -83,7 +38,6 @@ export function MoneyTab({ tick, onLoaded }: TabProps) {
       <CreditTiles query={query} />
       <GatedMonthly query={query} />
       <StarsMonthly query={query} />
-      <GatedThisMonth query={query} />
     </div>
   );
 }
@@ -109,7 +63,12 @@ function GatedMonthly({ query }: { query: Query<MoneyResponse> }) {
   return (
     <Panel
       title="Special downloads per month"
-      subtitle="Restricted or login-only Instagram posts, Stories and Shorts fetched through a paid service or the home relay, bot-wide"
+      subtitle={(
+        <>
+          Restricted or login-only Instagram posts, Stories and Shorts fetched through a paid service or the home relay, bot-wide.
+          {' '}Per person and group: usage, limits and changes in the <a href="#/limits">Limits tab</a>.
+        </>
+      )}
       loading={query.loading}
       error={query.error}
       hasData={query.data !== null}
@@ -158,25 +117,6 @@ function StarsMonthly({ query }: { query: Query<MoneyResponse> }) {
         formatLabel={formatFullMonth}
         extra={extra}
       />
-    </Panel>
-  );
-}
-
-function GatedThisMonth({ query }: { query: Query<MoneyResponse> }) {
-  const rows = query.data?.gated_current ?? [];
-
-  return (
-    <Panel
-      title="Special downloads this month"
-      subtitle="Per group and user quota. A default limit comes from the bot’s config and is not shown here."
-      loading={query.loading}
-      error={query.error}
-      hasData={query.data !== null}
-      isEmpty={rows.length === 0}
-      emptyText="No special downloads this month."
-      wide
-    >
-      <DataTable columns={CURRENT_COLUMNS} rows={rows} rowKey={(row) => `${row.scope}:${row.scope_id}`} caption="Special downloads this month" />
     </Panel>
   );
 }

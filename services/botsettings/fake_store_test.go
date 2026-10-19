@@ -29,6 +29,7 @@ var fakeExpiresAt = time.Date(2026, 10, 19, 12, 15, 0, 0, time.UTC)
 type fakeStore struct {
 	mu       sync.Mutex
 	rows     map[string]json.RawMessage
+	limits   map[string]json.RawMessage
 	requests []*fakeRequest
 	statuses map[string]json.RawMessage
 	loadErr  error
@@ -42,7 +43,7 @@ type fakeStore struct {
 }
 
 func newFakeStore() *fakeStore {
-	result := &fakeStore{rows: map[string]json.RawMessage{}, statuses: map[string]json.RawMessage{}}
+	result := &fakeStore{rows: map[string]json.RawMessage{}, limits: map[string]json.RawMessage{}, statuses: map[string]json.RawMessage{}}
 
 	return result
 }
@@ -97,7 +98,7 @@ func (s *fakeStore) ProcessNextRequest(ctx context.Context, decide func(ChangeRe
 
 	if claimed != nil {
 		request = claimed.request
-		request.StoredCurrent = s.rows[request.Key]
+		request.StoredCurrent = s.storedCurrent(request)
 		request.AwaitingCount = s.countStatus(settings.StatusAwaitingApproval)
 		decision = decideClaimed(request, decide)
 		claimed.status = decision.Status
@@ -109,15 +110,48 @@ func (s *fakeStore) ProcessNextRequest(ctx context.Context, decide func(ChangeRe
 		claimed.request.IsExpired = false
 	}
 
-	if (claimed != nil) && (decision.IsApplied() == true) && (decision.Value == nil) {
-		delete(s.rows, request.Key)
-	}
-
-	if (claimed != nil) && (decision.IsApplied() == true) && (decision.Value != nil) {
-		s.rows[request.Key] = decision.Value
+	if (claimed != nil) && (decision.IsApplied() == true) {
+		s.write(request, decision)
 	}
 
 	return request, decision, (claimed != nil), nil
+}
+
+// storedCurrent is what pgStore reads at the claim: the policy limit as JSON
+// ("null" without one) for a special limit, else the bot_settings value.
+func (s *fakeStore) storedCurrent(request ChangeRequest) json.RawMessage {
+	result := s.rows[request.Key]
+
+	if request.Kind == settings.KindSpecialLimit {
+		result = s.limits[request.Key]
+	}
+
+	if (request.Kind == settings.KindSpecialLimit) && (result == nil) {
+		result = json.RawMessage("null")
+	}
+
+	return result
+}
+
+// write stores an applied decision like pgStore's writeChange.
+func (s *fakeStore) write(request ChangeRequest, decision Decision) {
+	change, isLimit := decision.TypedValue.(specialLimitChange)
+
+	if (isLimit == true) && (change.New == nil) {
+		delete(s.limits, request.Key)
+	}
+
+	if (isLimit == true) && (change.New != nil) {
+		s.limits[request.Key], _ = json.Marshal(*change.New)
+	}
+
+	if (isLimit == false) && (decision.Value == nil) {
+		delete(s.rows, request.Key)
+	}
+
+	if (isLimit == false) && (decision.Value != nil) {
+		s.rows[request.Key] = decision.Value
+	}
 }
 
 func (s *fakeStore) countStatus(status string) int {
@@ -221,19 +255,15 @@ func (s *fakeStore) DecideApproval(ctx context.Context, requestID int64, isAppro
 
 func (s *fakeStore) decideFound(found *fakeRequest, isApprove bool, decide func(ChangeRequest) Decision) ApprovalOutcome {
 	request := found.request
-	request.StoredCurrent = s.rows[request.Key]
+	request.StoredCurrent = s.storedCurrent(request)
 	decision := rejected(requestOwnerRejectedError)
 
 	if isApprove == true {
 		decision = decide(request)
 	}
 
-	if (decision.IsApplied() == true) && (decision.Value == nil) {
-		delete(s.rows, request.Key)
-	}
-
-	if (decision.IsApplied() == true) && (decision.Value != nil) {
-		s.rows[request.Key] = decision.Value
+	if decision.IsApplied() == true {
+		s.write(request, decision)
 	}
 
 	found.status = decision.Status
@@ -270,6 +300,37 @@ func (s *fakeStore) queue(key string, value string, expected string) *fakeReques
 	s.requests = append(s.requests, result)
 
 	return result
+}
+
+// queueLimit adds a special-limit request: value "" is a reset.
+func (s *fakeStore) queueLimit(key string, value string, expected string) *fakeRequest {
+	result := s.queue(key, value, expected)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	result.request.Kind = settings.KindSpecialLimit
+
+	return result
+}
+
+// setLimit stores a policy limit ("" removes it).
+func (s *fakeStore) setLimit(key string, value string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if value == "" {
+		delete(s.limits, key)
+	}
+
+	if value != "" {
+		s.limits[key] = json.RawMessage(value)
+	}
+}
+
+func (s *fakeStore) limit(key string) json.RawMessage {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return s.limits[key]
 }
 
 func (s *fakeStore) requestStatus(request *fakeRequest) (string, string) {

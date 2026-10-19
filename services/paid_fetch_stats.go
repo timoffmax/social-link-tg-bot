@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"log"
 	"time"
 )
 
@@ -80,4 +81,18 @@ func GetApifyMonthlyUsageUsd() (float64, error) {
 	}
 
 	return result, err
+}
+
+// RefreshApifyUsage reads the Apify usage into the 'paid' status cache (from
+// the hourly health check); only with APIFY_TOKEN, a failure is logged only.
+func RefreshApifyUsage() {
+	var err error
+
+	if hasApifyToken() == true {
+		_, err = GetApifyMonthlyUsageUsd()
+	}
+
+	if err != nil {
+		log.Printf("⚠️ [apify] usage read for the paid status failed: %v", err)
+	}
 }

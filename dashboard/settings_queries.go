@@ -72,7 +72,7 @@ func (s *PGStore) Settings(ctx context.Context) (SettingsSnapshot, error) {
 		}
 
 		if loadErr == nil {
-			result.OpenRequests, loadErr = loadOpenSettingRequests(q)
+			result.OpenRequests, loadErr = loadOpenSettingRequests(q, settingRequestKind)
 		}
 
 		if loadErr == nil {
@@ -150,13 +150,14 @@ func (s *PGStore) SettingRequest(ctx context.Context, id int64) (SettingRequest,
 func (s *PGStore) SettingsAudit(ctx context.Context, filter SettingsAuditFilter) ([]SettingsAuditEntry, error) {
 	result := []SettingsAuditEntry{}
 	keys := pq.Array(filter.Keys)
+	prefix := nullableText(filter.KeyPrefix)
 	err := s.readOnly(ctx, func(q readTx) error {
 		loadErr := q.rows(settingsAuditSQL, func(rows *sql.Rows) error {
 			entry, scanErr := scanSettingsAudit(rows)
 			result = append(result, entry)
 
 			return scanErr
-		}, keys, filter.Before, filter.Limit)
+		}, keys, filter.Before, filter.Limit, prefix)
 
 		return loadErr
 	})
@@ -200,8 +201,8 @@ func loadStoredSettings(q readTx) (map[string]StoredSetting, error) {
 	return result, err
 }
 
-// loadOpenSettingRequests reads the open requests by key.
-func loadOpenSettingRequests(q readTx) (map[string]SettingRequest, error) {
+// loadOpenSettingRequests reads the open requests of a kind by key.
+func loadOpenSettingRequests(q readTx, kind string) (map[string]SettingRequest, error) {
 	result := map[string]SettingRequest{}
 	statuses := pq.Array(openSettingStatuses)
 	err := q.rows(openSettingRequestsSQL, func(rows *sql.Rows) error {
@@ -209,7 +210,7 @@ func loadOpenSettingRequests(q readTx) (map[string]SettingRequest, error) {
 		result[request.Key] = request
 
 		return scanErr
-	}, settingRequestKind, statuses)
+	}, kind, statuses)
 
 	return result, err
 }
@@ -253,6 +254,7 @@ func scanSettingRequest(row rowScanner) (SettingRequest, error) {
 	var decidedAt sql.NullTime
 	err := row.Scan(
 		&result.ID,
+		&result.Kind,
 		&result.Key,
 		&result.Status,
 		&value,
@@ -325,6 +327,17 @@ func nullableJSON(value json.RawMessage) interface{} {
 
 	if value != nil {
 		result = string(value)
+	}
+
+	return result
+}
+
+// nullableText is a text bind parameter: NULL for an empty value.
+func nullableText(value string) interface{} {
+	var result interface{}
+
+	if value != "" {
+		result = value
 	}
 
 	return result

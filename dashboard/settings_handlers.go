@@ -34,6 +34,15 @@ const (
 	paramBefore = "before"
 )
 
+// The audit group of the per-person and per-group limit rows
+// (special_limit:… and special_enabled:… keys) and its LIKE pattern. The
+// registry already has a "limits" group (daily limits), so it is named
+// apart.
+const (
+	auditGroupSpecialLimits = "special_limits"
+	specialAuditKeyPattern  = `special\_%`
+)
+
 // Audit paging.
 const (
 	defaultAuditLimit = 50
@@ -192,7 +201,7 @@ func (s *Server) handleSettingsAudit(w http.ResponseWriter, r *http.Request) {
 		filter := SettingsAuditFilter{Before: before, Limit: limit + 1}
 
 		if loadErr == nil {
-			filter.Keys, loadErr = auditKeys(registry, key, group)
+			filter.Keys, filter.KeyPrefix, loadErr = auditKeys(registry, key, group)
 		}
 
 		if loadErr == nil {
@@ -306,24 +315,32 @@ func parseBeforeID(text string) (int64, error) {
 	return result, err
 }
 
-// auditKeys turns the key and group filters into the keys to show: nil for
-// every key; an unknown key or group is a 400.
-func auditKeys(registry SettingsRegistry, key string, group string) ([]string, error) {
+// auditKeys turns the key and group filters into the keys to show (nil for
+// every key) and a key pattern (empty for none): the special_limits group is
+// every limit row (no registry key is one of them); an unknown key or group
+// is a 400.
+func auditKeys(registry SettingsRegistry, key string, group string) ([]string, string, error) {
 	var result []string
+	var pattern string
 	var err error
 	_, isKnownKey := findRegistrySetting(registry, key)
-	isKnownGroup := slices.Contains(registry.Groups, group)
+	isLimitsGroup := (group == auditGroupSpecialLimits)
+	isKnownGroup := (slices.Contains(registry.Groups, group) == true) || (isLimitsGroup == true)
 
 	switch {
 	case (key != "") && (isKnownKey == false):
 		err = badRequest(errSettingUnknownKey, key)
 	case (group != "") && (isKnownGroup == false):
 		err = badRequest(errSettingUnknownGroup, group)
+	case (isLimitsGroup == true) && (key != ""):
+		result = []string{}
+	case isLimitsGroup == true:
+		pattern = specialAuditKeyPattern
 	case (key != "") || (group != ""):
 		result = filterRegistryKeys(registry, key, group)
 	}
 
-	return result, err
+	return result, pattern, err
 }
 
 // filterRegistryKeys lists the registry keys matching key and group (an

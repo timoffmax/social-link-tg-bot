@@ -24,6 +24,7 @@ type stubStore struct {
 	blog     blogStub
 	report   reportStub
 	settings settingsStub
+	limits   limitsStub
 }
 
 func (s *stubStore) Ping(ctx context.Context) error {
@@ -419,5 +420,61 @@ func TestEmptySlicesAreJSONArrays(t *testing.T) {
 
 	if strings.Contains(recorder.Body.String(), `"daily":[]`) == false {
 		t.Errorf("body = %s", recorder.Body.String())
+	}
+}
+
+func limitRequestWith(request blogRequest) blogRequest {
+	request.method = http.MethodPost
+	request.target = "/api/limits/requests"
+	request.body = `{"scope": "user", "id": 7, "limit": 30, "expected": null}`
+
+	return request
+}
+
+func assertLimitWriteRefused(t *testing.T, name string, request blogRequest) {
+	t.Helper()
+	store := &stubStore{}
+	store.settings.registry = limitsRegistry(t)
+	recorder := limitRequestWith(request).do(newTestServer(store))
+
+	if (recorder.Code != http.StatusForbidden) || (store.limits.calls != 0) || (store.settings.calls != 0) {
+		t.Errorf("%s: status = %d, calls = %d", name, recorder.Code, store.limits.calls)
+	}
+}
+
+func TestLimitRequestWithoutDashboardHeaderIs403(t *testing.T) {
+	empty := ""
+	assertLimitWriteRefused(t, "no marker", blogRequest{marker: &empty})
+}
+
+func TestLimitRequestCrossOriginIs403(t *testing.T) {
+	other := "http://evil.example"
+	assertLimitWriteRefused(t, "other origin", blogRequest{origin: &other})
+}
+
+func TestLimitRequestNonJSONIs403(t *testing.T) {
+	text := "text/plain"
+	assertLimitWriteRefused(t, "not JSON", blogRequest{contentType: &text})
+}
+
+func TestLimitRequestsPathAllowsOnlyPost(t *testing.T) {
+	for _, method := range []string{http.MethodGet, http.MethodPut, http.MethodDelete} {
+		store := &stubStore{}
+		recorder := blogRequest{method: method, target: "/api/limits/requests", body: `{}`}.do(newTestServer(store))
+
+		if (recorder.Code != http.StatusMethodNotAllowed) || (recorder.Header().Get("Allow") != "POST") || (store.limits.calls != 0) {
+			t.Errorf("%s: status = %d, Allow = %q", method, recorder.Code, recorder.Header().Get("Allow"))
+		}
+	}
+}
+
+func TestLimitsReadRoutesAllowOnlyGetHead(t *testing.T) {
+	for _, target := range []string{"/api/limits", "/api/limits/scope?scope=user&id=7"} {
+		store := &stubStore{}
+		recorder := blogRequest{method: http.MethodPost, target: target, body: `{}`}.do(newTestServer(store))
+
+		if (recorder.Code != http.StatusMethodNotAllowed) || (recorder.Header().Get("Allow") != "GET, HEAD") || (store.limits.calls != 0) {
+			t.Errorf("%s: status = %d, Allow = %q", target, recorder.Code, recorder.Header().Get("Allow"))
+		}
 	}
 }

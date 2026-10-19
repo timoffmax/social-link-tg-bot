@@ -24,9 +24,11 @@ type StoredValue struct {
 	Value json.RawMessage
 }
 
-// ChangeRequest is a claimed settings_change_requests row, with the key's
-// bot_settings value at claim time (nil when it has none) and, for a queued
-// request, how many requests await the owner's approval.
+// ChangeRequest is a claimed settings_change_requests row and, for a queued
+// request, how many requests await the owner's approval. StoredCurrent is
+// the key's stored value at claim time: the bot_settings value for a
+// setting, the gated_fetch_policies.monthly_limit as JSON (null = none) for
+// a special limit; nil when there is none or nothing was read.
 type ChangeRequest struct {
 	ID                int64
 	Kind              string
@@ -59,7 +61,7 @@ type Decision struct {
 	ExpiresAt     time.Time
 }
 
-// IsApplied reports a decision to write bot_settings.
+// IsApplied reports a decision to write the change.
 func (d Decision) IsApplied() bool {
 	result := (d.Status == settings.StatusApplied)
 
@@ -95,7 +97,7 @@ type Store interface {
 	// LoadSettings reads every bot_settings row.
 	LoadSettings(ctx context.Context) ([]StoredValue, error)
 	// ProcessNextRequest claims the oldest queued request, lets decide rule
-	// on it and records the outcome (with the bot_settings write when it is
+	// on it and records the outcome (with the change's write when it is
 	// applied) in one transaction. It returns false when none is queued.
 	ProcessNextRequest(ctx context.Context, decide func(ChangeRequest) Decision) (ChangeRequest, Decision, bool, error)
 	// ExpireRequests marks every queued or awaiting request past its
@@ -108,7 +110,7 @@ type Store interface {
 	RejectAwaiting(ctx context.Context, requestID int64, reason string) (bool, error)
 	// DecideApproval records the owner's Approve or Reject in one transaction:
 	// a conditional claim of the awaiting, unexpired request, then for
-	// Approve decide's ruling and the bot_settings write.
+	// Approve decide's ruling and the change's write.
 	DecideApproval(ctx context.Context, requestID int64, isApprove bool, decide func(ChangeRequest) Decision) (ApprovalOutcome, error)
 	// PublishStatus upserts one bot_runtime_status component.
 	PublishStatus(ctx context.Context, component string, data json.RawMessage) error
@@ -191,6 +193,25 @@ const upsertSettingQuery = `
 
 const deleteSettingQuery = `DELETE FROM bot_settings WHERE key = $1`
 
+// ensurePolicyRowQuery creates a missing policy row (enabled, default limit:
+// the same as no row, so the audit trigger logs nothing) for the next
+// statement to lock; pruneDefaultPolicy removes it again unless it holds a
+// change.
+const ensurePolicyRowQuery = `
+	INSERT INTO gated_fetch_policies (scope, scope_id, enabled) VALUES ($1, $2, true)
+	ON CONFLICT (scope, scope_id) DO NOTHING`
+
+// policyLimitQuery locks a scope's policy and reads its limit as JSON.
+const policyLimitQuery = `SELECT COALESCE(to_jsonb(monthly_limit), 'null'::jsonb) FROM gated_fetch_policies WHERE scope = $1 AND scope_id = $2 FOR UPDATE`
+
+// setPolicyLimitQuery stores a limit (NULL = default) and keeps enabled.
+const setPolicyLimitQuery = `UPDATE gated_fetch_policies SET monthly_limit = $3 WHERE scope = $1 AND scope_id = $2`
+
+// pruneDefaultPolicyQuery removes the scope's row while it holds only the
+// defaults (enabled, no limit), so no claim lock row or reset row is left
+// behind for the group-upgrade copy to carry over.
+const pruneDefaultPolicyQuery = `DELETE FROM gated_fetch_policies WHERE scope = $1 AND scope_id = $2 AND enabled = true AND monthly_limit IS NULL`
+
 const decideRequestQuery = `
 	UPDATE settings_change_requests
 	SET status = $2, error = NULLIF($3, ''), needs_approval = $4, decided_at = now()
@@ -235,7 +256,8 @@ func (s pgStore) ProcessNextRequest(ctx context.Context, decide func(ChangeReque
 	return request, decision, isClaimed, err
 }
 
-// claimRequest locks the oldest queued request and reads the key's value.
+// claimRequest locks the oldest queued request and, unless it expired,
+// reads (and locks) the key's stored value.
 func claimRequest(ctx context.Context, tx *sql.Tx) (ChangeRequest, bool, error) {
 	result := ChangeRequest{}
 	var value []byte
@@ -251,7 +273,10 @@ func claimRequest(ctx context.Context, tx *sql.Tx) (ChangeRequest, bool, error) 
 	if isClaimed == true {
 		result.Value = nullableJSON(value)
 		result.Expected = nullableJSON(expected)
-		result.StoredCurrent, err = readStoredValue(ctx, tx, result.Key)
+	}
+
+	if (isClaimed == true) && (result.IsExpired == false) {
+		result, err = readCurrentFor(ctx, tx, result)
 	}
 
 	if (err == nil) && (isClaimed == true) {
@@ -260,6 +285,57 @@ func claimRequest(ctx context.Context, tx *sql.Tx) (ChangeRequest, bool, error) 
 	}
 
 	return result, isClaimed, err
+}
+
+// readCurrentFor reads (and locks) the stored value a request changes: the
+// policy limit of a special limit, the bot_settings value of a setting;
+// another kind reads nothing (decide rejects it).
+func readCurrentFor(ctx context.Context, tx *sql.Tx, request ChangeRequest) (ChangeRequest, error) {
+	result := request
+	var err error
+	target, keyErr := specialLimitTargetOf(request)
+
+	if (request.Kind == settings.KindSpecialLimit) && (keyErr == nil) {
+		result.StoredCurrent, err = readPolicyLimit(ctx, tx, target)
+	}
+
+	if request.Kind == settings.KindSetting {
+		result.StoredCurrent, err = readStoredValue(ctx, tx, request.Key)
+	}
+
+	return result, err
+}
+
+// specialLimitTargetOf parses the key of a special-limit request; any other
+// kind gives an error.
+func specialLimitTargetOf(request ChangeRequest) (settings.SpecialLimitTarget, error) {
+	result := settings.SpecialLimitTarget{}
+	err := errNotSpecialLimit
+
+	if request.Kind == settings.KindSpecialLimit {
+		result, err = settings.ParseSpecialLimitKey(request.Key)
+	}
+
+	return result, err
+}
+
+// errNotSpecialLimit marks a request of another kind.
+var errNotSpecialLimit = errors.New("not a special-limit request")
+
+// readPolicyLimit makes sure the scope has a policy row to lock, then locks
+// it and reads its limit as JSON.
+func readPolicyLimit(ctx context.Context, tx *sql.Tx, target settings.SpecialLimitTarget) (json.RawMessage, error) {
+	var result json.RawMessage
+	_, err := tx.ExecContext(ctx, ensurePolicyRowQuery, target.Scope, target.ID)
+
+	if err == nil {
+		var raw []byte
+		row := tx.QueryRowContext(ctx, policyLimitQuery, target.Scope, target.ID)
+		err = row.Scan(&raw)
+		result = nullableJSON(raw)
+	}
+
+	return result, err
 }
 
 // readStoredValue reads (and locks) a key's bot_settings value; nil when
@@ -299,16 +375,21 @@ func decideClaimed(request ChangeRequest, decide func(ChangeRequest) Decision) D
 	return result
 }
 
-// recordDecision writes bot_settings for an applied request (as its source,
-// for the audit) and the request's outcome; a request that waits for the
-// owner gets its new expiry, returned in the decision.
+// recordDecision writes an applied request's change (as its source, for the
+// audit), drops a special limit's all-default policy row, and records the
+// request's outcome; a request that waits for the owner gets its new
+// expiry, returned in the decision.
 func recordDecision(ctx context.Context, tx *sql.Tx, request ChangeRequest, decision Decision) (Decision, error) {
 	result := decision
 	var err error
 	isAwaiting := decision.IsAwaitingApproval()
 
 	if decision.IsApplied() == true {
-		err = writeSetting(ctx, tx, request, decision, "")
+		err = writeChange(ctx, tx, request, decision, "")
+	}
+
+	if err == nil {
+		err = pruneDefaultPolicy(ctx, tx, request)
 	}
 
 	if (err == nil) && (isAwaiting == true) {
@@ -322,6 +403,63 @@ func recordDecision(ctx context.Context, tx *sql.Tx, request ChangeRequest, deci
 	}
 
 	return result, err
+}
+
+// writeChange writes an applied request by its kind; note goes into the
+// audit row.
+func writeChange(ctx context.Context, tx *sql.Tx, request ChangeRequest, decision Decision, note string) error {
+	var err error
+
+	if request.Kind == settings.KindSpecialLimit {
+		err = writeSpecialLimit(ctx, tx, request, decision, note)
+	}
+
+	if request.Kind != settings.KindSpecialLimit {
+		err = writeSetting(ctx, tx, request, decision, note)
+	}
+
+	return err
+}
+
+// writeSpecialLimit stores the new limit (NULL = the default) on the
+// scope's locked policy row, keeping enabled; the trigger audits it.
+func writeSpecialLimit(ctx context.Context, tx *sql.Tx, request ChangeRequest, decision Decision, note string) error {
+	requestID := fmt.Sprintf("%d", request.ID)
+	change, isChange := decision.TypedValue.(specialLimitChange)
+	limit := sql.NullInt64{}
+	err := errSpecialLimitNoChange
+
+	if isChange == true {
+		_, err = tx.ExecContext(ctx, setActorQuery, request.Source, requestID, note)
+	}
+
+	if (isChange == true) && (change.New != nil) {
+		limit = sql.NullInt64{Int64: *change.New, Valid: true}
+	}
+
+	if err == nil {
+		_, err = tx.ExecContext(ctx, setPolicyLimitQuery, change.Target.Scope, change.Target.ID, limit)
+	}
+
+	return err
+}
+
+// errSpecialLimitNoChange marks an applied special limit without its change
+// (a decision that did not come from decideSpecialLimitRequest).
+var errSpecialLimitNoChange = errors.New("applied special limit without its change")
+
+// pruneDefaultPolicy removes a special limit's policy row while it holds
+// only the defaults (the claim's lock row or a reset), whatever the
+// decision; settings are left alone.
+func pruneDefaultPolicy(ctx context.Context, tx *sql.Tx, request ChangeRequest) error {
+	var err error
+	target, keyErr := specialLimitTargetOf(request)
+
+	if keyErr == nil {
+		_, err = tx.ExecContext(ctx, pruneDefaultPolicyQuery, target.Scope, target.ID)
+	}
+
+	return err
 }
 
 // writeSetting upserts or deletes the key's bot_settings row; note goes
@@ -518,14 +656,14 @@ func scanRequest(row *sql.Row, extra ...any) (ChangeRequest, error) {
 }
 
 // decideAwaiting finishes a claimed tap: Reject is already recorded;
-// Approve re-checks the request and writes bot_settings, or overrules the
+// Approve re-checks the request and writes the change, or overrules the
 // claim with the rejection.
 func decideAwaiting(ctx context.Context, tx *sql.Tx, request ChangeRequest, isApprove bool, decide func(ChangeRequest) Decision) (ApprovalOutcome, error) {
 	decision := rejected(requestOwnerRejectedError)
 	var err error
 
 	if isApprove == true {
-		request.StoredCurrent, err = readStoredValue(ctx, tx, request.Key)
+		request, err = readCurrentFor(ctx, tx, request)
 	}
 
 	if (err == nil) && (isApprove == true) {
@@ -533,7 +671,11 @@ func decideAwaiting(ctx context.Context, tx *sql.Tx, request ChangeRequest, isAp
 	}
 
 	if (err == nil) && (isApprove == true) && (decision.IsApplied() == true) {
-		err = writeSetting(ctx, tx, request, decision, approvedNote)
+		err = writeChange(ctx, tx, request, decision, approvedNote)
+	}
+
+	if (err == nil) && (isApprove == true) {
+		err = pruneDefaultPolicy(ctx, tx, request)
 	}
 
 	if (err == nil) && (isApprove == true) && (decision.IsApplied() == false) {

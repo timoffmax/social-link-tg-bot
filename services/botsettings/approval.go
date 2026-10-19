@@ -137,6 +137,21 @@ func approvalButtons(requestID int64) []ApprovalButton {
 // approvalChangeLine renders the change from the registry: the value the
 // page showed (checked equal to the current one) and the validated new one.
 func approvalChangeLine(request ChangeRequest) string {
+	result := ""
+
+	if request.Kind == settings.KindSpecialLimit {
+		result = specialLimitApprovalLine(request)
+	}
+
+	if request.Kind != settings.KindSpecialLimit {
+		result = settingApprovalLine(request)
+	}
+
+	return result
+}
+
+// settingApprovalLine renders the change of a registry setting.
+func settingApprovalLine(request ChangeRequest) string {
 	setting, _ := settings.Lookup(request.Key)
 	oldValue := decodeValue(request.Expected)
 	newValue, err := requestedValue(setting, request)
@@ -146,6 +161,19 @@ func approvalChangeLine(request ChangeRequest) string {
 	}
 
 	result := describeChange(request.Key, oldValue, newValue, request.IsReset())
+
+	return result
+}
+
+// specialLimitApprovalLine renders a limit request from its key, expected
+// and value (a special limit never waits for approval; this keeps a
+// manually edited awaiting row readable).
+func specialLimitApprovalLine(request ChangeRequest) string {
+	target, _ := settings.ParseSpecialLimitKey(request.Key)
+	oldLimit, _ := settings.ParseStoredSpecialLimit(request.Expected)
+	newLimit, _ := settings.ParseStoredSpecialLimit(request.Value)
+	change := specialLimitChange{Target: target, Old: oldLimit, New: newLimit}
+	result := describeSpecialLimitChange(change)
 
 	return result
 }
@@ -351,8 +379,14 @@ func (m *Manager) finishTap(ctx context.Context, tap approvalTap, outcome Approv
 	isApplied := (outcome.IsDecided() == true) && (outcome.Decision.IsApplied() == true)
 	messageID := request.ApprovalMessageID
 
-	if isApplied == true {
-		actor := fmt.Sprintf(digestActorApproved, request.Source)
+	isSpecialLimit := (request.Kind == settings.KindSpecialLimit)
+	actor := fmt.Sprintf(digestActorApproved, request.Source)
+
+	if (isApplied == true) && (isSpecialLimit == true) {
+		m.applySpecialLimitCommitted(request, outcome.Decision, actor)
+	}
+
+	if (isApplied == true) && (isSpecialLimit == false) {
 		m.applyCommitted(ctx, request, outcome.Decision, actor)
 	}
 

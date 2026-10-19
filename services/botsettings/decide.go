@@ -43,13 +43,27 @@ const approvalMinutes = int(approvalTimeout / time.Minute)
 // then the default); a variable so tests run without .env.
 var fallbackReader = config.GetFallbackSetting
 
-// decideRequest rules on a claimed, unexpired request: it applies only a
-// known setting whose current value is still the one the page showed, with
-// a valid new value; one that needs the owner's approval waits for it
-// (rejected without an owner to ask, or with maxAwaitingApproval waiting
-// already). A reset (no value) deletes the row, so .env or the default
-// applies; its approval rule is computed on that resulting value.
+// decideRequest rules on a claimed, unexpired request by its kind.
 func decideRequest(request ChangeRequest, canAskApproval bool) Decision {
+	result := rejectedf(requestUnknownKindError, request.Kind)
+
+	switch request.Kind {
+	case settings.KindSetting:
+		result = decideSettingRequest(request, canAskApproval)
+	case settings.KindSpecialLimit:
+		result = decideSpecialLimitRequest(request)
+	}
+
+	return result
+}
+
+// decideSettingRequest applies only a known setting whose current value is
+// still the one the page showed, with a valid new value; one that needs the
+// owner's approval waits for it (rejected without an owner to ask, or with
+// maxAwaitingApproval waiting already). A reset (no value) deletes the row,
+// so .env or the default applies; its approval rule is computed on that
+// resulting value.
+func decideSettingRequest(request ChangeRequest, canAskApproval bool) Decision {
 	setting, isKnown := settings.Lookup(request.Key)
 	current := currentValue(setting, request.StoredCurrent)
 	next, nextErr := requestedValue(setting, request)
@@ -58,8 +72,6 @@ func decideRequest(request ChangeRequest, canAskApproval bool) Decision {
 	result := Decision{Status: settings.StatusApplied, TypedValue: next}
 
 	switch {
-	case request.Kind != settings.KindSetting:
-		result = rejectedf(requestUnknownKindError, request.Kind)
 	case isKnown == false:
 		result = rejectedf(requestUnknownKeyError, request.Key)
 	case request.Expected == nil:

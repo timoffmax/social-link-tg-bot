@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/timoffmax/social-link-bot/config"
+	"github.com/timoffmax/social-link-bot/model/settings"
 	"strconv"
 	"strings"
 	"time"
@@ -655,9 +656,10 @@ var groupMoveStatements = []string{
 	`UPDATE support_payments SET boosted_chat_id = $2 WHERE boosted_chat_id = $1`,
 }
 
-// moveGroupRows runs the move statements in the transaction.
+// moveGroupRows runs the move statements in the transaction, stamped as
+// the bot for the policy audit.
 func moveGroupRows(ctx context.Context, tx *sql.Tx, oldChatID int64, newChatID int64) error {
-	var err error
+	err := stampPolicyAudit(ctx, tx, settings.ActorBot, groupMoveAuditNote)
 
 	for _, statement := range groupMoveStatements {
 		if err == nil {

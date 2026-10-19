@@ -12,9 +12,25 @@ import (
 	"time"
 )
 
+// settingsRoleGrants are the production dashboard's settings grants
+// (m1-grants.sql); %[1]s is the role.
+var settingsRoleGrants = []string{
+	"GRANT SELECT ON bot_settings, settings_audit, settings_change_requests, bot_runtime_status TO %[1]s",
+	"GRANT INSERT (kind, key, value, expected) ON settings_change_requests TO %[1]s",
+	"GRANT USAGE ON SEQUENCE settings_change_requests_id_seq TO %[1]s",
+}
+
 // settingsRoleStore connects as a role with only the production dashboard's
-// settings grants (m1-grants.sql) and default_transaction_read_only on.
+// settings grants and default_transaction_read_only on.
 func (d integrationDB) settingsRoleStore(t *testing.T) *PGStore {
+	t.Helper()
+
+	return d.grantedRoleStore(t, settingsRoleGrants)
+}
+
+// grantedRoleStore connects as a new role with only the given grants (each
+// a format with %[1]s for the role) and default_transaction_read_only on.
+func (d integrationDB) grantedRoleStore(t *testing.T, grants []string) *PGStore {
 	t.Helper()
 	role := fmt.Sprintf("dashboard_settings_role_%d", time.Now().UnixNano())
 	d.exec(t, fmt.Sprintf("CREATE ROLE %s NOLOGIN", role))
@@ -35,9 +51,11 @@ func (d integrationDB) settingsRoleStore(t *testing.T) *PGStore {
 	}
 
 	d.exec(t, fmt.Sprintf("GRANT USAGE ON SCHEMA %s TO %s", schema, role))
-	d.exec(t, fmt.Sprintf("GRANT SELECT ON bot_settings, settings_audit, settings_change_requests, bot_runtime_status TO %s", role))
-	d.exec(t, fmt.Sprintf("GRANT INSERT (kind, key, value, expected) ON settings_change_requests TO %s", role))
-	d.exec(t, fmt.Sprintf("GRANT USAGE ON SEQUENCE settings_change_requests_id_seq TO %s", role))
+
+	for _, grant := range grants {
+		d.exec(t, fmt.Sprintf(grant, role))
+	}
+
 	parsed, err := url.Parse(d.url)
 
 	if err != nil {

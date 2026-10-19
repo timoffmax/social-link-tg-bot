@@ -6,6 +6,7 @@ import { formatClock } from './format';
 import { TABS, useHashRoute, useRefreshTick, useTheme, type PostRef, type Tab, type ThemeChoice } from './hooks';
 import { BlogTab } from './tabs/Blog';
 import { ChatsTab } from './tabs/Chats';
+import { LimitsTab } from './tabs/Limits';
 import { MoneyTab } from './tabs/Money';
 import { OverviewTab } from './tabs/Overview';
 import { PlatformsTab } from './tabs/Platforms';
@@ -25,6 +26,7 @@ const TAB_SPECS: Record<Tab, TabSpec> = {
   platforms: { label: 'Platforms', component: PlatformsTab },
   chats: { label: 'Chats', component: ChatsTab },
   money: { label: 'Money', component: MoneyTab, fixedScope: 'Last 12 months' },
+  limits: { label: 'Limits', component: LimitsTab, fixedScope: 'This month (UTC)' },
   reports: { label: 'Reports', component: ReportsTab, fixedScope: 'Last 26 weeks' },
   blog: { label: 'Blog', component: BlogTab, fixedScope: 'Posts for the bot’s owner-panel Broadcast' },
   settings: { label: 'Settings', component: SettingsTab, fixedScope: 'Applied by the bot within seconds; every change is logged' },

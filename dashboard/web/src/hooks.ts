@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type RefObject } from 'react';
 import { DEFAULT_RANGE_DAYS, RANGE_DAYS, type RangeDays } from './api';
 
-export const TABS = ['overview', 'platforms', 'chats', 'money', 'reports', 'blog', 'settings'] as const;
+export const TABS = ['overview', 'platforms', 'chats', 'money', 'limits', 'reports', 'blog', 'settings'] as const;
 export type Tab = (typeof TABS)[number];
 
 const DEFAULT_TAB: Tab = 'overview';
@@ -163,6 +163,24 @@ export function useRefreshTick(): [number, () => void] {
   }, [refresh]);
 
   return [tick, refresh];
+}
+
+/** A counter that bumps every intervalMs while the page is visible, and on demand. */
+export function useVisibleTick(intervalMs: number): [number, () => void] {
+  const [tick, setTick] = useState(0);
+  const bump = useCallback(() => setTick((value) => value + 1), []);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        bump();
+      }
+    }, intervalMs);
+
+    return () => window.clearInterval(timer);
+  }, [bump, intervalMs]);
+
+  return [tick, bump];
 }
 
 export interface Query<T> {

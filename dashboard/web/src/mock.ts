@@ -20,6 +20,12 @@
 // bot does. ?mock=noadmin shows ADMIN_USER_ID as not set, so changes that
 // need approval are refused.
 // ?mock=stale shows the bot as not running and a failed profile push.
+// Limits: about ten people and groups in every state; the pretend bot applies a
+// limit change about 2 seconds after it is queued, except the first raise of
+// Meme Lab, which it rejects as "changed meanwhile, reload". Film club has a
+// change queued from another tab at load. Apify runs with Shorts paused and
+// HikerAPI is paused on an empty balance; the home relay has Instagram's
+// breaker open. ?mock=oldbot shows a bot that does not take limit changes yet.
 
 import type {
   Report,
@@ -47,6 +53,14 @@ import type {
   SettingsResponse,
   SettingValue,
   StoredSetting,
+  LimitDraft,
+  LimitRow,
+  LimitScope,
+  LimitScopeResponse,
+  LimitsResponse,
+  LimitState,
+  PaidServicesData,
+  RelayStatus,
 } from './api';
 import { ApiError, HTTP_CONFLICT, HTTP_NOT_FOUND } from './api';
 import { titleLength, TITLE_MAX_CHARS } from './editing';
@@ -69,8 +83,8 @@ const PLATFORM_WEIGHT: Record<string, number> = {
   unknown: 0.1,
 };
 
-type Mode = 'data' | 'empty' | 'error' | 'conflict' | 'stale' | 'noadmin';
-const MODES: Mode[] = ['data', 'empty', 'error', 'conflict', 'stale', 'noadmin'];
+type Mode = 'data' | 'empty' | 'error' | 'conflict' | 'stale' | 'noadmin' | 'oldbot';
+const MODES: Mode[] = ['data', 'empty', 'error', 'conflict', 'stale', 'noadmin', 'oldbot'];
 
 function isMode(value: string | null): value is Mode {
   return MODES.includes(value as Mode);
@@ -318,12 +332,6 @@ function money(months: number, empty: boolean): MoneyResponse {
 
       return { month, global_used: chatsUsed + usersUsed, chats_used: chatsUsed, users_used: usersUsed };
     }),
-    gated_current: empty ? [] : [
-      { scope: 'chat', scope_id: -1_001_234_567_000, title: 'Meme Lab', used: 17, limit: 20, unlimited: false, custom: false },
-      { scope: 'chat', scope_id: -1_001_234_567_001, title: 'Kyiv cyclists', used: 9, limit: 40, unlimited: false, custom: true },
-      { scope: 'user', scope_id: 100_200, title: 'olena_k', used: 6, limit: null, unlimited: true, custom: true },
-      { scope: 'chat', scope_id: -1_001_234_567_005, title: '', used: 2, limit: null, unlimited: false, custom: false },
-    ],
     stars_monthly: monthList.map((month, index) => {
       const active = (empty === false) && (index >= months - 3);
       const payments = active ? 1 + Math.round(random() * 3) : 0;
@@ -586,6 +594,10 @@ export async function mockRequest(method: string, path: string, body: unknown, s
 
   if (path.startsWith(SETTINGS_PREFIX)) {
     return settingsRequest(method, path, body);
+  }
+
+  if (path.startsWith(LIMITS_PREFIX)) {
+    return limitsRequest(method, path, body);
   }
 
   const rest = path.startsWith(BLOG_PREFIX) ? path.slice(BLOG_PREFIX.length) : null;
@@ -1118,6 +1130,7 @@ function addAudit(store: SettingsStore, key: string, oldValue: SettingValue | nu
 function newRequest(store: SettingsStore, draft: SettingChangeDraft, createdAt: number, delay: number): SettingRequest {
   const request: SettingRequest = {
     id: store.nextRequestId,
+    kind: 'setting',
     key: draft.key,
     status: 'queued',
     value: draft.value,
@@ -1396,7 +1409,8 @@ function queueSetting(body: SettingChangeDraft): SettingRequestResponse {
 function findSettingRequest(id: number): SettingRequestResponse {
   const store = settingsTable();
   advanceRequests(store);
-  const item = store.requests.get(id);
+  advanceLimitRequests(limitsTable());
+  const item = store.requests.get(id) ?? limitsTable().requests.get(id);
 
   if (item === undefined) {
     throw new ApiError(HTTP_NOT_FOUND, 'not found');
@@ -1416,7 +1430,8 @@ function listAudit(path: string): AuditResponse {
   const isEmpty = (mockMode() === 'empty');
   const matching = store.audit.filter((row) => {
     const isKey = (key === null) || (row.key === key);
-    const isGroup = (group === null) || (findEntry(row.key)?.group === group);
+    const isLimitKey = row.key.startsWith('special_');
+    const isGroup = (group === null) || ((group === 'special_limits') ? isLimitKey : (findEntry(row.key)?.group === group));
     const isBefore = (before === 0) || (row.id < before);
 
     return isKey && isGroup && isBefore && (isEmpty === false);
@@ -1447,6 +1462,390 @@ function settingsRequest(method: string, path: string, body: unknown): unknown {
 
   if ((method === 'GET') && rest.startsWith('/audit')) {
     result = listAudit(path);
+  }
+
+  if (result === undefined) {
+    throw new ApiError(HTTP_NOT_FOUND, 'not found');
+  }
+
+  return result;
+}
+
+// Limits: per-person and per-group special downloads, the paid services and the home relay. Limit
+// changes are applied by a pretend bot, as the real one does: no approval, expected must still hold.
+
+const LIMITS_PREFIX = '/api/limits';
+const LIMIT_APPLY_DELAY_MS = 2_000;
+const LIMIT_OTHER_TAB_DELAY_MS = 6_000;
+const LIMIT_MAX = 1000;
+const DEFAULT_USER_LIMIT = 20;
+const DEFAULT_CHAT_LIMIT = 50;
+const LIMIT_NEAR_RATIO = 0.8;
+const LIMIT_REJECTED_ONCE_KEY = 'chat:-1001234567000';
+const LIMIT_NOT_SUPPORTED_ERROR = 'the running bot does not take limit changes yet: deploy the bot first';
+
+/** One person or group as stored: the server resolves the rest. */
+interface StoredLimit {
+  scope: LimitScope;
+  scope_id: number;
+  title: string;
+  used: number;
+  used_last_month: number;
+  stored_limit: number | null;
+  enabled: boolean;
+  credits: number;
+  boosts: number;
+  last_change: LimitRow['last_change'];
+}
+
+interface LimitsStore {
+  rows: Map<string, StoredLimit>;
+  requests: Map<number, MockRequest>;
+  nextRequestId: number;
+  isRejectedOnce: boolean;
+}
+
+let limitsStore: LimitsStore | null = null;
+
+function limitKeyOf(scope: LimitScope, id: number): string {
+  return `${scope}:${id}`;
+}
+
+function storedLimit(scope: LimitScope, id: number, title: string, used: number, extra: Partial<StoredLimit> = {}): StoredLimit {
+  return { scope, scope_id: id, title, used, used_last_month: Math.round(used * 0.7), stored_limit: null, enabled: true, credits: 0, boosts: 0, last_change: null, ...extra };
+}
+
+const LIMIT_FIXTURES: StoredLimit[] = [
+  storedLimit('user', 100_200, 'olena_k', 6),
+  storedLimit('chat', -1_001_234_567_001, 'Kyiv cyclists', 9, { stored_limit: 40, boosts: 1, last_change: { at: hoursAgo(30), actor: 'dashboard', old_value: null, new_value: 40 } }),
+  storedLimit('chat', -1_001_234_567_000, 'Meme Lab', 43),
+  storedLimit('user', 100_201, 'max_d', 15, { stored_limit: 15, last_change: { at: hoursAgo(80), actor: 'telegram', old_value: 10, new_value: 15 } }),
+  storedLimit('user', 100_202, 'owner_friend', 120, { stored_limit: -1, last_change: { at: hoursAgo(400), actor: 'telegram', old_value: null, new_value: -1 } }),
+  storedLimit('chat', -1_001_234_567_002, 'Quiet group', 0, { enabled: false, used_last_month: 4 }),
+  storedLimit('user', 100_203, 'spammer', 0, { stored_limit: 0, used_last_month: 18 }),
+  storedLimit('user', 100_204, '', 0, { credits: 12, used_last_month: 0 }),
+  storedLimit('chat', -1_001_234_567_003, 'Big community', 640, { stored_limit: 1500, boosts: 3 }),
+  storedLimit('chat', -1_001_234_567_004, 'Film club', 12),
+];
+
+function seedLimits(): LimitsStore {
+  const store: LimitsStore = { rows: new Map(), requests: new Map(), nextRequestId: 500, isRejectedOnce: false };
+
+  for (const row of LIMIT_FIXTURES) {
+    store.rows.set(limitKeyOf(row.scope, row.scope_id), { ...row });
+  }
+
+  // A change queued from another tab: Film club's actions wait until it is applied.
+  newLimitRequest(store, { scope: 'chat', id: -1_001_234_567_004, limit: 60, expected: null }, Date.now(), LIMIT_OTHER_TAB_DELAY_MS);
+
+  return store;
+}
+
+function limitsTable(): LimitsStore {
+  if (limitsStore === null) {
+    limitsStore = seedLimits();
+  }
+
+  return limitsStore;
+}
+
+function newLimitRequest(store: LimitsStore, draft: LimitDraft, createdAt: number, delay: number): SettingRequest {
+  const request: SettingRequest = {
+    id: store.nextRequestId,
+    kind: 'special_limit',
+    key: limitKeyOf(draft.scope, draft.id),
+    status: 'queued',
+    value: draft.limit,
+    expected: draft.expected,
+    needs_approval: null,
+    error: null,
+    created_at: new Date(createdAt).toISOString(),
+    expires_at: new Date(createdAt + REQUEST_TTL_MS).toISOString(),
+    decided_at: null,
+  };
+  store.nextRequestId += 1;
+  store.requests.set(request.id, { request, queuedAt: createdAt, delay, askedAt: 0 });
+
+  return request;
+}
+
+function blankLimit(scope: LimitScope, id: number): StoredLimit {
+  return storedLimit(scope, id, '', 0, { used_last_month: 0 });
+}
+
+/** The pretend bot: applies a due limit request while expected still holds and the value changes. */
+function decideLimitRequest(store: LimitsStore, item: MockRequest, now: number): void {
+  const request = item.request;
+  const decidedAt = new Date(now).toISOString();
+  const [scope, idText] = request.key.split(':');
+  const row = store.rows.get(request.key) ?? blankLimit(scope as LimitScope, Number(idText));
+  const isRejectedOnce = (request.key === LIMIT_REJECTED_ONCE_KEY) && (store.isRejectedOnce === false);
+  const isChanged = (row.stored_limit !== request.expected) || isRejectedOnce;
+  const isSame = (row.stored_limit === request.value);
+
+  if (isRejectedOnce) {
+    store.isRejectedOnce = true;
+  }
+
+  if (isChanged) {
+    rejectRequest(request, CHANGED_ERROR, decidedAt, false);
+  }
+
+  if ((isChanged === false) && isSame) {
+    rejectRequest(request, `nothing to change: the limit already is ${row.stored_limit ?? 'the default'}`, decidedAt, false);
+  }
+
+  if ((isChanged === false) && (isSame === false)) {
+    const oldValue = row.stored_limit;
+    const newValue = request.value as number | null;
+    request.status = 'applied';
+    request.needs_approval = false;
+    request.decided_at = decidedAt;
+    store.rows.set(request.key, { ...row, stored_limit: newValue, last_change: { at: decidedAt, actor: 'dashboard', old_value: oldValue, new_value: newValue } });
+    addAudit(settingsTable(), `special_limit:${request.key}`, oldValue, newValue, 'dashboard', decidedAt, request.id);
+  }
+}
+
+function advanceLimitRequests(store: LimitsStore): void {
+  const now = Date.now();
+
+  for (const item of store.requests.values()) {
+    const isDue = (item.request.status === 'queued') && ((now - item.queuedAt) >= item.delay);
+
+    if (isDue) {
+      decideLimitRequest(store, item, now);
+    }
+  }
+}
+
+function openLimitRequest(store: LimitsStore, key: string): SettingRequest | null {
+  const open = [...store.requests.values()].find((item) => (item.request.key === key) && (item.request.status === 'queued'));
+
+  return (open === undefined) ? null : { ...open.request };
+}
+
+function limitStateOf(row: StoredLimit, effective: number | null): LimitState {
+  const isChat = (row.scope === 'chat');
+  const states: [boolean, LimitState][] = [
+    [(isChat && (row.enabled === false)), 'off'],
+    [(effective === -1), 'unlimited'],
+    [(isChat && (effective === 0)), 'off'],
+    [(effective === 0), 'blocked'],
+    [((effective !== null) && (row.used >= effective)), 'full'],
+    [((effective !== null) && (row.used >= (LIMIT_NEAR_RATIO * effective))), 'near'],
+  ];
+  const found = states.find(([isFound]) => isFound);
+
+  return (found === undefined) ? 'ok' : found[1];
+}
+
+/** Resolves a stored row as the server does. */
+function resolveLimit(store: LimitsStore, row: StoredLimit): LimitRow {
+  const defaultLimit = (row.scope === 'chat') ? DEFAULT_CHAT_LIMIT : DEFAULT_USER_LIMIT;
+  const effective = row.stored_limit ?? defaultLimit;
+  const isUnlimited = (effective === -1);
+  const source = (row.stored_limit === null) ? 'default' : (isUnlimited ? 'unlimited' : 'custom');
+
+  return {
+    ...row,
+    limit_source: source,
+    effective_limit: effective,
+    remaining: isUnlimited ? null : Math.max(effective - row.used, 0),
+    state: limitStateOf(row, effective),
+    open_request: openLimitRequest(store, limitKeyOf(row.scope, row.scope_id)),
+  };
+}
+
+const STATE_RANKS: Record<LimitState, number> = { full: 0, near: 1, ok: 2, unlimited: 3, off: 4, blocked: 4 };
+
+function shareOf(row: LimitRow): number {
+  const limit = row.effective_limit ?? 0;
+
+  return (limit > 0) ? (row.used / limit) : 0;
+}
+
+function compareLimits(left: LimitRow, right: LimitRow): number {
+  const byState = STATE_RANKS[left.state] - STATE_RANKS[right.state];
+  const byShare = shareOf(right) - shareOf(left);
+
+  return (byState !== 0) ? byState : ((byShare !== 0) ? byShare : (right.used - left.used));
+}
+
+function mockPaid(isStale: boolean): LimitsResponse['paid'] {
+  const data: PaidServicesData = {
+    computed_at: new Date().toISOString(),
+    order: ['apify', 'hiker'],
+    apify: {
+      has_token: true,
+      is_listed: true,
+      budget_usd: 10,
+      used_usd: 9.9,
+      in_flight_usd: 0,
+      usage_read_at: hoursAgo(0.2),
+      usage_error_at: null,
+      account_limit_usd: 25,
+      cycle_start: '2026-10-01T00:00:00Z',
+      cycle_end: '2026-10-31T23:59:59Z',
+      state: 'on',
+      paused_features: ['shorts'],
+    },
+    hiker: {
+      has_token: true,
+      is_listed: true,
+      budget_usd: 5,
+      price_per_request_usd: 0.002,
+      spent_usd: 1.23,
+      in_flight_usd: 0,
+      calls: 640,
+      charged_calls: 615,
+      gated_calls: 500,
+      story_calls: 115,
+      balance_requests: 0,
+      balance_read_at: hoursAgo(0.7),
+      exhausted: true,
+      state: 'paused',
+      reason: 'balance_empty',
+    },
+  };
+
+  return { data, updated_at: isStale ? hoursAgo(2) : new Date().toISOString(), is_stale: isStale };
+}
+
+function mockRelay(isStale: boolean): LimitsResponse['relay'] {
+  const checkedAt = isStale ? hoursAgo(2) : new Date().toISOString();
+  const data: RelayStatus = {
+    configured: true,
+    platforms_in_use: ['youtube', 'instagram'],
+    checked_at: checkedAt,
+    reachable: true,
+    error: '',
+    yt_dlp: '2026.10.10',
+    breaker_open: ['instagram'],
+    global: { hour: 3, day: 41, hourly_limit: 30, daily_limit: 150 },
+    platforms: {
+      youtube: { enabled: true, breaker: 'closed', breaker_left_s: 0, hour: 3, day: 39, hourly_limit: 20, daily_limit: 100 },
+      instagram: { enabled: true, breaker: 'open', breaker_left_s: 420, hour: 0, day: 2, hourly_limit: 20, daily_limit: 100 },
+    },
+    history: {
+      windows: ['24h', '7d', '30d'],
+      rows: [
+        { platform: 'youtube', code: 'OK', '24h': 38, '7d': 210, '30d': 800 },
+        { platform: 'youtube', code: 'BOT_CHECK', '24h': 2, '7d': 9, '30d': 30 },
+        { platform: 'youtube', code: 'TIMEOUT', '24h': 1, '7d': 3, '30d': 5 },
+        { platform: 'instagram', code: 'OK', '24h': 2, '7d': 10, '30d': 12 },
+        { platform: 'instagram', code: 'TRANSPORT', '24h': 0, '7d': 1, '30d': 4 },
+      ],
+      ok_bytes: { '24h': 536_870_912, '7d': 3_328_599_654 },
+      ok_avg_ms: { '24h': 8_400, '7d': 9_100 },
+    },
+  };
+
+  return { data, updated_at: checkedAt, is_stale: isStale };
+}
+
+function limitsMeta(): Pick<LimitsResponse, 'bot' | 'applying' | 'rules' | 'defaults'> {
+  const mode = mockMode();
+  const isStale = (mode === 'stale');
+  const heartbeatAt = isStale ? hoursAgo(2) : new Date().toISOString();
+
+  return {
+    bot: (mode === 'empty') ? null : {
+      started_at: hoursAgo(26),
+      heartbeat_at: heartbeatAt,
+      settings_loaded_at: heartbeatAt,
+      settings_source: 'db',
+      settings_count: 2,
+      is_stale: isStale,
+    },
+    applying: (mode !== 'empty') && (isStale === false),
+    rules: (mode === 'oldbot') ? null : { kind: 'special_limit', min: 0, max: LIMIT_MAX },
+    defaults: { user: DEFAULT_USER_LIMIT, chat: DEFAULT_CHAT_LIMIT },
+  };
+}
+
+function nextMonthStart(): string {
+  const now = new Date();
+
+  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1)).toISOString();
+}
+
+function listLimits(): LimitsResponse {
+  const mode = mockMode();
+  const isEmpty = (mode === 'empty');
+  const isStale = (mode === 'stale');
+  const store = limitsTable();
+  advanceLimitRequests(store);
+  const rows = isEmpty ? [] : [...store.rows.values()].map((row) => resolveLimit(store, row)).sort(compareLimits);
+  const used = rows.reduce((total, row) => total + row.used, 0);
+
+  return {
+    ...meta(),
+    ...limitsMeta(),
+    period: new Date().toISOString().slice(0, 7),
+    resets_at: nextMonthStart(),
+    global: { used, cap: 1000, off: false },
+    paid: isEmpty ? null : mockPaid(isStale),
+    relay: isEmpty ? null : mockRelay(isStale),
+    rows,
+    total: rows.length,
+    truncated: false,
+  };
+}
+
+function findLimit(path: string): LimitScopeResponse {
+  const params = new URLSearchParams(path.split('?')[1] ?? '');
+  const scope = params.get('scope') as LimitScope;
+  const id = Number(params.get('id'));
+  const isValid = ((scope === 'user') && (id > 0)) || ((scope === 'chat') && (id < 0));
+  const store = limitsTable();
+  advanceLimitRequests(store);
+
+  if (isValid === false) {
+    throw new ApiError(HTTP_BAD_REQUEST, 'id must be a person\'s id (above 0) or a group\'s id (below 0)');
+  }
+
+  const row = store.rows.get(limitKeyOf(scope, id)) ?? blankLimit(scope, id);
+
+  return { ...meta(), ...limitsMeta(), row: resolveLimit(store, row) };
+}
+
+function queueLimit(body: LimitDraft): SettingRequestResponse {
+  const store = limitsTable();
+  advanceLimitRequests(store);
+  const key = limitKeyOf(body.scope, body.id);
+  const isWhole = (body.limit === null) || (Number.isInteger(body.limit) && (body.limit >= 0) && (body.limit <= LIMIT_MAX));
+
+  if (mockMode() === 'oldbot') {
+    throw new ApiError(HTTP_CONFLICT, LIMIT_NOT_SUPPORTED_ERROR);
+  }
+
+  if (isWhole === false) {
+    throw new ApiError(HTTP_BAD_REQUEST, `limit must be a whole number from 0 to ${LIMIT_MAX}, or null for the default; unlimited only with /gated in Telegram`);
+  }
+
+  if (openLimitRequest(store, key) !== null) {
+    throw new ApiError(HTTP_CONFLICT, 'a change of this limit is already waiting');
+  }
+
+  const request = newLimitRequest(store, body, Date.now(), LIMIT_APPLY_DELAY_MS);
+
+  return { ...meta(), request: { ...request } };
+}
+
+function limitsRequest(method: string, path: string, body: unknown): unknown {
+  const rest = path.slice(LIMITS_PREFIX.length);
+  let result: unknown;
+
+  if ((method === 'GET') && (rest === '')) {
+    result = listLimits();
+  }
+
+  if ((method === 'GET') && rest.startsWith('/scope')) {
+    result = findLimit(path);
+  }
+
+  if ((method === 'POST') && (rest === '/requests')) {
+    result = queueLimit(body as LimitDraft);
   }
 
   if (result === undefined) {

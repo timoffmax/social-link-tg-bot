@@ -35,6 +35,16 @@ const (
 	digestActorOutside = "outside the bot"
 )
 
+// Digest line of an applied special-download limit: ids and numbers only.
+const (
+	digestSpecialLimit     = "Special downloads a month, %s: %s → %s"
+	digestSpecialUser      = "user %d"
+	digestSpecialChat      = "group %d"
+	digestSpecialDefault   = "default (%d)"
+	digestSpecialUnlimited = "unlimited"
+	digestSpecialUnlimit   = int64(-1)
+)
+
 // Owner timezone of the digest times; UTC when the system has no zone data.
 const (
 	digestTimezone       = "Europe/Kyiv"
@@ -243,6 +253,51 @@ func changedKeys(before []StoredValue, after []StoredValue) []string {
 	}
 
 	sort.Strings(result)
+
+	return result
+}
+
+// describeSpecialLimitChange renders a limit change: "Special downloads a
+// month, group -1001: default (20) → 30".
+func describeSpecialLimitChange(change specialLimitChange) string {
+	subject := fmt.Sprintf(digestSpecialUser, change.Target.ID)
+
+	if change.Target.Scope == settings.SpecialLimitScopeChat {
+		subject = fmt.Sprintf(digestSpecialChat, change.Target.ID)
+	}
+
+	oldText := specialLimitText(change.Old, change.Target.Scope)
+	newText := specialLimitText(change.New, change.Target.Scope)
+	result := fmt.Sprintf(digestSpecialLimit, subject, oldText, newText)
+
+	return result
+}
+
+// specialLimitText prints a stored limit: the default with its value,
+// unlimited, or the number.
+func specialLimitText(limit *int64, scope string) string {
+	result := ""
+
+	switch {
+	case limit == nil:
+		defaultLimit := specialLimitDefault(scope)
+		result = fmt.Sprintf(digestSpecialDefault, defaultLimit)
+	case *limit == digestSpecialUnlimit:
+		result = digestSpecialUnlimited
+	default:
+		result = fmt.Sprintf("%d", *limit)
+	}
+
+	return result
+}
+
+// specialLimitDefault is the default monthly limit of a person or a group.
+func specialLimitDefault(scope string) int {
+	result := config.GetGatedFetchUserMonthlyAllowance()
+
+	if scope == settings.SpecialLimitScopeChat {
+		result = config.GetGatedFetchChatMonthlyCap()
+	}
 
 	return result
 }

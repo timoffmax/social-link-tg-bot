@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/timoffmax/social-link-bot/config"
+	"github.com/timoffmax/social-link-bot/model/settings"
 )
 
 // GatedFetchScope names who a gated-fetch policy or usage counter belongs to.
@@ -367,18 +368,56 @@ func SetGatedFetchMonthlyLimit(scope GatedFetchScope, scopeID int64, limit sql.N
 	return err
 }
 
-// execGatedFetchPolicy runs a policy upsert.
+// Audit stamps of a policy write (the settings_audit trigger of migration
+// 012 reads them): /gated is the owner in Telegram, the group move the bot.
+const (
+	gatedCommandAuditNote = "/gated"
+	groupMoveAuditNote    = "group upgraded to supergroup"
+)
+
+// setPolicyAuditActorQuery names the writer and the note of the policy
+// audit for the transaction only.
+const setPolicyAuditActorQuery = `SELECT set_config('app.settings_actor', $1, true), set_config('app.settings_note', $2, true)`
+
+// execGatedFetchPolicy runs a policy upsert in a transaction stamped as the
+// owner's /gated command, so the audit names it.
 func execGatedFetchPolicy(query string, args ...interface{}) error {
 	db := GetDB()
 	err := errGatedFetchNoDatabase
+	var tx *sql.Tx
+	background := context.Background()
 
 	if db != nil {
-		_, err = db.Exec(query, args...)
+		tx, err = db.BeginTx(background, nil)
+	}
+
+	if err == nil {
+		err = stampPolicyAudit(background, tx, settings.ActorTelegram, gatedCommandAuditNote)
+	}
+
+	if err == nil {
+		_, err = tx.ExecContext(background, query, args...)
+	}
+
+	if err == nil {
+		err = tx.Commit()
+	}
+
+	if (tx != nil) && (err != nil) {
+		_ = tx.Rollback()
 	}
 
 	if err != nil {
 		err = fmt.Errorf("failed to save gated fetch policy: %w", err)
 	}
+
+	return err
+}
+
+// stampPolicyAudit sets the actor and note the policy audit trigger records
+// for the rest of the transaction.
+func stampPolicyAudit(ctx context.Context, tx *sql.Tx, actor string, note string) error {
+	_, err := tx.ExecContext(ctx, setPolicyAuditActorQuery, actor, note)
 
 	return err
 }

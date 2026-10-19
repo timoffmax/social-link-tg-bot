@@ -43,6 +43,8 @@ func Run() {
 	}()
 
 	startReportReplyOutbox(ctx)
+	services.StartPaidStatusRefresher(ctx)
+	services.StartRelayStatusRefresher(ctx)
 	settingsManager.Start(ctx)
 	listenForUpdates(ctx)
 	waitForReportReplyOutbox()

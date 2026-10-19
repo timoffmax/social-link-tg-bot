@@ -139,7 +139,8 @@ var hikerBudget = struct {
 
 // hikerBalanceState is what the hourly balance check and 402 answers know
 // about the prepaid account; each alert flag is set once its alert was
-// delivered.
+// delivered. lastRequests and lastReadAt are the last balance read, for the
+// 'paid' status.
 var hikerBalanceState = struct {
 	sync.Mutex
 	exhausted          bool
@@ -147,6 +148,9 @@ var hikerBalanceState = struct {
 	lowAlerted         bool
 	emptyAlerted       bool
 	balanceReadAlerted bool
+	lastRequests       int
+	lastReadAt         time.Time
+	isBalanceRead      bool
 }{}
 
 // HikerBalance is the free /sys/balance answer.
@@ -616,6 +620,7 @@ func applyHikerBalance(balance HikerBalance) {
 	hikerBalanceState.lowAlerted = (isLow == true) && (wasLowAlerted == true)
 	hikerBalanceState.emptyAlerted = (isEmpty == true) && (wasEmptyAlerted == true)
 	hikerBalanceState.Unlock()
+	rememberHikerBalance(balance)
 
 	if (isEmpty == true) && (wasEmptyAlerted == false) {
 		alertHikerEmptyBalance()
@@ -712,7 +717,23 @@ func GetHikerBalance() (HikerBalance, error) {
 		result, err = client.balance(background)
 	}
 
+	if err == nil {
+		rememberHikerBalance(result)
+	}
+
 	return result, err
+}
+
+// rememberHikerBalance keeps the last balance read for the 'paid' status.
+func rememberHikerBalance(balance HikerBalance) {
+	now := hikerNow()
+
+	hikerBalanceState.Lock()
+	defer hikerBalanceState.Unlock()
+
+	hikerBalanceState.lastRequests = balance.Requests
+	hikerBalanceState.lastReadAt = now
+	hikerBalanceState.isBalanceRead = true
 }
 
 // reportHikerOutcome feeds the outage tracker: budget refusals, content
