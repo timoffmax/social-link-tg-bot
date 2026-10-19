@@ -25,6 +25,12 @@ type InstagramKKInstagramExtractor struct {
 // kkInstagramServiceName is the outage-tracker key for the kkinstagram redirector.
 const kkInstagramServiceName = "kkinstagram"
 
+// Normalized Instagram post types that always hold a video.
+const (
+	instagramPostTypeReel = "reel"
+	instagramPostTypeTV   = "tv"
+)
+
 // instagramPostPathPattern captures the post type (p/reel/reels/tv) and shortcode
 // from any recognized Instagram or proxy URL.
 var instagramPostPathPattern = regexp.MustCompile(`(?:instagram|toinstagram|onebigram|kksave|instagramez)\.com/(?:[^/]+/)?(p|reel|reels|tv)/([A-Za-z0-9_-]+)`)
@@ -84,14 +90,31 @@ func (e *InstagramKKInstagramExtractor) ExtractMedia(instagramURL string) ([]*Me
 
 	log.Printf("✅ [kkinstagram] Downloaded %s (%d bytes) for %s", mediaType, size, shortcode)
 
+	// For some reels Instagram gives the video only to logged-in users and
+	// the redirector lands on the cover image instead.
+	isVideoCover := (MediaTypePhoto == mediaType) && (isInstagramVideoPostType(postType) == true)
+
+	if isVideoCover == true {
+		log.Printf("🎬 [kkinstagram] Got only the cover of %s %s", postType, shortcode)
+	}
+
 	result := []*MediaInfo{{
-		Type:     mediaType,
-		URL:      instagramURL,
-		Caption:  FormatAuthorCaption("instagram", "", "", ""),
-		Filename: filePath,
+		Type:       mediaType,
+		URL:        instagramURL,
+		Caption:    FormatAuthorCaption("instagram", "", "", ""),
+		Filename:   filePath,
+		VideoCover: isVideoCover,
 	}}
 
 	return result, nil
+}
+
+// isInstagramVideoPostType reports whether a normalized post type is always
+// a video (reels and IGTV).
+func isInstagramVideoPostType(postType string) bool {
+	result := (instagramPostTypeReel == postType) || (instagramPostTypeTV == postType)
+
+	return result
 }
 
 // instagramPostPath returns the normalized post type ("p", "reel", "tv") and the
@@ -106,7 +129,7 @@ func instagramPostPath(rawURL string) (string, string) {
 	postType := matches[1]
 
 	if postType == "reels" {
-		postType = "reel"
+		postType = instagramPostTypeReel
 	}
 
 	return postType, matches[2]

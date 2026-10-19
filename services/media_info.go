@@ -18,4 +18,5 @@ type MediaInfo struct {
 	Filename    string
 	ContentType string
 	Spoiler     bool // send blurred (Telegram has_spoiler), e.g. age-gated posts
+	VideoCover  bool // the cover image of a video post whose video the source did not give
 }

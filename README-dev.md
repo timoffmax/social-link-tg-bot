@@ -37,7 +37,7 @@ Unit tests are hermetic: external services (Telegram, Apify, Threads, the redire
 docker run -d --rm --name gated-fetch-test-pg -e POSTGRES_PASSWORD=test \
   -p 127.0.0.1:55432:5432 --tmpfs /var/lib/postgresql/data postgres:16-alpine
 GATED_FETCH_TEST_DSN="postgres://postgres:test@127.0.0.1:55432/postgres?sslmode=disable" \
-  go test ./services -run GatedFetch
+  go test ./services -run 'GatedFetch|FetchReelVideo'
 docker stop gated-fetch-test-pg
 ```
 

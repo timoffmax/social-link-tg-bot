@@ -39,7 +39,8 @@ func (sd *SmartDownloader) FetchGatedPost(instagramURL string, downloadErr error
 	isGated := errors.As(downloadErr, &gatedErr)
 
 	if isGated == true {
-		result, err = sd.fetchGatedWithQuota(instagramURL, downloadErr, gatedErr, chatID, userID, isPrivate)
+		spoiler := gatedErr.Gate.NeedsSpoiler()
+		result, err = sd.fetchGatedWithQuota(instagramURL, downloadErr, spoiler, chatID, userID, isPrivate)
 	}
 
 	// A post limited by region or audience still has a public preview: when
@@ -56,7 +57,7 @@ func (sd *SmartDownloader) FetchGatedPost(instagramURL string, downloadErr error
 
 // fetchGatedWithQuota reserves the quota, calls the provider and refunds the
 // quota when the provider fails.
-func (sd *SmartDownloader) fetchGatedWithQuota(instagramURL string, downloadErr error, gatedErr *InstagramGatedError, chatID, userID int64, isPrivate bool) ([]*MediaInfo, error) {
+func (sd *SmartDownloader) fetchGatedWithQuota(instagramURL string, downloadErr error, spoiler bool, chatID, userID int64, isPrivate bool) ([]*MediaInfo, error) {
 	var result []*MediaInfo
 	var quotas []GatedFetchQuota
 	var fetchErr error
@@ -94,7 +95,6 @@ func (sd *SmartDownloader) fetchGatedWithQuota(instagramURL string, downloadErr 
 	if (denial == GatedFetchAllowed) && (err == nil) {
 		providerName := sd.gated.Name()
 		log.Printf("🔞 [%s] fetching gated post %s (chat %d, user %d)", providerName, instagramURL, chatID, userID)
-		spoiler := gatedErr.Gate.NeedsSpoiler()
 		result, fetchErr = sd.gated.FetchPost(instagramURL, spoiler)
 	}
 

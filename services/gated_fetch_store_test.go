@@ -384,3 +384,64 @@ func TestCanUseGatedFetchCreditsFollowsTheEffectiveUserAllowance(t *testing.T) {
 		t.Fatalf("expected a user override above zero to beat the zero default")
 	}
 }
+
+func TestFetchReelVideoReplacesTheCoverAndUsesTheQuota(t *testing.T) {
+	setupGatedFetchTestDB(t)
+	provider := &recordingGatedProvider{}
+	sd := &SmartDownloader{gated: provider}
+	cover := newReelCover(t)
+
+	got := sd.FetchReelVideo(reelVideoTestURL, []*MediaInfo{cover}, 41, 41, true)
+
+	if (len(got) != 1) || (got[0].Type != MediaTypeVideo) {
+		t.Fatalf("expected the paid video, got %+v", got)
+	}
+
+	if (len(provider.spoilers) != 1) || (provider.spoilers[0] == true) {
+		t.Fatalf("expected one unblurred fetch, got %v", provider.spoilers)
+	}
+
+	if _, err := os.Stat(cover.Filename); os.IsNotExist(err) == false {
+		t.Fatalf("expected the cover file removed, stat: %v", err)
+	}
+
+	userUsed, _ := GetGatedFetchUsage(GatedFetchScopeUser, 41)
+
+	if userUsed != 1 {
+		t.Fatalf("expected one unit of the user's allowance used, got %d", userUsed)
+	}
+}
+
+func TestFetchReelVideoKeepsTheCoverWhenThePaidFetchFails(t *testing.T) {
+	setupGatedFetchTestDB(t)
+	sd := &SmartDownloader{gated: failingGatedProvider{}}
+	cover := newReelCover(t)
+
+	got := sd.FetchReelVideo(reelVideoTestURL, []*MediaInfo{cover}, 42, 42, true)
+
+	if (len(got) != 1) || (got[0] != cover) || (strings.HasSuffix(cover.Caption, reelCoverNote) == false) {
+		t.Fatalf("expected the cover with the note, got %+v", got)
+	}
+
+	userUsed, _ := GetGatedFetchUsage(GatedFetchScopeUser, 42)
+
+	if userUsed != 0 {
+		t.Fatalf("expected the user's unit refunded, got %d", userUsed)
+	}
+}
+
+func TestFetchReelVideoKeepsTheCoverWhenThePaidResultIsNoVideo(t *testing.T) {
+	setupGatedFetchTestDB(t)
+	sd := &SmartDownloader{gated: coverGatedProvider{}}
+	cover := newReelCover(t)
+
+	got := sd.FetchReelVideo(reelVideoTestURL, []*MediaInfo{cover}, 43, 43, true)
+
+	if (len(got) != 1) || (got[0] != cover) || (strings.HasSuffix(cover.Caption, reelCoverNote) == false) {
+		t.Fatalf("expected the cover with the note, got %+v", got)
+	}
+
+	if _, err := os.Stat(cover.Filename); err != nil {
+		t.Fatalf("the cover file must stay for sending: %v", err)
+	}
+}

@@ -31,6 +31,11 @@ type SmartDownloader struct {
 	facebook     *FacebookFacebedExtractor
 	tempDir      string
 	workingDir   string
+
+	// instagramRelay fetches the video of a reel the free methods got only
+	// the cover of (FetchReelVideo); nil unless the relay serves Instagram.
+	instagramRelay *InstagramRelayExtractor
+
 	// extractYtDlp replaces the yt-dlp method (tests); nil runs yt-dlp.
 	extractYtDlp func(ctx context.Context, mediaURL, platform string) ([]*MediaInfo, error)
 }
@@ -92,6 +97,8 @@ func NewSmartDownloader() *SmartDownloader {
 		facebook:     NewFacebookFacebedExtractor(tempDir),
 		tempDir:      tempDir,
 		workingDir:   workingDir,
+
+		instagramRelay: NewInstagramRelayExtractor(tempDir),
 	}
 }
 

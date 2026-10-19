@@ -187,7 +187,7 @@ func startFreeText() string {
 // startRestrictedTemplate says what restricted content is and how it is
 // limited: the default allowance per person, per group, then the bonus line.
 const startRestrictedTemplate = `🔞 <b>Restricted posts (monthly limit)</b>
-Instagram posts whose author limited them by age or region. I can only fetch them through a paid third-party service, so they have a monthly limit: by default %s per person in a private chat and %s per group. Age-limited posts arrive blurred: tap to view. Each one shows how many are left this month.%s
+Instagram posts whose author limited them by age or region, and reels whose video Instagram shows only to logged-in users. I can only fetch them through a paid third-party service, so they have a monthly limit: by default %s per person in a private chat and %s per group. Age-limited posts arrive blurred: tap to view. Each one shows how many are left this month.%s
 
 💸 <b>Why the limits?</b>
 The paid service charges for every restricted post, Story and Short it fetches, and the developer pays for it out of pocket. The monthly limits keep that affordable. If the month's budget runs out, these pause until it resets. With more support (/donate), the limits can go up.

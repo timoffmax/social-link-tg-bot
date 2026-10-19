@@ -441,12 +441,18 @@ func processMediaDownload(url string, origChat *response.TgChat, origMessage *re
 
 	// Try to download media using smart downloader
 	mediaInfos, err := downloader.DownloadMedia(url)
+	isPrivate := (chatTypePrivate == origChat.Type)
+	userID := int64(origMessage.From.Id)
 
 	// An Instagram post gated by its author may still be fetched through the
 	// paid provider, within the chat's or user's monthly quota.
 	if err != nil {
-		isPrivate := (chatTypePrivate == origChat.Type)
-		mediaInfos, err = downloader.FetchGatedPost(url, err, origChat.Id, int64(origMessage.From.Id), isPrivate)
+		mediaInfos, err = downloader.FetchGatedPost(url, err, origChat.Id, userID, isPrivate)
+	}
+
+	// So may the video of a reel the free methods got only the cover of.
+	if err == nil {
+		mediaInfos = downloader.FetchReelVideo(url, mediaInfos, origChat.Id, userID, isPrivate)
 	}
 
 	if err != nil {

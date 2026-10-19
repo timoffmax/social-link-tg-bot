@@ -73,27 +73,30 @@ const (
 	relayFileExt       = ".mp4"
 )
 
-// Platforms the relay knows. The bot has a relay method for YouTube only;
-// the others are listed so their ids are checked the same way once a method
-// is added.
+// Platforms the relay knows. The bot has relay methods for YouTube and
+// Instagram; the others are listed so their ids are checked the same way
+// once a method is added.
 const (
-	relayPlatformYouTube  = "youtube"
-	relayPlatformTikTok   = "tiktok"
-	relayPlatformFacebook = "facebook"
+	relayPlatformYouTube   = "youtube"
+	relayPlatformTikTok    = "tiktok"
+	relayPlatformFacebook  = "facebook"
+	relayPlatformInstagram = "instagram"
 )
 
 // relaySupportedPlatforms are the platforms that have a relay method in the
 // chain; RELAY_PLATFORMS names outside it are ignored.
 var relaySupportedPlatforms = map[string]bool{
-	relayPlatformYouTube: true,
+	relayPlatformYouTube:   true,
+	relayPlatformInstagram: true,
 }
 
 // relayIDPatterns are the ids the relay accepts per platform, checked
 // before a request so a bad id never reaches it.
 var relayIDPatterns = map[string]*regexp.Regexp{
-	relayPlatformYouTube:  regexp.MustCompile(`^[A-Za-z0-9_-]{11}$`),
-	relayPlatformTikTok:   regexp.MustCompile(`^[1-9][0-9]{14,19}$`),
-	relayPlatformFacebook: regexp.MustCompile(`^[1-9][0-9]{9,19}$`),
+	relayPlatformYouTube:   regexp.MustCompile(`^[A-Za-z0-9_-]{11}$`),
+	relayPlatformTikTok:    regexp.MustCompile(`^[1-9][0-9]{14,19}$`),
+	relayPlatformFacebook:  regexp.MustCompile(`^[1-9][0-9]{9,19}$`),
+	relayPlatformInstagram: regexp.MustCompile(`^[A-Za-z0-9_-]{5,40}$`),
 }
 
 // Relay error codes (the "code" of a JSON error body).
@@ -203,11 +206,15 @@ type relayErrorBody struct {
 
 // relayMeta is the X-Relay-Meta header: strings may be empty, numbers null.
 type relayMeta struct {
-	Title    string   `json:"title"`
-	Uploader string   `json:"uploader"`
-	Height   *float64 `json:"height"`
-	Width    *float64 `json:"width"`
-	Duration *float64 `json:"duration"`
+	Title    string `json:"title"`
+	Uploader string `json:"uploader"`
+	// Channel and Description come for Instagram only: the user name and
+	// the post's caption text.
+	Channel     string   `json:"channel"`
+	Description string   `json:"description"`
+	Height      *float64 `json:"height"`
+	Width       *float64 `json:"width"`
+	Duration    *float64 `json:"duration"`
 }
 
 // relayVideo is a fetched video: the checked temp file and its metadata
