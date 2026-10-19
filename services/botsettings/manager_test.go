@@ -107,9 +107,9 @@ func TestRequestsAreValidatedAndRejected(t *testing.T) {
 		{settings.KeyGatedGlobalMonthlyCap, `6000`, `-1`, settings.StatusRejected, "hard ceiling"},
 		{settings.KeyDefaultDailyMediaLimit, `30`, `5`, settings.StatusRejected, requestChangedError},
 		{"platform.myspace.enabled", `true`, `true`, settings.StatusRejected, "unknown setting"},
-		{settings.KeyApifyMonthlyBudgetUsd, `6`, `4.8`, settings.StatusRejected, requestApprovalError},
-		{settings.KeyServiceFacebedHost, `"evil.example"`, `"www.facebed.com"`, settings.StatusRejected, requestApprovalError},
-		{settings.KeyHikerPricePerRequestUsd, `0.0005`, `0.001`, settings.StatusRejected, requestApprovalError},
+		{settings.KeyApifyMonthlyBudgetUsd, `6`, `4.8`, settings.StatusRejected, requestNoApproverError},
+		{settings.KeyServiceFacebedHost, `"evil.example"`, `"www.facebed.com"`, settings.StatusRejected, requestNoApproverError},
+		{settings.KeyHikerPricePerRequestUsd, `0.0005`, `0.001`, settings.StatusRejected, requestNoApproverError},
 		{settings.KeyApifyMonthlyBudgetUsd, `2.5`, `4.8`, settings.StatusApplied, ""},
 		{settings.KeyStarsEnabled, `true`, `false`, settings.StatusApplied, ""},
 		{settings.KeyDefaultDailyMediaLimit, `30`, `0`, settings.StatusApplied, ""},
@@ -150,7 +150,7 @@ func TestRaisingABudgetBackNeedsApprovalButLoweringDoesNot(t *testing.T) {
 	raiseStatus, _ := harness.store.requestStatus(raise)
 	resetStatus, resetReason := harness.store.requestStatus(reset)
 
-	if (lowerStatus != settings.StatusApplied) || (raiseStatus != settings.StatusRejected) || (resetStatus != settings.StatusRejected) || (resetReason != requestApprovalError) {
+	if (lowerStatus != settings.StatusApplied) || (raiseStatus != settings.StatusRejected) || (resetStatus != settings.StatusRejected) || (resetReason != requestNoApproverError) {
 		t.Fatalf("lower %s, raise %s, reset to the .env 1.0 %s (%s)", lowerStatus, raiseStatus, resetStatus, resetReason)
 	}
 

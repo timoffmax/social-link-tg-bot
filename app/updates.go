@@ -3221,6 +3221,8 @@ func dispatchCallbackQuery(callbackQuery *response.TgCallbackQuery) {
 		handleBroadcastCallback(callbackQuery)
 	case strings.HasPrefix(callbackQuery.Data, supportCallbackPrefix):
 		handleSupportTierCallback(callbackQuery)
+	case isSettingsApprovalCallback(callbackQuery.Data) == true:
+		handleSettingsApprovalCallback(callbackQuery)
 	default:
 		log.Printf("🤷 Unknown callback query: %s", callbackQuery.Data)
 	}

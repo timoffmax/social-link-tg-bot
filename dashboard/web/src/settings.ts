@@ -6,6 +6,7 @@ import type {
   OpenSettingRequest,
   SecretsStatus,
   SettingActor,
+  SettingRequest,
   SettingRequestStatus,
   SettingRow,
   SettingSource,
@@ -17,6 +18,9 @@ export const REQUEST_POLL_FAST_MS = 1_000;
 export const REQUEST_POLL_SLOW_MS = 5_000;
 export const REQUEST_POLL_FAST_FOR_MS = 15_000;
 
+/** Polling goes on this long past a change's expiry, so the bot's own "expired" is seen. */
+export const REQUEST_EXPIRY_GRACE_MS = 10_000;
+
 /** The Settings tab reloads every 30 s while it is visible. */
 export const SETTINGS_REFRESH_MS = 30_000;
 
@@ -26,7 +30,16 @@ export const APPLIED_SHOWN_MS = 4_000;
 const MS_PER_MINUTE = 60_000;
 
 export const CONFLICT_TEXT = 'A change of this setting is already waiting. Wait for it to finish, then try again.';
+export const APPROVAL_TEXT = 'This change needs your approval in Telegram: the bot will send you Approve / Reject.';
+export const APPROVAL_HINT = 'Saving sends this change to Telegram for your Approve.';
+export const APPROVAL_ACTION = 'Send for approval';
 export const STUCK_CONFLICT_TEXT = 'A change of this setting is still queued and only the running bot can clear it. Start the bot, then try again.';
+export const APPROVAL_CONFLICT_TEXT = 'A change of this setting is waiting for your Approve in Telegram. Approve or Reject it there, then try again.';
+export const STUCK_APPROVAL_CONFLICT_TEXT = 'A change of this setting is waiting for your Approve in Telegram, and only the running bot can record your answer or its expiry. Start the bot, then try again.';
+export const NO_APPROVER_TEXT = 'This change needs your approval in Telegram, but ADMIN_USER_ID is not set in .env, so the bot can not ask you and would refuse it. Set ADMIN_USER_ID and restart the bot first.';
+
+/** The prefix of the bot's expiry reasons; the status line already says "Expired". */
+const EXPIRED_REASON_PREFIX = 'expired: ';
 
 const HOST_MAX_LENGTH = 253;
 const HOST_LABEL_MAX_LENGTH = 63;
@@ -83,12 +96,13 @@ export function pollDelay(elapsedMs: number): number {
 }
 
 /**
- * Whether to check a change again: it is still open and has not passed its expiry. A stopped bot
- * never decides a queued change, so the page stops at the expiry instead of waiting forever.
+ * Whether to check a change again: it is still open and its expiry (plus a short grace) has not
+ * passed. A stopped bot never decides a change, so the page stops then instead of waiting forever.
  */
 export function shouldPollRequest(status: SettingRequestStatus, expiresAt: string, now: number): boolean {
   const isOpen = isOpenStatus(status);
-  const hasTime = (now < Date.parse(expiresAt));
+  const deadline = Date.parse(expiresAt) + REQUEST_EXPIRY_GRACE_MS;
+  const hasTime = (now < deadline);
 
   return isOpen && hasTime;
 }
@@ -117,9 +131,23 @@ export function isQueueStuck(bot: BotHeartbeat | null, openRequest: OpenSettingR
   return (isBotDown || isOverdue);
 }
 
-/** The text of a 409: a change of the key is already waiting. */
-export function conflictText(isStuck: boolean): string {
-  return isStuck ? STUCK_CONFLICT_TEXT : CONFLICT_TEXT;
+/** The text of a 409: a change of the key is already waiting (status: the open one's, null when unknown). */
+export function conflictText(isStuck: boolean, status: SettingRequestStatus | null): string {
+  const isAwaiting = (status === 'awaiting_approval');
+  const queuedText = isStuck ? STUCK_CONFLICT_TEXT : CONFLICT_TEXT;
+  const awaitingText = isStuck ? STUCK_APPROVAL_CONFLICT_TEXT : APPROVAL_CONFLICT_TEXT;
+
+  return isAwaiting ? awaitingText : queuedText;
+}
+
+/** Whether the bot can ask the owner in Telegram: ADMIN_USER_ID is set, or the page does not know. */
+export function canAskOwner(secrets: SecretsStatus | null): boolean {
+  return (secrets?.admin_user_id !== false);
+}
+
+/** The note under a change that needs the owner's approval. */
+export function approvalHint(secrets: SecretsStatus | null): string {
+  return canAskOwner(secrets) ? APPROVAL_HINT : NO_APPROVER_TEXT;
 }
 
 /** JSON equality of two values, as the bot compares an expected value. */
@@ -310,34 +338,83 @@ export interface ConfirmText {
   effect: string;
   /** The confirm button, repeating the action. */
   action: string;
+  /** The Telegram approval note, or '' when the change applies directly. */
+  approval: string;
+  /** Old -> new values, shown with the approval note; '' without one. */
+  change: string;
+  /** The change can not be sent: it needs an approval nobody can be asked for. */
+  blocked: boolean;
+}
+
+/**
+ * The value a change leads to: next itself, or for a reset the default when .env does not set the
+ * key; null when only the bot knows it (a reset to an .env value).
+ */
+function targetOf(setting: SettingRow, next: SettingValue | null): SettingValue | null {
+  const isEnvSet = (setting.effective?.env_set === true);
+  let result: SettingValue | null = next;
+
+  if ((next === null) && (isEnvSet === false)) {
+    result = setting.default;
+  }
+
+  return result;
+}
+
+/** Whether the page can tell that a change (next null: a reset) waits for the owner's Approve. */
+export function changeNeedsApproval(setting: SettingRow, current: SettingValue, next: SettingValue | null): boolean {
+  const target = targetOf(setting, next);
+  const result = (target !== null) && needsApproval(setting.approval, current, target);
+
+  return result;
 }
 
 /** The confirmation of a change (next null: a reset to .env / default). */
-export function confirmText(setting: SettingRow, current: SettingValue, next: SettingValue | null): ConfirmText {
+export function confirmText(setting: SettingRow, current: SettingValue, next: SettingValue | null, secrets: SecretsStatus | null = null): ConfirmText {
   const isReset = (next === null);
   const isSwitch = (setting.type === 'bool') && (isReset === false);
   const switchWord = (next === true) ? 'on' : 'off';
   const fallback = (setting.effective?.env_set === true) ? 'its .env value' : `the default (${formatValue(setting.default)})`;
+  const isApproval = changeNeedsApproval(setting, current, next);
+  const target = targetOf(setting, next);
+  const isBlocked = isApproval && (canAskOwner(secrets) === false);
   let result: ConfirmText = {
     question: `Set ${setting.label} to ${formatValue(next)}? It is ${formatValue(current)} now.`,
     effect: isStopping(next) ? setting.impact : '',
     action: `Set to ${formatValue(next)}`,
+    approval: '',
+    change: '',
+    blocked: false,
   };
 
   if (isSwitch) {
     result = {
+      ...result,
       question: `Turn ${switchWord} ${setting.label}?`,
-      effect: isStopping(next) ? setting.impact : '',
       action: `Turn ${switchWord} ${setting.label}`,
     };
   }
 
   if (isReset) {
     result = {
+      ...result,
       question: `Reset ${setting.label}? The bot then uses ${fallback} instead of ${formatValue(current)}.`,
       effect: '',
       action: 'Reset',
     };
+  }
+
+  if (isApproval) {
+    result = {
+      ...result,
+      action: APPROVAL_ACTION,
+      approval: APPROVAL_TEXT,
+      change: `${setting.label}: ${formatValue(current)} → ${formatValue(target)}`,
+    };
+  }
+
+  if (isBlocked) {
+    result = { ...result, approval: NO_APPROVER_TEXT, blocked: true };
   }
 
   return result;
@@ -366,6 +443,55 @@ export function minutesLeft(expiresAt: string, now: number): number {
   const minutes = Math.ceil(left / MS_PER_MINUTE);
 
   return Math.max(0, minutes);
+}
+
+/** The time left of an open change in words: "expires in N min", or "expiring now" once it is due. */
+export function expiryText(expiresAt: string, now: number): string {
+  const isDue = (now >= Date.parse(expiresAt));
+  const result = isDue ? 'expiring now' : `expires in ${minutesLeft(expiresAt, now)} min`;
+
+  return result;
+}
+
+/** The fallback reason of an expired change, by whether it waited for the owner's Approve. */
+function expiredReason(request: SettingRequest): string {
+  const result = (request.needs_approval === true) ? 'it was not approved in Telegram in time' : 'the bot did not apply it within 10 minutes';
+
+  return result;
+}
+
+/** An expired change's line: the bot's reason without its own "expired: " prefix. */
+function expiredText(request: SettingRequest): string {
+  const reason = request.error ?? expiredReason(request);
+  const hasPrefix = reason.startsWith(EXPIRED_REASON_PREFIX);
+  const shown = hasPrefix ? reason.slice(EXPIRED_REASON_PREFIX.length) : reason;
+
+  return `Expired: ${shown}`;
+}
+
+/** Where a followed change stands, as one line for its row. */
+export function requestStatusText(request: SettingRequest, now: number): string {
+  const isOverdue = isOpenStatus(request.status) && (shouldPollRequest(request.status, request.expires_at, now) === false);
+  const expiry = expiryText(request.expires_at, now);
+  const shownValue = (request.value === null) ? 'the reset' : formatValue(request.value);
+  const texts: Record<SettingRequestStatus, string> = {
+    queued: `Waiting for the bot to apply ${shownValue} (${expiry})`,
+    awaiting_approval: `Waiting for your Approve in Telegram (${expiry})`,
+    applied: `Applied ${shownValue}`,
+    rejected: `Not applied: ${request.error ?? 'refused by the bot'}`,
+    expired: expiredText(request),
+  };
+  const overdueTexts: Partial<Record<SettingRequestStatus, string>> = {
+    queued: 'Expired: the bot did not pick it up in time. Is the bot running?',
+    awaiting_approval: 'Expired: it was not approved in Telegram in time.',
+  };
+  let result = texts[request.status] ?? request.status;
+
+  if (isOverdue) {
+    result = overdueTexts[request.status] ?? result;
+  }
+
+  return result;
 }
 
 /** The order of a provider list after moving one entry up (-1) or down (+1); unchanged at the edges. */

@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/timoffmax/social-link-bot/model/settings"
 )
@@ -24,16 +25,19 @@ type StoredValue struct {
 }
 
 // ChangeRequest is a claimed settings_change_requests row, with the key's
-// bot_settings value at claim time (nil when it has none).
+// bot_settings value at claim time (nil when it has none) and, for a queued
+// request, how many requests await the owner's approval.
 type ChangeRequest struct {
-	ID            int64
-	Kind          string
-	Key           string
-	Value         json.RawMessage
-	Expected      json.RawMessage
-	Source        string
-	IsExpired     bool
-	StoredCurrent json.RawMessage
+	ID                int64
+	Kind              string
+	Key               string
+	Value             json.RawMessage
+	Expected          json.RawMessage
+	Source            string
+	IsExpired         bool
+	StoredCurrent     json.RawMessage
+	ApprovalMessageID int64
+	AwaitingCount     int
 }
 
 // IsReset reports a request to delete the owner-set value.
@@ -44,19 +48,44 @@ func (r ChangeRequest) IsReset() bool {
 }
 
 // Decision is what the bot does with a claimed request: apply it (Value is
-// the validated JSON to store, nil to delete the row), reject it with an
-// error, or expire it.
+// the validated JSON to store, nil to delete the row), ask the owner
+// (ExpiresAt is the new expiry, set by the store), reject it, or expire it.
 type Decision struct {
 	Status        string
 	Error         string
 	NeedsApproval bool
 	Value         json.RawMessage
 	TypedValue    any
+	ExpiresAt     time.Time
 }
 
 // IsApplied reports a decision to write bot_settings.
 func (d Decision) IsApplied() bool {
 	result := (d.Status == settings.StatusApplied)
+
+	return result
+}
+
+// IsAwaitingApproval reports a decision to ask the owner in Telegram.
+func (d Decision) IsAwaitingApproval() bool {
+	result := (d.Status == settings.StatusAwaitingApproval)
+
+	return result
+}
+
+// ApprovalOutcome is the result of the owner's tap: the request as it is
+// stored, the tap's decision (empty Status when the tap changed nothing:
+// already decided or expired) and the request's status afterwards.
+type ApprovalOutcome struct {
+	Request  ChangeRequest
+	Decision Decision
+	Status   string
+	Error    string
+}
+
+// IsDecided reports a tap that changed the request.
+func (o ApprovalOutcome) IsDecided() bool {
+	result := (o.Decision.Status != "")
 
 	return result
 }
@@ -69,9 +98,18 @@ type Store interface {
 	// on it and records the outcome (with the bot_settings write when it is
 	// applied) in one transaction. It returns false when none is queued.
 	ProcessNextRequest(ctx context.Context, decide func(ChangeRequest) Decision) (ChangeRequest, Decision, bool, error)
-	// ExpireRequests marks every queued request past its expires_at (the
-	// DB's clock) expired and returns how many it marked.
-	ExpireRequests(ctx context.Context) (int64, error)
+	// ExpireRequests marks every queued or awaiting request past its
+	// expires_at (the DB's clock) expired and returns them.
+	ExpireRequests(ctx context.Context) ([]ChangeRequest, error)
+	// SetApprovalMessage stores the Telegram message that asks the owner.
+	SetApprovalMessage(ctx context.Context, requestID int64, messageID int64) error
+	// RejectAwaiting rejects a request still awaiting approval; false when it
+	// was no longer awaiting.
+	RejectAwaiting(ctx context.Context, requestID int64, reason string) (bool, error)
+	// DecideApproval records the owner's Approve or Reject in one transaction:
+	// a conditional claim of the awaiting, unexpired request, then for
+	// Approve decide's ruling and the bot_settings write.
+	DecideApproval(ctx context.Context, requestID int64, isApprove bool, decide func(ChangeRequest) Decision) (ApprovalOutcome, error)
 	// PublishStatus upserts one bot_runtime_status component.
 	PublishStatus(ctx context.Context, component string, data json.RawMessage) error
 }
@@ -140,9 +178,12 @@ const claimRequestQuery = `
 // decided.
 const currentValueQuery = `SELECT value FROM bot_settings WHERE key = $1 FOR UPDATE`
 
-// setActorQuery names the writer for the audit trigger, for this
-// transaction only.
-const setActorQuery = `SELECT set_config('app.settings_actor', $1, true), set_config('app.settings_request_id', $2, true)`
+// awaitingCountQuery counts the requests waiting for the owner's approval.
+const awaitingCountQuery = `SELECT count(*) FROM settings_change_requests WHERE status = 'awaiting_approval'`
+
+// setActorQuery names the writer, the request and the note for the audit
+// trigger, for this transaction only.
+const setActorQuery = `SELECT set_config('app.settings_actor', $1, true), set_config('app.settings_request_id', $2, true), set_config('app.settings_note', $3, true)`
 
 const upsertSettingQuery = `
 	INSERT INTO bot_settings (key, value) VALUES ($1, $2)
@@ -154,6 +195,14 @@ const decideRequestQuery = `
 	UPDATE settings_change_requests
 	SET status = $2, error = NULLIF($3, ''), needs_approval = $4, decided_at = now()
 	WHERE id = $1 AND status = 'queued'`
+
+// awaitApprovalQuery moves a claimed request to awaiting_approval with a
+// fresh expiry on the DB's clock.
+const awaitApprovalQuery = `
+	UPDATE settings_change_requests
+	SET status = 'awaiting_approval', needs_approval = true, error = NULL, expires_at = now() + make_interval(secs => $2)
+	WHERE id = $1 AND status = 'queued'
+	RETURNING expires_at`
 
 // ProcessNextRequest claims, decides and records the oldest queued request.
 func (s pgStore) ProcessNextRequest(ctx context.Context, decide func(ChangeRequest) Decision) (ChangeRequest, Decision, bool, error) {
@@ -168,7 +217,7 @@ func (s pgStore) ProcessNextRequest(ctx context.Context, decide func(ChangeReque
 
 	if (err == nil) && (isClaimed == true) {
 		decision = decideClaimed(request, decide)
-		err = recordDecision(ctx, tx, request, decision)
+		decision, err = recordDecision(ctx, tx, request, decision)
 	}
 
 	if (err == nil) && (isClaimed == true) {
@@ -203,6 +252,11 @@ func claimRequest(ctx context.Context, tx *sql.Tx) (ChangeRequest, bool, error) 
 		result.Value = nullableJSON(value)
 		result.Expected = nullableJSON(expected)
 		result.StoredCurrent, err = readStoredValue(ctx, tx, result.Key)
+	}
+
+	if (err == nil) && (isClaimed == true) {
+		row = tx.QueryRowContext(ctx, awaitingCountQuery)
+		err = row.Scan(&result.AwaitingCount)
 	}
 
 	return result, isClaimed, err
@@ -246,25 +300,35 @@ func decideClaimed(request ChangeRequest, decide func(ChangeRequest) Decision) D
 }
 
 // recordDecision writes bot_settings for an applied request (as its source,
-// for the audit) and the request's outcome.
-func recordDecision(ctx context.Context, tx *sql.Tx, request ChangeRequest, decision Decision) error {
+// for the audit) and the request's outcome; a request that waits for the
+// owner gets its new expiry, returned in the decision.
+func recordDecision(ctx context.Context, tx *sql.Tx, request ChangeRequest, decision Decision) (Decision, error) {
+	result := decision
 	var err error
+	isAwaiting := decision.IsAwaitingApproval()
 
 	if decision.IsApplied() == true {
-		err = writeSetting(ctx, tx, request, decision)
+		err = writeSetting(ctx, tx, request, decision, "")
 	}
 
-	if err == nil {
+	if (err == nil) && (isAwaiting == true) {
+		timeout := approvalTimeout.Seconds()
+		row := tx.QueryRowContext(ctx, awaitApprovalQuery, request.ID, timeout)
+		err = row.Scan(&result.ExpiresAt)
+	}
+
+	if (err == nil) && (isAwaiting == false) {
 		_, err = tx.ExecContext(ctx, decideRequestQuery, request.ID, decision.Status, decision.Error, decision.NeedsApproval)
 	}
 
-	return err
+	return result, err
 }
 
-// writeSetting upserts or deletes the key's bot_settings row.
-func writeSetting(ctx context.Context, tx *sql.Tx, request ChangeRequest, decision Decision) error {
+// writeSetting upserts or deletes the key's bot_settings row; note goes
+// into the audit row.
+func writeSetting(ctx context.Context, tx *sql.Tx, request ChangeRequest, decision Decision, note string) error {
 	requestID := fmt.Sprintf("%d", request.ID)
-	_, err := tx.ExecContext(ctx, setActorQuery, request.Source, requestID)
+	_, err := tx.ExecContext(ctx, setActorQuery, request.Source, requestID, note)
 
 	if (err == nil) && (decision.Value == nil) {
 		_, err = tx.ExecContext(ctx, deleteSettingQuery, request.Key)
@@ -278,21 +342,222 @@ func writeSetting(ctx context.Context, tx *sql.Tx, request ChangeRequest, decisi
 	return err
 }
 
-// expireRequestsQuery expires the queued requests past their expiry, with
-// the same test as claimRequestQuery (the partial index on queued requests
-// keeps it cheap).
+// expireRequestsQuery expires the queued and awaiting requests past their
+// expiry, with the same test as claimRequestQuery.
 const expireRequestsQuery = `
 	UPDATE settings_change_requests
-	SET status = 'expired', error = $1, decided_at = now()
-	WHERE status = 'queued' AND expires_at <= now()`
+	SET status = 'expired', error = CASE WHEN status = 'queued' THEN $1 ELSE $2 END, decided_at = now()
+	WHERE status IN ('queued', 'awaiting_approval') AND expires_at <= now()
+	RETURNING id, kind, key, value, expected, source, COALESCE(approval_message_id, 0)`
 
-// ExpireRequests marks the queued requests past their expiry expired.
-func (s pgStore) ExpireRequests(ctx context.Context) (int64, error) {
-	result := int64(0)
-	outcome, err := s.db.ExecContext(ctx, expireRequestsQuery, requestExpiredError)
+// ExpireRequests marks the queued and awaiting requests past their expiry
+// expired and returns them.
+func (s pgStore) ExpireRequests(ctx context.Context) ([]ChangeRequest, error) {
+	result := []ChangeRequest{}
+	rows, err := s.db.QueryContext(ctx, expireRequestsQuery, requestExpiredError, requestApprovalExpiredError)
 
 	if err == nil {
-		result, err = outcome.RowsAffected()
+		defer rows.Close()
+		result, err = scanRequests(rows)
+	}
+
+	return result, err
+}
+
+// scanRequests reads rows of id, kind, key, value, expected, source and
+// approval message id.
+func scanRequests(rows *sql.Rows) ([]ChangeRequest, error) {
+	result := []ChangeRequest{}
+	var err error
+
+	for (err == nil) && (rows.Next() == true) {
+		var request ChangeRequest
+		var value []byte
+		var expected []byte
+		err = rows.Scan(&request.ID, &request.Kind, &request.Key, &value, &expected, &request.Source, &request.ApprovalMessageID)
+		request.Value = nullableJSON(value)
+		request.Expected = nullableJSON(expected)
+
+		if err == nil {
+			result = append(result, request)
+		}
+	}
+
+	if err == nil {
+		err = rows.Err()
+	}
+
+	return result, err
+}
+
+const setApprovalMessageQuery = `
+	UPDATE settings_change_requests SET approval_message_id = $2
+	WHERE id = $1 AND status = 'awaiting_approval'`
+
+// SetApprovalMessage stores the Telegram message that asks the owner.
+func (s pgStore) SetApprovalMessage(ctx context.Context, requestID int64, messageID int64) error {
+	_, err := s.db.ExecContext(ctx, setApprovalMessageQuery, requestID, messageID)
+
+	return err
+}
+
+const rejectAwaitingQuery = `
+	UPDATE settings_change_requests SET status = 'rejected', error = $2, decided_at = now()
+	WHERE id = $1 AND status = 'awaiting_approval'`
+
+// RejectAwaiting rejects a request still awaiting approval.
+func (s pgStore) RejectAwaiting(ctx context.Context, requestID int64, reason string) (bool, error) {
+	outcome, err := s.db.ExecContext(ctx, rejectAwaitingQuery, requestID, reason)
+	affected := int64(0)
+
+	if err == nil {
+		affected, err = outcome.RowsAffected()
+	}
+
+	result := (affected > 0)
+
+	return result, err
+}
+
+// approveRequestQuery claims an awaiting, unexpired request for Approve;
+// only the statement that changes the row acts (a double tap or a tap
+// racing the expiry matches no row).
+const approveRequestQuery = `
+	UPDATE settings_change_requests SET status = 'applied', error = NULL, decided_at = now()
+	WHERE id = $1 AND status = 'awaiting_approval' AND expires_at > now()
+	RETURNING id, kind, key, value, expected, source, COALESCE(approval_message_id, 0)`
+
+// rejectByOwnerQuery is approveRequestQuery for Reject.
+const rejectByOwnerQuery = `
+	UPDATE settings_change_requests SET status = 'rejected', error = $2, decided_at = now()
+	WHERE id = $1 AND status = 'awaiting_approval' AND expires_at > now()
+	RETURNING id, kind, key, value, expected, source, COALESCE(approval_message_id, 0)`
+
+// overruleApprovedQuery replaces the claim's 'applied' when the re-check
+// after Approve refuses the change, in the same transaction.
+const overruleApprovedQuery = `
+	UPDATE settings_change_requests SET status = $2, error = NULLIF($3, '')
+	WHERE id = $1 AND status = 'applied'`
+
+// expireTappedQuery expires a tapped request past its expiry that the
+// sweep has not reached yet.
+const expireTappedQuery = `
+	UPDATE settings_change_requests SET status = 'expired', error = $2, decided_at = now()
+	WHERE id = $1 AND status = 'awaiting_approval' AND expires_at <= now()`
+
+const readRequestQuery = `
+	SELECT id, kind, key, value, expected, source, COALESCE(approval_message_id, 0), status, COALESCE(error, '')
+	FROM settings_change_requests WHERE id = $1`
+
+// approvedNote is the audit note of a change the owner approved.
+const approvedNote = "approved in Telegram"
+
+// DecideApproval records the owner's tap in one transaction.
+func (s pgStore) DecideApproval(ctx context.Context, requestID int64, isApprove bool, decide func(ChangeRequest) Decision) (ApprovalOutcome, error) {
+	result := ApprovalOutcome{}
+	isClaimed := false
+	tx, err := s.db.BeginTx(ctx, nil)
+
+	if err == nil {
+		result.Request, isClaimed, err = claimAwaiting(ctx, tx, requestID, isApprove)
+	}
+
+	if (err == nil) && (isClaimed == true) {
+		result, err = decideAwaiting(ctx, tx, result.Request, isApprove, decide)
+	}
+
+	if (err == nil) && (isClaimed == false) {
+		result, err = readUndecided(ctx, tx, requestID)
+	}
+
+	if err == nil {
+		err = tx.Commit()
+	}
+
+	if (tx != nil) && (err != nil) {
+		_ = tx.Rollback()
+	}
+
+	return result, err
+}
+
+// claimAwaiting runs the conditional claim of Approve or Reject.
+func claimAwaiting(ctx context.Context, tx *sql.Tx, requestID int64, isApprove bool) (ChangeRequest, bool, error) {
+	query := approveRequestQuery
+	args := []any{requestID}
+
+	if isApprove == false {
+		query = rejectByOwnerQuery
+		args = append(args, requestOwnerRejectedError)
+	}
+
+	row := tx.QueryRowContext(ctx, query, args...)
+	result, err := scanRequest(row)
+	isClaimed := (err == nil)
+
+	if errors.Is(err, sql.ErrNoRows) == true {
+		err = nil
+	}
+
+	return result, isClaimed, err
+}
+
+// scanRequest reads one row of id, kind, key, value, expected, source and
+// approval message id, plus any extra destinations.
+func scanRequest(row *sql.Row, extra ...any) (ChangeRequest, error) {
+	result := ChangeRequest{}
+	var value []byte
+	var expected []byte
+	destinations := []any{&result.ID, &result.Kind, &result.Key, &value, &expected, &result.Source, &result.ApprovalMessageID}
+	destinations = append(destinations, extra...)
+	err := row.Scan(destinations...)
+	result.Value = nullableJSON(value)
+	result.Expected = nullableJSON(expected)
+
+	return result, err
+}
+
+// decideAwaiting finishes a claimed tap: Reject is already recorded;
+// Approve re-checks the request and writes bot_settings, or overrules the
+// claim with the rejection.
+func decideAwaiting(ctx context.Context, tx *sql.Tx, request ChangeRequest, isApprove bool, decide func(ChangeRequest) Decision) (ApprovalOutcome, error) {
+	decision := rejected(requestOwnerRejectedError)
+	var err error
+
+	if isApprove == true {
+		request.StoredCurrent, err = readStoredValue(ctx, tx, request.Key)
+	}
+
+	if (err == nil) && (isApprove == true) {
+		decision = decide(request)
+	}
+
+	if (err == nil) && (isApprove == true) && (decision.IsApplied() == true) {
+		err = writeSetting(ctx, tx, request, decision, approvedNote)
+	}
+
+	if (err == nil) && (isApprove == true) && (decision.IsApplied() == false) {
+		_, err = tx.ExecContext(ctx, overruleApprovedQuery, request.ID, decision.Status, decision.Error)
+	}
+
+	result := ApprovalOutcome{Request: request, Decision: decision, Status: decision.Status, Error: decision.Error}
+
+	return result, err
+}
+
+// readUndecided expires a tapped request past its expiry and reads the
+// request's state after a tap that changed nothing.
+func readUndecided(ctx context.Context, tx *sql.Tx, requestID int64) (ApprovalOutcome, error) {
+	result := ApprovalOutcome{}
+	_, err := tx.ExecContext(ctx, expireTappedQuery, requestID, requestApprovalExpiredError)
+
+	if err == nil {
+		row := tx.QueryRowContext(ctx, readRequestQuery, requestID)
+		result.Request, err = scanRequest(row, &result.Status, &result.Error)
+	}
+
+	if errors.Is(err, sql.ErrNoRows) == true {
+		err = nil
 	}
 
 	return result, err

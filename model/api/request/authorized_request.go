@@ -2,6 +2,7 @@ package request
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -41,6 +42,8 @@ type AuthorizedRequest struct {
 	RequestMethod      string      `json:"request_method"`
 	RequestContentType string      `json:"request_content_type"`
 	Payload            interface{} `json:"payload"`
+	// Timeout, when set, caps this call below ClientTimeout.
+	Timeout time.Duration `json:"-"`
 }
 
 // ResponseInfo describes Telegram's answer. StatusCode is 400 for any answer
@@ -110,6 +113,9 @@ func (r *AuthorizedRequest) Send(respPayload interface{}) (ResponseInfo, error) 
 	}
 
 	if nil == err {
+		var cancel context.CancelFunc
+		request, cancel = withTimeout(request, r.Timeout)
+		defer cancel()
 		response, sendErr := sendRequest(request)
 		sendErr = WithoutRequestURL(r.ApiMethod, sendErr)
 
@@ -388,6 +394,20 @@ var telegramHTTPClient = &http.Client{
 		MaxIdleConnsPerHost: 10,
 		IdleConnTimeout:     90 * time.Second,
 	},
+}
+
+// withTimeout bounds a request by timeout; 0 leaves only ClientTimeout.
+func withTimeout(httpRequest *http.Request, timeout time.Duration) (*http.Request, context.CancelFunc) {
+	ctx := httpRequest.Context()
+	cancel := context.CancelFunc(func() {})
+
+	if timeout > 0 {
+		ctx, cancel = context.WithTimeout(ctx, timeout)
+	}
+
+	result := httpRequest.WithContext(ctx)
+
+	return result, cancel
 }
 
 func sendRequest(r *http.Request) (*http.Response, error) {

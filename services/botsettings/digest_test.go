@@ -192,7 +192,7 @@ func TestLoopAppliesDirectChangesRejectsApprovalOnesAndFlushesAtShutdown(t *test
 		t.Fatalf("the direct change must apply: %s, TikTok %v", directStatus, config.IsTikTokEnabled())
 	}
 
-	if (raiseStatus != settings.StatusRejected) || (raiseErr != requestApprovalError) || (config.GetApifyMonthlyBudgetUsd() != 4.8) {
+	if (raiseStatus != settings.StatusRejected) || (raiseErr != requestNoApproverError) || (config.GetApifyMonthlyBudgetUsd() != 4.8) {
 		t.Fatalf("the budget raise must wait for approval: %s (%s), budget %v", raiseStatus, raiseErr, config.GetApifyMonthlyBudgetUsd())
 	}
 

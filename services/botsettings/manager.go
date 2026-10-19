@@ -64,6 +64,9 @@ type Options struct {
 	// expires_at has passed (checked every 2 s), so a stale request never
 	// keeps its key's one open request slot.
 	ApplyRequests bool
+	// Approver asks the owner to approve a change in Telegram; nil (no
+	// ADMIN_USER_ID) rejects every change that needs approval.
+	Approver Approver
 }
 
 // Manager is the settings goroutine. Load runs once at start; Run is the
@@ -90,6 +93,10 @@ type Manager struct {
 	applyRequests bool
 	// digest collects the applied changes for the owner's message.
 	digest *changeDigest
+	// approver asks the owner; taps carries the owner's taps to the loop.
+	approver Approver
+	taps     chan approvalTap
+	tapWait  time.Duration
 
 	requestEvery   time.Duration
 	reloadEvery    time.Duration
@@ -136,6 +143,9 @@ func New(options Options) *Manager {
 
 		applyRequests: options.ApplyRequests,
 		digest:        newChangeDigest(),
+		approver:      options.Approver,
+		taps:          make(chan approvalTap),
+		tapWait:       tapWait,
 	}
 
 	return result
@@ -235,10 +245,10 @@ func (m *Manager) Wait() {
 	m.wg.Wait()
 }
 
-// Run is the loop: every 2 s the queued requests (applied when applying them
-// is on, else only the expired ones marked expired), a due profile push and
-// a due change digest; a full reload with the heartbeat every 60 s. It stops
-// once ctx is done, sending the pending digest first.
+// Run is the loop: every 2 s the expiry sweep, the queued requests (when
+// applying them is on), a due profile push and a due change digest; a full
+// reload with the heartbeat every 60 s; the owner's approval taps as they
+// come. It stops once ctx is done, sending the pending digest first.
 func (m *Manager) Run(ctx context.Context) {
 	defer m.wg.Done()
 	requestTicker := time.NewTicker(m.requestEvery)
@@ -260,30 +270,36 @@ func (m *Manager) Run(ctx context.Context) {
 		case <-reloadTicker.C:
 			m.reload(ctx)
 			m.flushDigestIfDue()
+		case tap := <-m.taps:
+			tap.reply <- m.handleTap(ctx, tap)
 		}
 	}
 }
 
-// processRequestsIfEnabled processes the queued requests when the manager
-// was built with ApplyRequests; without it, it only expires the queued
-// requests whose expires_at has passed.
+// processRequestsIfEnabled expires the requests past their expires_at,
+// then processes the queued ones when the manager was built with
+// ApplyRequests.
 func (m *Manager) processRequestsIfEnabled(ctx context.Context) {
+	m.expireRequests(ctx)
+
 	if m.applyRequests == true {
 		m.processRequests(ctx)
 	}
-
-	if m.applyRequests == false {
-		m.expireRequests(ctx)
-	}
 }
 
-// expireRequests marks the queued requests past their expires_at expired.
-func (m *Manager) expireRequests(ctx context.Context) int64 {
-	result, err := m.store.ExpireRequests(ctx)
+// expireRequests marks the queued and awaiting requests past their
+// expires_at expired and shows it in their approval messages.
+func (m *Manager) expireRequests(ctx context.Context) int {
+	expired, err := m.store.ExpireRequests(ctx)
 	m.recordDBResult(err, "expire settings requests")
+	result := len(expired)
+
+	for _, request := range expired {
+		m.editApproval(request, request.ApprovalMessageID, settings.StatusExpired, "")
+	}
 
 	if result > 0 {
-		log.Printf("⚙️ Expired %d settings request(s): applying requests is off", result)
+		log.Printf("⚙️ Expired %d settings request(s)", result)
 	}
 
 	return result
@@ -310,16 +326,23 @@ func (m *Manager) processRequests(ctx context.Context) int {
 }
 
 // processNextRequest handles the oldest queued request. The snapshot changes
-// only after the transaction that applied it committed.
+// only after the transaction that applied it committed; a request that
+// needs approval is sent to the owner after its commit.
 func (m *Manager) processNextRequest(ctx context.Context) bool {
-	request, decision, isClaimed, err := m.store.ProcessNextRequest(ctx, decideRequest)
+	request, decision, isClaimed, err := m.store.ProcessNextRequest(ctx, m.decide)
 	m.recordDBResult(err, "process settings requests")
+	isAwaiting := (isClaimed == true) && (decision.IsAwaitingApproval() == true)
+	isRefused := (isClaimed == true) && (decision.IsApplied() == false) && (isAwaiting == false)
 
 	if (isClaimed == true) && (decision.IsApplied() == true) {
-		m.applyCommitted(ctx, request, decision)
+		m.applyCommitted(ctx, request, decision, request.Source)
 	}
 
-	if (isClaimed == true) && (decision.IsApplied() == false) {
+	if isAwaiting == true {
+		m.askApproval(ctx, request, decision)
+	}
+
+	if isRefused == true {
 		log.Printf("⚙️ Settings request #%d (%s) %s: %s", request.ID, request.Key, decision.Status, decision.Error)
 	}
 
@@ -327,8 +350,8 @@ func (m *Manager) processNextRequest(ctx context.Context) bool {
 }
 
 // applyCommitted puts an applied request into the snapshot, the cache and
-// the published state.
-func (m *Manager) applyCommitted(ctx context.Context, request ChangeRequest, decision Decision) {
+// the published state; actor names it in the digest.
+func (m *Manager) applyCommitted(ctx context.Context, request ChangeRequest, decision Decision, actor string) {
 	oldValue := effectiveValue(request.Key)
 	values := m.storedValues()
 	values = withoutKey(values, request.Key)
@@ -343,7 +366,7 @@ func (m *Manager) applyCommitted(ctx context.Context, request ChangeRequest, dec
 	m.publishSettings(ctx)
 	text := describeChange(request.Key, oldValue, decision.TypedValue, request.IsReset())
 	appliedAt := m.now()
-	m.digest.add(digestEntry{At: appliedAt, Text: text, Actor: request.Source})
+	m.digest.add(digestEntry{At: appliedAt, Text: text, Actor: actor})
 	log.Printf("⚙️ Settings request #%d applied: %s = %s (from %s)", request.ID, request.Key, describeValue(decision), request.Source)
 }
 

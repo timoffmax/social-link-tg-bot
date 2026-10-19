@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 // sendOutcomeToken is the bot token of these tests; no error may show it.
@@ -86,5 +87,35 @@ func TestSendWithAnAnswerCutOffBeforeItsEndHasNoAnswer(t *testing.T) {
 
 	if (err == nil) || (errors.Is(err, ErrNotSent) == true) || (info.StatusCode != 0) || (info.HTTPStatus != http.StatusOK) || (strings.Contains(err.Error(), sendOutcomeToken) == true) {
 		t.Fatalf("expected a cut-off answer to count as no answer, got %v %+v", err, info)
+	}
+}
+
+func TestSendGivesUpAfterItsTimeout(t *testing.T) {
+	release := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-release:
+		case <-r.Context().Done():
+		}
+	}))
+	defer server.Close()
+	defer close(release)
+
+	t.Setenv("TG_BOT_TOKEN", sendOutcomeToken)
+	previous := SetAPIURLTemplate(server.URL + "/bot{{token}}/{{method_name}}")
+	t.Cleanup(func() { SetAPIURLTemplate(previous) })
+	request := AuthorizedRequest{
+		ApiMethod:          "editMessageText",
+		RequestMethod:      RequestMethodPOST,
+		RequestContentType: ContentTypeJson,
+		Payload:            map[string]string{"text": "hi"},
+		Timeout:            50 * time.Millisecond,
+	}
+	result := map[string]interface{}{}
+	started := time.Now()
+	info, err := request.Send(&result)
+
+	if (err == nil) || (info.StatusCode != 0) || (time.Since(started) > 5*time.Second) || (strings.Contains(err.Error(), sendOutcomeToken) == true) {
+		t.Fatalf("expected a timeout without an answer, got %v %+v after %v", err, info, time.Since(started))
 	}
 }

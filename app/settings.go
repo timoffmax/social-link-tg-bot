@@ -33,6 +33,7 @@ func initSettings(dbErr error) {
 		Notify:        services.NotifyAdminUnthrottled,
 		PushProfile:   pushBotProfile,
 		ApplyRequests: true,
+		Approver:      newSettingsApprover(),
 	}
 	settingsManager = botsettings.New(options)
 	ctx := context.Background()

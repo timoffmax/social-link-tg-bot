@@ -13,12 +13,16 @@ import (
 	"github.com/timoffmax/social-link-bot/model/settings"
 )
 
-// fakeRequest is one queued request of the fake store.
+// fakeRequest is one request of the fake store; request.IsExpired stands
+// for the DB clock having passed its expires_at.
 type fakeRequest struct {
 	request ChangeRequest
 	status  string
 	err     string
 }
+
+// fakeExpiresAt is the expiry the fake store gives an awaiting request.
+var fakeExpiresAt = time.Date(2026, 10, 19, 12, 15, 0, 0, time.UTC)
 
 // fakeStore is an in-memory Store with the same decide-and-record contract
 // as pgStore.
@@ -29,6 +33,8 @@ type fakeStore struct {
 	statuses map[string]json.RawMessage
 	loadErr  error
 	nextID   int64
+	// decideErr fails DecideApproval without changing anything.
+	decideErr error
 	// isHanging makes LoadSettings and PublishStatus block until their
 	// context is done, like a database that accepts the connection but
 	// never answers.
@@ -92,9 +98,15 @@ func (s *fakeStore) ProcessNextRequest(ctx context.Context, decide func(ChangeRe
 	if claimed != nil {
 		request = claimed.request
 		request.StoredCurrent = s.rows[request.Key]
+		request.AwaitingCount = s.countStatus(settings.StatusAwaitingApproval)
 		decision = decideClaimed(request, decide)
 		claimed.status = decision.Status
 		claimed.err = decision.Error
+	}
+
+	if (claimed != nil) && (decision.IsAwaitingApproval() == true) {
+		decision.ExpiresAt = fakeExpiresAt
+		claimed.request.IsExpired = false
 	}
 
 	if (claimed != nil) && (decision.IsApplied() == true) && (decision.Value == nil) {
@@ -108,20 +120,127 @@ func (s *fakeStore) ProcessNextRequest(ctx context.Context, decide func(ChangeRe
 	return request, decision, (claimed != nil), nil
 }
 
-func (s *fakeStore) ExpireRequests(ctx context.Context) (int64, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	result := int64(0)
+func (s *fakeStore) countStatus(status string) int {
+	result := 0
 
-	for _, queued := range s.requests {
-		if (queued.status == settings.StatusQueued) && (queued.request.IsExpired == true) {
-			queued.status = settings.StatusExpired
-			queued.err = requestExpiredError
+	for _, request := range s.requests {
+		if request.status == status {
 			result++
 		}
 	}
 
+	return result
+}
+
+func (s *fakeStore) find(requestID int64) *fakeRequest {
+	var result *fakeRequest
+
+	for _, request := range s.requests {
+		if request.request.ID == requestID {
+			result = request
+		}
+	}
+
+	return result
+}
+
+func (s *fakeStore) ExpireRequests(ctx context.Context) ([]ChangeRequest, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	result := []ChangeRequest{}
+
+	for _, open := range s.requests {
+		isOpen := (open.status == settings.StatusQueued) || (open.status == settings.StatusAwaitingApproval)
+
+		if (isOpen == true) && (open.request.IsExpired == true) {
+			open.err = requestApprovalExpiredError
+
+			if open.status == settings.StatusQueued {
+				open.err = requestExpiredError
+			}
+
+			open.status = settings.StatusExpired
+			result = append(result, open.request)
+		}
+	}
+
 	return result, nil
+}
+
+func (s *fakeStore) SetApprovalMessage(ctx context.Context, requestID int64, messageID int64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	found := s.find(requestID)
+
+	if (found != nil) && (found.status == settings.StatusAwaitingApproval) {
+		found.request.ApprovalMessageID = messageID
+	}
+
+	return nil
+}
+
+func (s *fakeStore) RejectAwaiting(ctx context.Context, requestID int64, reason string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	found := s.find(requestID)
+	result := (found != nil) && (found.status == settings.StatusAwaitingApproval)
+
+	if result == true {
+		found.status = settings.StatusRejected
+		found.err = reason
+	}
+
+	return result, nil
+}
+
+// DecideApproval mirrors pgStore: a conditional claim of an awaiting,
+// unexpired request, else the request's state (expiring it when due).
+func (s *fakeStore) DecideApproval(ctx context.Context, requestID int64, isApprove bool, decide func(ChangeRequest) Decision) (ApprovalOutcome, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	result := ApprovalOutcome{}
+	found := s.find(requestID)
+	isAwaiting := (found != nil) && (found.status == settings.StatusAwaitingApproval) && (s.decideErr == nil)
+	isClaimable := (isAwaiting == true) && (found.request.IsExpired == false)
+
+	if (isAwaiting == true) && (isClaimable == false) {
+		found.status = settings.StatusExpired
+		found.err = requestApprovalExpiredError
+	}
+
+	if isClaimable == true {
+		result = s.decideFound(found, isApprove, decide)
+	}
+
+	if (isClaimable == false) && (found != nil) {
+		result = ApprovalOutcome{Request: found.request, Status: found.status, Error: found.err}
+	}
+
+	return result, s.decideErr
+}
+
+func (s *fakeStore) decideFound(found *fakeRequest, isApprove bool, decide func(ChangeRequest) Decision) ApprovalOutcome {
+	request := found.request
+	request.StoredCurrent = s.rows[request.Key]
+	decision := rejected(requestOwnerRejectedError)
+
+	if isApprove == true {
+		decision = decide(request)
+	}
+
+	if (decision.IsApplied() == true) && (decision.Value == nil) {
+		delete(s.rows, request.Key)
+	}
+
+	if (decision.IsApplied() == true) && (decision.Value != nil) {
+		s.rows[request.Key] = decision.Value
+	}
+
+	found.status = decision.Status
+	found.err = decision.Error
+	result := ApprovalOutcome{Request: request, Decision: decision, Status: decision.Status, Error: decision.Error}
+
+	return result
 }
 
 func (s *fakeStore) PublishStatus(ctx context.Context, component string, data json.RawMessage) error {
@@ -158,6 +277,19 @@ func (s *fakeStore) requestStatus(request *fakeRequest) (string, string) {
 	defer s.mu.Unlock()
 
 	return request.status, request.err
+}
+
+func (s *fakeStore) expire(request *fakeRequest) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	request.request.IsExpired = true
+}
+
+func (s *fakeStore) messageID(request *fakeRequest) int64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return request.request.ApprovalMessageID
 }
 
 func (s *fakeStore) setRow(key string, value string) {

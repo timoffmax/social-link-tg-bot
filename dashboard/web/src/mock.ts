@@ -13,6 +13,12 @@
 // queued; the first change of the bot-wide restricted-posts cap is rejected as
 // "changed meanwhile, reload", and the Reddit proxy has a change queued from
 // another tab at load, so changing it answers 409 until that one is applied.
+// Changes that need the owner's approval wait for it about 10 seconds and are
+// then approved, except a lower HikerAPI price, which the owner rejects, and a
+// new vxreddit host, which nobody approves, so it expires after 30 seconds.
+// At most 3 changes wait for approval at once; a fourth is rejected, as the
+// bot does. ?mock=noadmin shows ADMIN_USER_ID as not set, so changes that
+// need approval are refused.
 // ?mock=stale shows the bot as not running and a failed profile push.
 
 import type {
@@ -63,8 +69,8 @@ const PLATFORM_WEIGHT: Record<string, number> = {
   unknown: 0.1,
 };
 
-type Mode = 'data' | 'empty' | 'error' | 'conflict' | 'stale';
-const MODES: Mode[] = ['data', 'empty', 'error', 'conflict', 'stale'];
+type Mode = 'data' | 'empty' | 'error' | 'conflict' | 'stale' | 'noadmin';
+const MODES: Mode[] = ['data', 'empty', 'error', 'conflict', 'stale', 'noadmin'];
 
 function isMode(value: string | null): value is Mode {
   return MODES.includes(value as Mode);
@@ -821,10 +827,22 @@ function reportRequest(method: string, path: string, body: unknown): unknown {
 const SETTINGS_PREFIX = '/api/settings';
 const APPLY_DELAY_MS = 3_000;
 const OTHER_TAB_DELAY_MS = 8_000;
+const APPROVAL_DELAY_MS = 10_000;
 const REQUEST_TTL_MS = 10 * 60_000;
+const APPROVAL_TTL_MS = 15 * 60_000;
+const UNAPPROVED_TTL_MS = 30_000;
 const CHANGED_ERROR = 'changed meanwhile, reload';
-const APPROVAL_ERROR = 'needs the owner\'s approval in Telegram, which is not available yet';
+const OWNER_REJECTED_ERROR = 'rejected by the owner in Telegram';
+const APPROVAL_EXPIRED_ERROR = 'expired: the owner did not answer in Telegram within 15 minutes';
+const NO_APPROVER_ERROR = 'needs the owner\'s approval, but ADMIN_USER_ID is not set';
+const TOO_MANY_AWAITING_ERROR = 'too many changes waiting for approval';
+const MAX_AWAITING_APPROVAL = 3;
+const QUEUE_EXPIRED_ERROR = 'expired: the bot did not apply it within 10 minutes';
+const DASHBOARD_NOTE = 'dashboard request';
+const APPROVED_NOTE = 'approved in Telegram';
 const REJECTED_ONCE_KEY = 'gated.global_monthly_cap';
+const OWNER_REJECTS_KEY = 'paid.hiker.price_per_request_usd';
+const NEVER_APPROVED_KEY = 'service.vxreddit.host';
 
 type RegistryEntry = Omit<SettingRow, 'effective' | 'stored' | 'open_request' | 'last_change'>;
 
@@ -1046,6 +1064,8 @@ interface MockRequest {
   request: SettingRequest;
   queuedAt: number;
   delay: number;
+  /** When the pretend bot sent the Approve / Reject message; 0 before. */
+  askedAt: number;
 }
 
 interface SettingsStore {
@@ -1080,7 +1100,7 @@ function effectiveOf(store: SettingsStore, entry: RegistryEntry): SettingRow['ef
   return result;
 }
 
-function addAudit(store: SettingsStore, key: string, oldValue: SettingValue | null, newValue: SettingValue | null, actor: AuditEntry['actor'], at: string, requestId: number | null): void {
+function addAudit(store: SettingsStore, key: string, oldValue: SettingValue | null, newValue: SettingValue | null, actor: AuditEntry['actor'], at: string, requestId: number | null, note: string = DASHBOARD_NOTE): void {
   store.audit.unshift({
     id: store.nextAuditId,
     key,
@@ -1089,7 +1109,7 @@ function addAudit(store: SettingsStore, key: string, oldValue: SettingValue | nu
     actor,
     db_role: (actor === 'manual') ? 'postgres' : 'social_link_bot',
     request_id: requestId,
-    note: (actor === 'manual') ? null : 'dashboard request',
+    note: (actor === 'manual') ? null : note,
     created_at: at,
   });
   store.nextAuditId += 1;
@@ -1109,7 +1129,7 @@ function newRequest(store: SettingsStore, draft: SettingChangeDraft, createdAt: 
     decided_at: null,
   };
   store.nextRequestId += 1;
-  store.requests.set(request.id, { request, queuedAt: createdAt, delay });
+  store.requests.set(request.id, { request, queuedAt: createdAt, delay, askedAt: 0 });
 
   return request;
 }
@@ -1143,6 +1163,45 @@ function rejectRequest(request: SettingRequest, error: string, decidedAt: string
   request.decided_at = decidedAt;
 }
 
+function expireRequest(request: SettingRequest, error: string, decidedAt: string): void {
+  request.status = 'expired';
+  request.error = error;
+  request.decided_at = decidedAt;
+}
+
+/** Writes the change, its audit row and the request's outcome, as the bot's apply transaction. */
+function applyRequest(store: SettingsStore, request: SettingRequest, decidedAt: string, note: string): void {
+  const oldValue = store.stored.get(request.key)?.value ?? null;
+  request.status = 'applied';
+  request.decided_at = decidedAt;
+  addAudit(store, request.key, oldValue, request.value, 'dashboard', decidedAt, request.id, note);
+
+  if (request.value === null) {
+    store.stored.delete(request.key);
+  }
+
+  if (request.value !== null) {
+    store.stored.set(request.key, { value: request.value, updated_at: decidedAt, updated_by: 'dashboard' });
+  }
+}
+
+/** Sends the Approve / Reject message: the request waits for the owner with the approval expiry. */
+function askApproval(item: MockRequest, now: number): void {
+  const request = item.request;
+  const ttl = (request.key === NEVER_APPROVED_KEY) ? UNAPPROVED_TTL_MS : APPROVAL_TTL_MS;
+  request.status = 'awaiting_approval';
+  request.needs_approval = true;
+  request.expires_at = new Date(now + ttl).toISOString();
+  item.askedAt = now;
+}
+
+/** How many requests wait for the owner's approval. */
+function awaitingCount(store: SettingsStore): number {
+  const awaiting = [...store.requests.values()].filter((item) => (item.request.status === 'awaiting_approval'));
+
+  return awaiting.length;
+}
+
 /** The pretend bot: decides queued requests once their delay has passed, as the real one would. */
 function decideRequest(store: SettingsStore, item: MockRequest, now: number): void {
   const request = item.request;
@@ -1155,39 +1214,58 @@ function decideRequest(store: SettingsStore, item: MockRequest, now: number): vo
   const isChanged = (sameValue(request.expected, current) === false) || isRejectedOnce;
   const isApproval = needsApproval(entry.approval, current, next);
   const isExpired = (now >= Date.parse(request.expires_at));
+  const isOpen = (isExpired === false) && (isChanged === false);
+  const hasApprover = (mockMode() !== 'noadmin');
+  const isFull = (awaitingCount(store) >= MAX_AWAITING_APPROVAL);
 
   if (isRejectedOnce) {
     store.isRejectedOnce = true;
   }
 
   if (isExpired) {
-    request.status = 'expired';
-    request.error = 'expired: the bot did not apply it within 10 minutes';
-    request.decided_at = decidedAt;
+    expireRequest(request, QUEUE_EXPIRED_ERROR, decidedAt);
   }
 
   if ((isExpired === false) && isChanged) {
     rejectRequest(request, CHANGED_ERROR, decidedAt, false);
   }
 
-  if ((isExpired === false) && (isChanged === false) && isApproval) {
-    rejectRequest(request, APPROVAL_ERROR, decidedAt, true);
+  if (isOpen && isApproval && (hasApprover === false)) {
+    rejectRequest(request, NO_APPROVER_ERROR, decidedAt, true);
   }
 
-  if ((isExpired === false) && (isChanged === false) && (isApproval === false)) {
-    const oldValue = store.stored.get(request.key)?.value ?? null;
-    request.status = 'applied';
+  if (isOpen && isApproval && hasApprover && isFull) {
+    rejectRequest(request, TOO_MANY_AWAITING_ERROR, decidedAt, true);
+  }
+
+  if (isOpen && isApproval && hasApprover && (isFull === false)) {
+    askApproval(item, now);
+  }
+
+  if (isOpen && (isApproval === false)) {
     request.needs_approval = false;
-    request.decided_at = decidedAt;
-    addAudit(store, request.key, oldValue, request.value, 'dashboard', decidedAt, request.id);
+    applyRequest(store, request, decidedAt, DASHBOARD_NOTE);
+  }
+}
 
-    if (request.value === null) {
-      store.stored.delete(request.key);
-    }
+/** The pretend owner: approves after a few seconds, except the rejected and the never-approved key. */
+function decideApproval(store: SettingsStore, item: MockRequest, now: number): void {
+  const request = item.request;
+  const decidedAt = new Date(now).toISOString();
+  const isExpired = (now >= Date.parse(request.expires_at));
+  const isAnswered = ((now - item.askedAt) >= APPROVAL_DELAY_MS) && (request.key !== NEVER_APPROVED_KEY);
+  const isRejected = (request.key === OWNER_REJECTS_KEY);
 
-    if (request.value !== null) {
-      store.stored.set(request.key, { value: request.value, updated_at: decidedAt, updated_by: 'dashboard' });
-    }
+  if (isExpired) {
+    expireRequest(request, APPROVAL_EXPIRED_ERROR, decidedAt);
+  }
+
+  if ((isExpired === false) && isAnswered && isRejected) {
+    rejectRequest(request, OWNER_REJECTED_ERROR, decidedAt, true);
+  }
+
+  if ((isExpired === false) && isAnswered && (isRejected === false)) {
+    applyRequest(store, request, decidedAt, APPROVED_NOTE);
   }
 }
 
@@ -1196,9 +1274,14 @@ function advanceRequests(store: SettingsStore): void {
 
   for (const item of store.requests.values()) {
     const isDue = (item.request.status === 'queued') && ((now - item.queuedAt) >= item.delay);
+    const isAwaiting = (item.request.status === 'awaiting_approval');
 
     if (isDue) {
       decideRequest(store, item, now);
+    }
+
+    if (isAwaiting) {
+      decideApproval(store, item, now);
     }
   }
 }
@@ -1269,7 +1352,7 @@ function listSettings(): SettingsResponse {
     },
     secrets: isEmpty ? null : {
       tg_bot_token: true,
-      admin_user_id: true,
+      admin_user_id: (mode !== 'noadmin'),
       apify_token: true,
       hiker_token: false,
       proxies: 0,

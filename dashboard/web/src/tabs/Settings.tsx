@@ -10,7 +10,9 @@ import {
   type AuditEntry,
   type AuditFilter,
   type AuditResponse,
+  type SecretsStatus,
   type SettingRequest,
+  type SettingRequestStatus,
   type SettingRow,
   type SettingSource,
   type SettingsResponse,
@@ -24,6 +26,7 @@ import { useApi } from '../hooks';
 import {
   actorLabel,
   APPLIED_SHOWN_MS,
+  approvalHint,
   clockOffset,
   conflictText,
   confirmText,
@@ -31,7 +34,6 @@ import {
   groupLabel,
   isOpenStatus,
   isQueueStuck,
-  minutesLeft,
   missingTokenText,
   moveItem,
   needsApproval,
@@ -39,6 +41,7 @@ import {
   parseNumber,
   pollDelay,
   rangeText,
+  requestStatusText,
   sameValue,
   serverNow,
   SETTINGS_REFRESH_MS,
@@ -49,7 +52,6 @@ import {
 } from '../settings';
 import type { TabProps } from './types';
 
-const APPROVAL_NOTE = 'Needs the owner’s approval in Telegram (coming soon): this change can’t be made from here yet.';
 const ALL_FILTER = '';
 const GROUP_FILTER_PREFIX = 'group:';
 const KEY_FILTER_PREFIX = 'key:';
@@ -66,13 +68,16 @@ function statusOf(error: unknown): number {
   return result;
 }
 
-/** A refused change as one sentence for its row; isStuck: only a running bot can clear the waiting change. */
-function sendErrorText(error: unknown, isStuck: boolean): string {
+/**
+ * A refused change as one sentence for its row; isStuck: only a running bot can clear the waiting
+ * change, openStatus: that change's status when the page knows it.
+ */
+function sendErrorText(error: unknown, isStuck: boolean, openStatus: SettingRequestStatus | null): string {
   const status = statusOf(error);
   let result = `The server didn’t accept the change (${messageOf(error)}). Try again.`;
 
   if (status === HTTP_CONFLICT) {
-    result = conflictText(isStuck);
+    result = conflictText(isStuck, openStatus);
   }
 
   if (status === HTTP_BAD_REQUEST) {
@@ -282,6 +287,8 @@ function useRequestFollow(onFinal: () => void, offset: number) {
     loop.current = own;
     setRequest(started);
     const isCurrent = () => (loop.current === own);
+    // The last answer: a waiting approval has a later expiry than the change had when queued.
+    let latest = started;
     const schedule = (latest: SettingRequest) => {
       const now = serverNow(offsetRef.current);
       const isWaiting = shouldPollRequest(latest.status, latest.expires_at, now);
@@ -299,14 +306,15 @@ function useRequestFollow(onFinal: () => void, offset: number) {
       getSettingRequest(started.id, own.controller.signal)
         .then((response) => {
           if (isCurrent()) {
-            setRequest(response.request);
-            schedule(response.request);
+            latest = response.request;
+            setRequest(latest);
+            schedule(latest);
           }
         })
         .catch(() => {
           // A failed check (network, restart) is retried until the change expires.
           if (isCurrent()) {
-            schedule(started);
+            schedule(latest);
           }
         });
     };
@@ -354,7 +362,7 @@ function SettingItem({ setting, data, offset, onFinal, onShowHistory }: SettingI
   const proposal = ((draft === null) || (current === null)) ? null : proposalOf(setting, draft);
   const isChanged = (proposal !== null) && (proposal.value !== null) && (sameValue(proposal.value, current) === false);
   const isApprovalNeeded = isChanged && (proposal?.value !== null) && needsApproval(setting.approval, current as SettingValue, proposal?.value as SettingValue);
-  const canSave = canChange && isChanged && (proposal?.error === null) && (isApprovalNeeded === false);
+  const canSave = canChange && isChanged && (proposal?.error === null);
   const tokenNote = missingTokenText(setting, data.secrets);
 
   // A change queued elsewhere (another tab, or before a reload) is followed too, so its outcome shows.
@@ -389,8 +397,8 @@ function SettingItem({ setting, data, offset, onFinal, onShowHistory }: SettingI
 
           const sentAt = serverNow(offset);
           const isStuck = isQueueStuck(data.bot, setting.open_request, sentAt);
-
-          const text = sendErrorText(error, isStuck);
+          const openStatus = setting.open_request?.status ?? null;
+          const text = sendErrorText(error, isStuck, openStatus);
 
           setSendError(text);
         })
@@ -399,14 +407,9 @@ function SettingItem({ setting, data, offset, onFinal, onShowHistory }: SettingI
   };
 
   const propose = (next: SettingValue | null) => {
-    const isBlocked = (next !== null) && (current !== null) && needsApproval(setting.approval, current, next);
-
-    setSendError(isBlocked ? APPROVAL_NOTE : null);
+    setSendError(null);
     followed.clear();
-
-    if (isBlocked === false) {
-      setConfirming({ next });
-    }
+    setConfirming({ next });
   };
 
   const onSubmit = (event: FormEvent) => {
@@ -470,13 +473,14 @@ function SettingItem({ setting, data, offset, onFinal, onShowHistory }: SettingI
 
       <div className="setting__feedback">
         {(proposal !== null) && isChanged && (proposal.error !== null) && <p className="field__error" role="alert">{capitalize(proposal.error)}.</p>}
-        {isApprovalNeeded && (proposal?.error === null) && <p className="setting__approval">{APPROVAL_NOTE}</p>}
-        {(sendError !== null) && <p className={(sendError === APPROVAL_NOTE) ? 'setting__approval' : 'field__error'} role="alert">{sendError}</p>}
+        {isApprovalNeeded && (proposal?.error === null) && (confirming === null) && <p className="setting__approval">{approvalHint(data.secrets)}</p>}
+        {(sendError !== null) && <p className="field__error" role="alert">{sendError}</p>}
         {(confirming !== null) && (current !== null) && (
           <ConfirmChange
             setting={setting}
             current={current}
             next={confirming.next}
+            secrets={data.secrets}
             busy={sending}
             onConfirm={() => send(confirming.next)}
             onCancel={() => setConfirming(null)}
@@ -679,15 +683,17 @@ interface ConfirmChangeProps {
   setting: SettingRow;
   current: SettingValue;
   next: SettingValue | null;
+  secrets: SecretsStatus | null;
   busy: boolean;
   onConfirm: () => void;
   onCancel: () => void;
 }
 
-function ConfirmChange({ setting, current, next, busy, onConfirm, onCancel }: ConfirmChangeProps) {
+function ConfirmChange({ setting, current, next, secrets, busy, onConfirm, onCancel }: ConfirmChangeProps) {
   const cancelButton = useRef<HTMLButtonElement>(null);
-  const text = confirmText(setting, current, next);
+  const text = confirmText(setting, current, next, secrets);
   const isStopping = (text.effect !== '');
+  const isApproval = (text.approval !== '');
 
   useEffect(() => {
     cancelButton.current?.focus();
@@ -696,8 +702,9 @@ function ConfirmChange({ setting, current, next, busy, onConfirm, onCancel }: Co
   return (
     <div className={isStopping ? 'notice notice--danger' : 'notice notice--warning'} role="alertdialog" aria-label={`Confirm: ${text.question}`}>
       <p><strong>{text.question}</strong>{isStopping && <> {text.effect}</>}</p>
+      {isApproval && <p className="setting__approval">{text.approval} <strong>{text.change}</strong></p>}
       <div className="notice__actions">
-        <button type="button" className={isStopping ? 'button button--danger' : 'button button--primary'} onClick={onConfirm} disabled={busy}>
+        <button type="button" className={isStopping ? 'button button--danger' : 'button button--primary'} onClick={onConfirm} disabled={busy || text.blocked}>
           {busy ? 'Sending…' : text.action}
         </button>
         <button ref={cancelButton} type="button" className="button button--quiet" onClick={onCancel} disabled={busy}>Cancel</button>
@@ -710,9 +717,9 @@ function ConfirmChange({ setting, current, next, busy, onConfirm, onCancel }: Co
 function RequestStatus({ request, offset }: { request: SettingRequest; offset: number }) {
   const [isFaded, setFaded] = useState(false);
   const now = serverNow(offset);
-  const isOpen = isOpenStatus(request.status);
-  const isOverdue = isOpen && (shouldPollRequest(request.status, request.expires_at, now) === false);
-  const left = minutesLeft(request.expires_at, now);
+  const isQueued = (request.status === 'queued') && shouldPollRequest(request.status, request.expires_at, now);
+  const isApplied = (request.status === 'applied');
+  const text = requestStatusText(request, now);
 
   useEffect(() => {
     const timer = (request.status === 'applied') ? window.setTimeout(() => setFaded(true), APPLIED_SHOWN_MS) : undefined;
@@ -722,16 +729,9 @@ function RequestStatus({ request, offset }: { request: SettingRequest; offset: n
 
   return (
     <div className={`setting__status setting__status--${request.status}${isFaded ? ' is-faded' : ''}`} role="status">
-      {(request.status === 'queued') && (isOverdue === false) && (
-        <><span className="spinner" aria-hidden="true" />Waiting for the bot to apply {formatValue(request.value)} (expires in {left} min)</>
-      )}
-      {(request.status === 'awaiting_approval') && (isOverdue === false) && (
-        <>Waiting for your Approve in Telegram (expires in {left} min)</>
-      )}
-      {isOverdue && <>Expired: the bot did not pick it up in time. Is the bot running?</>}
-      {(request.status === 'applied') && <><span aria-hidden="true">✓</span> Applied {(request.value === null) ? 'the reset' : formatValue(request.value)}</>}
-      {(request.status === 'rejected') && <>Not applied: {request.error ?? 'refused by the bot'}</>}
-      {(request.status === 'expired') && <>Expired: {request.error ?? 'the bot did not apply it within 10 minutes'}</>}
+      {isQueued && <span className="spinner" aria-hidden="true" />}
+      {isApplied && <><span aria-hidden="true">✓</span> </>}
+      {text}
     </div>
   );
 }
