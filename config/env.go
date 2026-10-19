@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/joho/godotenv"
+	"github.com/timoffmax/social-link-bot/model/settings"
 )
 
 const tgBotTokenKey = "TG_BOT_TOKEN"
@@ -37,34 +38,45 @@ func GetTgBotToken() string {
 	return os.Getenv(tgBotTokenKey)
 }
 
-// Proxy configuration with global and per-platform disable options
+// IsProxyEnabled reports whether the proxy pool may be used at all
+// (proxy.enabled, else ENABLE_PROXIES, on by default).
 func IsProxyEnabled() bool {
-	return getBoolEnv("ENABLE_PROXIES", true)
+	result := proxyEnabledSetting.value()
+
+	return result
 }
 
+func isProxyEnabledFromEnv() bool {
+	result := getBoolEnv("ENABLE_PROXIES", true)
+
+	return result
+}
+
+// IsProxyEnabledForPlatform reports whether a platform uses the proxy pool:
+// only while proxies are on, then by its proxy.<platform>.enabled switch
+// (else ENABLE_<PLATFORM>_PROXY; YouTube off, the others on by default). A
+// platform without a switch uses the pool whenever proxies are on.
 func IsProxyEnabledForPlatform(platform string) bool {
-	// Check global proxy setting first
-	if !IsProxyEnabled() {
-		return false
+	isProxyOn := IsProxyEnabled()
+	key, hasSwitch := settings.ProxyEnabledKey(platform)
+	result := (isProxyOn == true)
+
+	if (isProxyOn == true) && (hasSwitch == true) {
+		result = boolSettingValue(key)
 	}
 
-	// Check platform-specific proxy settings
-	switch platform {
-	case "youtube":
-		return getBoolEnv("ENABLE_YOUTUBE_PROXY", false) // YouTube defaults to no proxy
-	case "twitter":
-		return getBoolEnv("ENABLE_TWITTER_PROXY", true)
-	case "tiktok":
-		return getBoolEnv("ENABLE_TIKTOK_PROXY", true)
-	case "9gag":
-		return getBoolEnv("ENABLE_9GAG_PROXY", true)
-	case "facebook":
-		return getBoolEnv("ENABLE_FACEBOOK_PROXY", true)
-	case "reddit":
-		return getBoolEnv("ENABLE_REDDIT_PROXY", true)
-	default:
-		return true // Default to enabled for unknown platforms
+	return result
+}
+
+// boolFromEnv returns a reader of a boolean env variable.
+func boolFromEnv(envVar string, defaultValue bool) func() bool {
+	result := func() bool {
+		value := getBoolEnv(envVar, defaultValue)
+
+		return value
 	}
+
+	return result
 }
 
 // Unified proxy configuration for all platforms except YouTube
@@ -96,39 +108,74 @@ func GetYouTubeDelay() string {
 	return delay
 }
 
-// Platform enablement configuration
-// Returns true if platform is enabled, false if disabled
+// IsYouTubeEnabled reports whether YouTube links are processed.
 func IsYouTubeEnabled() bool {
-	return getBoolEnv("ENABLE_YOUTUBE", true)
+	result := platformYouTubeEnabledSetting.value()
+
+	return result
 }
 
+// IsTwitterEnabled reports whether Twitter/X links are processed.
 func IsTwitterEnabled() bool {
-	return getBoolEnv("ENABLE_TWITTER", true)
+	result := platformTwitterEnabledSetting.value()
+
+	return result
 }
 
+// IsTikTokEnabled reports whether TikTok links are processed.
 func IsTikTokEnabled() bool {
-	return getBoolEnv("ENABLE_TIKTOK", true)
+	result := platformTikTokEnabledSetting.value()
+
+	return result
 }
 
+// IsInstagramEnabled reports whether Instagram links are processed.
 func IsInstagramEnabled() bool {
-	return getBoolEnv("ENABLE_INSTAGRAM", true)
+	result := platformInstagramEnabledSetting.value()
+
+	return result
 }
 
+// IsFacebookEnabled reports whether Facebook links are processed.
 func IsFacebookEnabled() bool {
-	return getBoolEnv("ENABLE_FACEBOOK", true)
+	result := platformFacebookEnabledSetting.value()
+
+	return result
 }
 
+// IsRedditEnabled reports whether Reddit links are processed.
 func IsRedditEnabled() bool {
-	return getBoolEnv("ENABLE_REDDIT", true)
+	result := platformRedditEnabledSetting.value()
+
+	return result
 }
 
+// Is9GAGEnabled reports whether 9GAG links are processed.
 func Is9GAGEnabled() bool {
-	return getBoolEnv("ENABLE_9GAG", true)
+	result := platform9GAGEnabledSetting.value()
+
+	return result
 }
 
 // IsThreadsEnabled reports whether Threads links are processed.
 func IsThreadsEnabled() bool {
-	result := getBoolEnv("ENABLE_THREADS", true)
+	result := platformThreadsEnabledSetting.value()
+
+	return result
+}
+
+// dbConfigKeys are the variables InitDatabase connects with.
+var dbConfigKeys = []string{dbHostKey, dbPortKey, dbNameKey, dbUserKey, dbPasswordKey, dbSSLModeKey}
+
+// IsDatabaseConfigured reports whether any DB_* variable is set (non-empty).
+// The bot connects with the defaults even without one; this only tells a
+// database that was set up apart from none at all.
+func IsDatabaseConfigured() bool {
+	result := false
+
+	for _, key := range dbConfigKeys {
+		result = result || (os.Getenv(key) != "")
+	}
 
 	return result
 }
@@ -173,8 +220,16 @@ func GetDBSSLMode() string {
 	return "disable"
 }
 
-// Media tracking configuration
+// GetDefaultDailyMediaLimit returns the default daily media limit per person
+// (limits.default_daily_media, else DEFAULT_DAILY_MEDIA_LIMIT); 0 means no
+// limit.
 func GetDefaultDailyMediaLimit() int {
+	result := defaultDailyMediaLimitSetting.value()
+
+	return result
+}
+
+func getDefaultDailyMediaLimitFromEnv() int {
 	if limit := os.Getenv("DEFAULT_DAILY_MEDIA_LIMIT"); limit != "" {
 		// Parse the limit, default to 0 if invalid
 		if parsed, err := strconv.Atoi(limit); err == nil {
@@ -187,8 +242,15 @@ func GetDefaultDailyMediaLimit() int {
 // Instagram service configuration
 // Returns the service name (without .com) to use for Instagram preview links.
 // Recognizes: toinstagram, onebigram. Dead aliases (kksave, kkinstagram,
-// instagramez, ddinstagram) are migrated to toinstagram.
+// instagramez, ddinstagram) are migrated to toinstagram. The owner's
+// platform.instagram.fixed_link_service comes first.
 func GetInstagramService() string {
+	result := instagramFixedLinkServiceSetting.value()
+
+	return result
+}
+
+func getInstagramServiceFromEnv() string {
 	service := strings.ToLower(strings.TrimSpace(os.Getenv("INSTAGRAM_SERVICE")))
 
 	switch service {
@@ -215,6 +277,12 @@ func GetAdminUserID() int64 {
 // GetKKInstagramHost returns the kkinstagram-style redirector host used to
 // resolve Instagram media via a 302 to the Instagram CDN.
 func GetKKInstagramHost() string {
+	result := serviceKKInstagramHostSetting.value()
+
+	return result
+}
+
+func getKKInstagramHostFromEnv() string {
 	host := strings.TrimSpace(os.Getenv("KKINSTAGRAM_HOST"))
 	if host == "" {
 		return "kkinstagram.com"
@@ -226,6 +294,12 @@ func GetKKInstagramHost() string {
 // GetKKTikTokHost returns the kktiktok-style redirector host used to resolve
 // TikTok videos via a 302 to the TikTok CDN.
 func GetKKTikTokHost() string {
+	result := serviceKKTikTokHostSetting.value()
+
+	return result
+}
+
+func getKKTikTokHostFromEnv() string {
 	host := strings.TrimSpace(os.Getenv("KKTIKTOK_HOST"))
 	if host == "" {
 		return "kktiktok.com"
@@ -237,6 +311,12 @@ func GetKKTikTokHost() string {
 // GetVxredditHost returns the vxreddit-style frontend host used to resolve
 // Reddit media (video re-served from its own CDN) from datacenter IPs.
 func GetVxredditHost() string {
+	result := serviceVxredditHostSetting.value()
+
+	return result
+}
+
+func getVxredditHostFromEnv() string {
 	host := strings.TrimSpace(os.Getenv("VXREDDIT_HOST"))
 	if host == "" {
 		return "vxreddit.com"
@@ -251,6 +331,12 @@ const defaultFacebedHost = "www.facebed.com"
 // GetFacebedHost returns the facebed-style embed host that reads public
 // Facebook posts (Facebook walls the bot's datacenter IP).
 func GetFacebedHost() string {
+	result := serviceFacebedHostSetting.value()
+
+	return result
+}
+
+func getFacebedHostFromEnv() string {
 	rawHost := os.Getenv("FACEBED_HOST")
 	host := strings.TrimSpace(rawHost)
 	result := host
@@ -299,6 +385,12 @@ func GetApifyInstagramActor() string {
 // GetGatedFetchGlobalMonthlyCap returns the bot-wide monthly cap of paid
 // gated-post fetches; 0 disables the feature.
 func GetGatedFetchGlobalMonthlyCap() int {
+	result := gatedGlobalMonthlyCapSetting.value()
+
+	return result
+}
+
+func getGatedFetchGlobalMonthlyCapFromEnv() int {
 	result := getCapEnv(gatedFetchGlobalMonthlyCapKey, defaultGatedFetchGlobalMonthlyCap)
 
 	return result
@@ -307,6 +399,12 @@ func GetGatedFetchGlobalMonthlyCap() int {
 // GetGatedFetchUserMonthlyAllowance returns the default monthly allowance of
 // gated-post fetches per user in private chats; 0 disables private use.
 func GetGatedFetchUserMonthlyAllowance() int {
+	result := gatedUserMonthlyAllowanceSetting.value()
+
+	return result
+}
+
+func getGatedFetchUserMonthlyAllowanceFromEnv() int {
 	result := getIntEnv(gatedFetchUserMonthlyAllowKey, defaultGatedFetchUserMonthlyAllow)
 
 	return result
@@ -315,6 +413,12 @@ func GetGatedFetchUserMonthlyAllowance() int {
 // GetGatedFetchChatMonthlyCap returns the default monthly cap of gated-post
 // fetches for a group chat the owner enabled.
 func GetGatedFetchChatMonthlyCap() int {
+	result := gatedChatMonthlyCapSetting.value()
+
+	return result
+}
+
+func getGatedFetchChatMonthlyCapFromEnv() int {
 	result := getIntEnv(gatedFetchChatMonthlyCapKey, defaultGatedFetchChatMonthlyCap)
 
 	return result
@@ -329,6 +433,12 @@ const (
 // IsStarsSupportEnabled reports whether /support sells Telegram Stars support
 // tiers; off by default.
 func IsStarsSupportEnabled() bool {
+	result := starsEnabledSetting.value()
+
+	return result
+}
+
+func isStarsSupportEnabledFromEnv() bool {
 	result := getBoolEnv(starsSupportEnabledKey, defaultStarsSupportEnabled)
 
 	return result
@@ -347,6 +457,12 @@ const (
 // GetApifyMonthlyBudgetUsd returns the monthly Apify spend limit; a run that
 // could exceed it is refused (the free plan has $5 of credit).
 func GetApifyMonthlyBudgetUsd() float64 {
+	result := apifyMonthlyBudgetUsdSetting.value()
+
+	return result
+}
+
+func getApifyMonthlyBudgetUsdFromEnv() float64 {
 	result := defaultApifyMonthlyBudgetUsd
 	value := os.Getenv(apifyMonthlyBudgetUsdKey)
 	raw := strings.TrimSpace(value)
@@ -455,6 +571,12 @@ func GetHikerAPIToken() string {
 // GetHikerAPIMonthlyBudgetUsd returns the monthly HikerAPI spend limit
 // (counted by the bot's own ledger); 0 turns HikerAPI off.
 func GetHikerAPIMonthlyBudgetUsd() float64 {
+	result := hikerMonthlyBudgetUsdSetting.value()
+
+	return result
+}
+
+func getHikerAPIMonthlyBudgetUsdFromEnv() float64 {
 	result := getNonNegativeFloatEnv(hikerAPIMonthlyBudgetUsdKey, defaultHikerAPIMonthlyBudgetUsd)
 
 	return result
@@ -464,6 +586,12 @@ func GetHikerAPIMonthlyBudgetUsd() float64 {
 // costs, for the ledger and the budget check. It is always above 0 (0 or an
 // invalid value keeps the default), so the monthly budget always caps spend.
 func GetHikerAPIPricePerRequestUsd() float64 {
+	result := hikerPricePerRequestUsdSetting.value()
+
+	return result
+}
+
+func getHikerAPIPricePerRequestUsdFromEnv() float64 {
 	result := getPositiveFloatEnv(hikerAPIPricePerRequestUsdKey, defaultHikerAPIPricePerRequestUsd)
 
 	return result
@@ -472,6 +600,12 @@ func GetHikerAPIPricePerRequestUsd() float64 {
 // GetHikerAPILowBalanceRequests returns the requests left on the HikerAPI
 // account below which the owner is alerted.
 func GetHikerAPILowBalanceRequests() int {
+	result := hikerLowBalanceRequestsSetting.value()
+
+	return result
+}
+
+func getHikerAPILowBalanceRequestsFromEnv() int {
 	result := getIntEnv(hikerAPILowBalanceRequestsKey, defaultHikerAPILowBalanceRequests)
 
 	return result
@@ -480,6 +614,12 @@ func GetHikerAPILowBalanceRequests() int {
 // GetInstagramPaidProviders returns the paid Instagram providers in the order
 // they are tried (lowercase names; unknown ones are left to the caller).
 func GetInstagramPaidProviders() []string {
+	result := instagramProviderOrderSetting.value()
+
+	return result
+}
+
+func getInstagramPaidProvidersFromEnv() []string {
 	raw := getStringEnv(instagramPaidProvidersKey, defaultInstagramPaidProviders)
 	lowered := strings.ToLower(raw)
 	parts := strings.Split(lowered, instagramPaidProvidersSeparator)

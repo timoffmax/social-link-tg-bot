@@ -16,7 +16,8 @@ import (
 func Run() {
 	initApp()
 	initLogging()
-	initDatabase()
+	dbErr := initDatabase()
+	initSettings(dbErr)
 	runStartupChecks()
 	startCleanupTask()
 	startHealthMonitor()
@@ -42,8 +43,10 @@ func Run() {
 	}()
 
 	startReportReplyOutbox(ctx)
+	settingsManager.Start(ctx)
 	listenForUpdates(ctx)
 	waitForReportReplyOutbox()
+	settingsManager.Wait()
 	log.Printf("👋 Bot stopped gracefully")
 }
 
@@ -71,14 +74,11 @@ func runStartupChecks() {
 	checker := services.NewStartupChecker()
 	checker.RunStartupChecks()
 
-	if err := services.SetBotCommands(); err != nil {
-		log.Printf("⚠️ Warning: Failed to set bot commands: %v", err)
-	}
+	ctx := context.Background()
+	profileErr := settingsManager.PushInitialProfile(ctx)
 
-	descriptionsErr := services.SetBotDescriptions()
-
-	if descriptionsErr != nil {
-		log.Printf("⚠️ Warning: Failed to set bot descriptions: %v", descriptionsErr)
+	if profileErr != nil {
+		log.Printf("⚠️ Warning: Failed to set the bot profile (commands, descriptions): %v", profileErr)
 	}
 
 	log.Printf("✅ Startup complete")
@@ -92,7 +92,9 @@ func loadEnvFile() {
 	}
 }
 
-func initDatabase() {
+// initDatabase connects to the database; the settings need its error to
+// tell a database that is down from none configured.
+func initDatabase() error {
 	err := services.InitDatabase()
 
 	if err != nil {
@@ -101,6 +103,8 @@ func initDatabase() {
 	} else {
 		log.Printf("✅ Database initialized successfully")
 	}
+
+	return err
 }
 
 func startCleanupTask() {

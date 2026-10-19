@@ -68,7 +68,10 @@ Admin rights matter for one more thing: a message sent over a daily limit is del
 ```
 main.go              → app.Run()
 app/                 → polling loop, concurrent update processing, cleanup tasks
-config/              → environment configuration
+config/              → environment configuration; config/overrides holds the
+                       owner-set settings the getters read before .env
+model/settings/      → registry of the dashboard-managed settings (types,
+                       ranges, hard ceilings, .env fallbacks, approval rules)
 model/api/           → Telegram Bot API models (requests, payloads, responses)
 services/            → one extractor per platform + shared infrastructure:
                        smart_downloader (strategy pattern, method fallbacks),
@@ -85,10 +88,15 @@ services/            → one extractor per platform + shared infrastructure:
                        animation + media_prepare (pre-send step: GIFs,
                        photo limits, names by content),
                        video_converter, database, ...
+services/botsettings/ → settings goroutine: loads, reloads, cache file,
+                       bot_runtime_status, profile re-push; change-request
+                       applier built but off (ApplyRequests) until the Settings tab,
+                       expired requests marked expired meanwhile
 app/media_album.go   → mixed photo/video albums
 app/animation.go, app/document_fallback.go → animations in post order, documents
 migrations/          → PostgreSQL migrations (stats, limits, chat settings,
-                       blog posts, reports, gated-fetch quotas)
+                       blog posts, reports, gated-fetch quotas, paid requests,
+                       bot settings)
 bin/                 → deployment and server tooling
 cmd/dashboard/       → owner dashboard binary (social-link-dashboard)
 dashboard/           → dashboard HTTP server, JSON API and SQL; web/ is the React app
@@ -126,6 +134,8 @@ go build -o social-link-bot .
 | `STARS_SUPPORT_ENABLED` | Optional "support the developer" payments in Telegram Stars (tier buttons on `/donate`, alias `/support`; `/paysupport`, `/terms`); default `false` |
 
 See `.env.example` for the full annotated list.
+
+**Dashboard-managed settings.** The platform and proxy switches, `INSTAGRAM_SERVICE`, the free-service hosts (`KKINSTAGRAM_HOST`, `KKTIKTOK_HOST`, `VXREDDIT_HOST`, `FACEBED_HOST`), the Apify and HikerAPI budgets, `HIKERAPI_PRICE_PER_REQUEST_USD`, `HIKERAPI_LOW_BALANCE_REQUESTS`, `INSTAGRAM_PAID_PROVIDERS`, the `GATED_FETCH_*` quotas, `STARS_SUPPORT_ENABLED` and `DEFAULT_DAILY_MEDIA_LIMIT` may be overridden by a value the owner sets, stored in the database (`bot_settings`, migration 011). The bot uses that value first, then the `.env` one, then the default; with no stored values (the state after the migration) every setting has the value it had before. The platform lists of the bot's profile and `/start` / `/info` now leave out a platform switched off in `.env`. The values are applied by the bot itself and audited; the dashboard's Settings tab is not there yet. Secrets, `ADMIN_USER_ID`, the database and relay settings and the Apify actors stay in `.env` only. If the configured database is down at start, the bot uses the last values it cached (`var/settings-cache.json`) and alerts the owner; without any `DB_*` variable set the stored values play no part. See [docs/settings.md](docs/settings.md).
 
 ## Owner dashboard
 

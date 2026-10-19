@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/timoffmax/social-link-bot/config"
+	"github.com/timoffmax/social-link-bot/model/settings"
 	"github.com/timoffmax/social-link-bot/services"
 )
 
@@ -15,34 +16,64 @@ Send a social media link and I reply with the actual photos and videos, right in
 
 `
 
-// startPlatformsTemplate is the platform list of the /start menu; %s is
-// the Instagram Stories item, shown while the paid service is on.
-const startPlatformsTemplate = `🌐 <b>Supported platforms:</b>
-📷 <b>Instagram</b> — Posts, Reels%s
-🎵 <b>TikTok</b> — Videos, Photo Slideshows
-🐦 <b>Twitter/X</b> — Photos, Videos, GIFs, Tweet Text
-📺 <b>YouTube</b> — Shorts, Community Posts
-🔴 <b>Reddit</b> — Videos, Images, Galleries, GIFs, Text and Link Posts
-👥 <b>Facebook</b> — Videos, Reels, Photos, Text Posts
-😂 <b>9GAG</b> — Videos, Images, Articles
-🧵 <b>Threads</b> — Text, Photos, Videos, Carousels
+// startPlatformsTitle opens the platform list of the /start menu.
+const startPlatformsTitle = "🌐 <b>Supported platforms:</b>\n"
 
-`
+// startPlatformLines are the platform list's lines, by platform id; the
+// Instagram line takes the Stories item, shown while the paid service is on.
+var startPlatformLines = map[string]string{
+	settings.PlatformInstagram: "📷 <b>Instagram</b> — Posts, Reels%s\n",
+	settings.PlatformTikTok:    "🎵 <b>TikTok</b> — Videos, Photo Slideshows\n",
+	settings.PlatformTwitter:   "🐦 <b>Twitter/X</b> — Photos, Videos, GIFs, Tweet Text\n",
+	settings.PlatformYouTube:   "📺 <b>YouTube</b> — Shorts, Community Posts\n",
+	settings.PlatformReddit:    "🔴 <b>Reddit</b> — Videos, Images, Galleries, GIFs, Text and Link Posts\n",
+	settings.PlatformFacebook:  "👥 <b>Facebook</b> — Videos, Reels, Photos, Text Posts\n",
+	settings.Platform9GAG:      "😂 <b>9GAG</b> — Videos, Images, Articles\n",
+	settings.PlatformThreads:   "🧵 <b>Threads</b> — Text, Photos, Videos, Carousels\n",
+}
+
+// startNoPlatformsText replaces the lines while every platform is off.
+const startNoPlatformsText = "⏸ Link downloads are paused right now.\n"
 
 // startStoriesItem adds Stories to the Instagram platform line.
 const startStoriesItem = ", Stories"
 
-// startPlatformsText returns the platform list, with Stories while the paid
-// service that fetches them is on.
+// startPlatformsText returns the list of the platforms that are on, with
+// Stories while the paid service that fetches them is on.
 func startPlatformsText() string {
+	var text strings.Builder
 	storiesItem := ""
 	isPaidServiceOn := services.IsPaidServiceConfigured()
+	enabled := services.EnabledPlatforms()
 
 	if isPaidServiceOn == true {
 		storiesItem = startStoriesItem
 	}
 
-	result := fmt.Sprintf(startPlatformsTemplate, storiesItem)
+	text.WriteString(startPlatformsTitle)
+
+	for _, platformID := range enabled {
+		line := startPlatformLine(platformID, storiesItem)
+		text.WriteString(line)
+	}
+
+	if len(enabled) == 0 {
+		text.WriteString(startNoPlatformsText)
+	}
+
+	text.WriteString("\n")
+	result := text.String()
+
+	return result
+}
+
+// startPlatformLine returns one platform's line of the list.
+func startPlatformLine(platformID string, storiesItem string) string {
+	result := startPlatformLines[platformID]
+
+	if platformID == settings.PlatformInstagram {
+		result = fmt.Sprintf(result, storiesItem)
+	}
 
 	return result
 }

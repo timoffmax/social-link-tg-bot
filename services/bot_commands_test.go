@@ -3,7 +3,6 @@ package services
 import (
 	"strings"
 	"testing"
-	"unicode/utf16"
 	"unicode/utf8"
 )
 
@@ -71,11 +70,6 @@ func TestDonateDescriptionMentionsStarsOnlyWhenEnabled(t *testing.T) {
 	}
 }
 
-// utf16Length counts UTF-16 code units, the stricter way Telegram may count.
-func utf16Length(text string) int {
-	return len(utf16.Encode([]rune(text)))
-}
-
 func TestBotDescriptionsFitTelegramLimits(t *testing.T) {
 	t.Setenv("APIFY_TOKEN", "test-token")
 	t.Setenv("GATED_FETCH_USER_MONTHLY_ALLOWANCE", "1000")
@@ -86,7 +80,7 @@ func TestBotDescriptionsFitTelegramLimits(t *testing.T) {
 		maxLength int
 	}{
 		{BotDescription(), botDescriptionMaxLength},
-		{BotShortDescription, botShortDescriptionMaxLength},
+		{BotShortDescription(), botShortDescriptionMaxLength},
 	}
 
 	for _, description := range descriptions {

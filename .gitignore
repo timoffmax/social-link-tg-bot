@@ -57,3 +57,6 @@ bin/yt-dlp
 
 # Owner dashboard binary
 social-link-dashboard
+
+# Bot settings cache (written by the bot)
+/var/

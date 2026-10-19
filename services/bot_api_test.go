@@ -51,7 +51,7 @@ func TestPostBotAPITransportErrorHidesToken(t *testing.T) {
 	}
 }
 
-func TestSetBotDescriptionsSetsShortDescriptionWhenDescriptionFails(t *testing.T) {
+func TestPushBotProfileSetsShortDescriptionWhenDescriptionFails(t *testing.T) {
 	var mutex sync.Mutex
 	methods := []string{}
 	useBotAPIServer(t, func(w http.ResponseWriter, r *http.Request) {
@@ -65,13 +65,17 @@ func TestSetBotDescriptionsSetsShortDescriptionWhenDescriptionFails(t *testing.T
 		}
 	})
 
-	err := SetBotDescriptions()
+	known, _, err := PushBotProfile(map[string]string{}, RenderBotProfile())
 
 	if (err == nil) || (strings.Contains(err.Error(), "Too Many Requests") == false) {
 		t.Fatalf("expected the setMyDescription failure, got %v", err)
 	}
 
-	if strings.Join(methods, ",") != "setMyDescription,setMyShortDescription" {
-		t.Fatalf("expected both methods to be called, got %v", methods)
+	if strings.Join(methods, ",") != "setMyCommands,setMyDescription,setMyShortDescription" {
+		t.Fatalf("expected every method to be called, got %v", methods)
+	}
+
+	if (known[ProfileMethodDescription] != "") || (known[ProfileMethodShortDescription] == "") || (known[ProfileMethodCommands] == "") {
+		t.Fatalf("only the failed part must stay unknown, got %v", known)
 	}
 }
