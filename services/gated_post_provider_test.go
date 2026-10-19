@@ -149,7 +149,7 @@ func TestFetchGatedPostPassesNonGatedErrorsThrough(t *testing.T) {
 	downloadErr := fmt.Errorf("kkinstagram: bad status code: 504")
 	sd := &SmartDownloader{}
 
-	media, err := sd.FetchGatedPost("https://www.instagram.com/p/DeYsKEDjbGB/", downloadErr, -100, 1, false)
+	media, err := sd.FetchGatedPost("https://www.instagram.com/p/DeYsKEDjbGB/", downloadErr, DownloadRequester{ChatID: -100, UserID: 1, IsPrivate: false})
 
 	if (media != nil) || (err != downloadErr) {
 		t.Fatalf("expected the original error back, got %v", err)
@@ -161,7 +161,7 @@ func TestFetchGatedPostDeniesWithoutProvider(t *testing.T) {
 	downloadErr := fmt.Errorf("all extraction methods failed: %w", gatedErr)
 	sd := &SmartDownloader{}
 
-	_, err := sd.FetchGatedPost("https://www.instagram.com/p/DeYsKEDjbGB/", downloadErr, 5, 5, true)
+	_, err := sd.FetchGatedPost("https://www.instagram.com/p/DeYsKEDjbGB/", downloadErr, DownloadRequester{ChatID: 5, UserID: 5, IsPrivate: true})
 	deniedErr, isDenied := err.(*GatedFetchDeniedError)
 
 	if (isDenied == false) || (deniedErr.Denial != GatedFetchDeniedOff) {
@@ -347,5 +347,18 @@ func TestFitPrefixEndReportsWhenNothingFits(t *testing.T) {
 
 	if got := fitPrefixEnd("abc", 3, measure); got != 3 {
 		t.Fatalf("exact budget: got %d, want 3", got)
+	}
+}
+
+func TestApifyFetchPostKeepsTheBilledRunsErrorWhenTheRetryNeverStarts(t *testing.T) {
+	runs := 0
+	server := newFakeApifyWithLimits(t, `[]`, []string{apifyTestLowUsage, apifyLimitsFailed}, &runs)
+	provider := &ApifyInstagramProvider{tempDir: t.TempDir(), actor: "a~b", api: fakeApifyClient(server)}
+	apifyEmptyRetryDelay = 0
+
+	_, err := provider.FetchPost(gatedTestPostURL, false)
+
+	if (runs != 1) || (errors.Is(err, errApifyNoMedia) == false) || (isCostedSkip(err) == true) {
+		t.Fatalf("expected the billed run's error, got runs=%d err=%v", runs, err)
 	}
 }

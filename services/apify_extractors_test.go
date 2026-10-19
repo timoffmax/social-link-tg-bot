@@ -248,3 +248,56 @@ func TestYtDlpPlatformMatchesTwitterByHostOnly(t *testing.T) {
 		t.Fatalf("a URL containing x.com must not count as Twitter")
 	}
 }
+
+// apifyLimitsFailed marks a limits lookup newFakeApifyWithLimits answers with a 500.
+const apifyLimitsFailed = ""
+
+// newFakeApifyWithLimits answers the limits lookups with limits in order (the
+// last one repeated, apifyLimitsFailed for a 500) and every run with runBody.
+func newFakeApifyWithLimits(t *testing.T, runBody string, limits []string, runs *int) *httptest.Server {
+	lookups := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		isLimits := (r.URL.Path == "/users/me/limits")
+
+		if isLimits == true {
+			answer := limits[min(lookups, len(limits)-1)]
+			lookups++
+
+			if answer == apifyLimitsFailed {
+				w.WriteHeader(http.StatusInternalServerError)
+			}
+
+			fmt.Fprint(w, answer)
+		}
+
+		if isLimits == false {
+			*runs++
+			w.WriteHeader(http.StatusCreated)
+			fmt.Fprint(w, runBody)
+		}
+	}))
+	t.Cleanup(server.Close)
+	t.Setenv("APIFY_MONTHLY_BUDGET_USD", "4")
+
+	return server
+}
+
+const apifyTestLowUsage = `{"data":{"current":{"monthlyUsageUsd":0.10}}}`
+
+const apifyTestBudgetUsedUp = `{"data":{"current":{"monthlyUsageUsd":3.95}}}`
+
+func TestYouTubeApifyKeepsTheBilledRunsErrorWhenTheRetryNeverStarts(t *testing.T) {
+	retryLimits := map[string]string{"budget check failed": apifyLimitsFailed, "budget used up": apifyTestBudgetUsedUp}
+
+	for name, retryLimit := range retryLimits {
+		runs := 0
+		server := newFakeApifyWithLimits(t, `[{"status":"failed","errorCode":"FILE_TOO_LARGE"}]`, []string{apifyTestLowUsage, retryLimit}, &runs)
+		extractor := &YouTubeApifyExtractor{tempDir: t.TempDir(), actor: "a~b", api: fakeApifyClient(server)}
+
+		_, err := extractor.ExtractMedia(context.Background(), "https://www.youtube.com/shorts/aqz-KE-bpKQ")
+
+		if (runs != 1) || (isCostedSkip(err) == true) || (IsPaidBudgetError(err) == true) || (strings.Contains(fmt.Sprint(err), youtubeErrorFileTooLarge) == false) {
+			t.Fatalf("%s: expected the billed 480p run's error, got runs=%d err=%v", name, runs, err)
+		}
+	}
+}

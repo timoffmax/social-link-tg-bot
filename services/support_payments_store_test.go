@@ -199,9 +199,9 @@ func TestGatedFetchUsesACreditAfterTheAllowanceAndNotesIt(t *testing.T) {
 	sd := &SmartDownloader{gated: succeedingGatedProvider{}}
 	gatedErr := &InstagramGatedError{Gate: InstagramGate{Restricted: true}}
 
-	media, err := sd.FetchGatedPost(gatedTestPostURL, gatedErr, 110, 110, true)
+	media, err := sd.FetchGatedPost(gatedTestPostURL, gatedErr, DownloadRequester{ChatID: 110, UserID: 110, IsPrivate: true})
 
-	if (err != nil) || (strings.HasSuffix(media[0].Caption, "🎟️ Bonus downloads left: 9") == false) || (strings.Contains(media[0].Caption, "Restricted posts left") == true) {
+	if (err != nil) || (strings.HasSuffix(media[0].Caption, "🎟️ Bonus downloads left: 9") == false) || (strings.Contains(media[0].Caption, "Special downloads left") == true) {
 		t.Fatalf("expected the credit note, got %v %v", media, err)
 	}
 
@@ -220,8 +220,8 @@ func TestGatedFetchInAGroupUsesTheSendersCredit(t *testing.T) {
 	sd := &SmartDownloader{gated: succeedingGatedProvider{}}
 	gatedErr := &InstagramGatedError{Gate: InstagramGate{Restricted: true}}
 
-	sd.FetchGatedPost(gatedTestPostURL, gatedErr, -111, 111, false)
-	_, err := sd.FetchGatedPost(gatedTestPostURL, gatedErr, -111, 111, false)
+	sd.FetchGatedPost(gatedTestPostURL, gatedErr, DownloadRequester{ChatID: -111, UserID: 111, IsPrivate: false})
+	_, err := sd.FetchGatedPost(gatedTestPostURL, gatedErr, DownloadRequester{ChatID: -111, UserID: 111, IsPrivate: false})
 	balance, _ := GetGatedFetchCredits(111)
 
 	if (err != nil) || (balance != 9) {
@@ -237,7 +237,7 @@ func TestGatedFetchCreditsSkipTheGlobalCap(t *testing.T) {
 	sd := &SmartDownloader{gated: succeedingGatedProvider{}}
 	gatedErr := &InstagramGatedError{Gate: InstagramGate{Restricted: true}}
 
-	_, err := sd.FetchGatedPost(gatedTestPostURL, gatedErr, 113, 113, true)
+	_, err := sd.FetchGatedPost(gatedTestPostURL, gatedErr, DownloadRequester{ChatID: 113, UserID: 113, IsPrivate: true})
 
 	if err != nil {
 		t.Fatalf("expected a credit to skip the full global cap, got %v", err)
@@ -250,7 +250,7 @@ func TestGatedFetchWithoutCreditsIsStillDenied(t *testing.T) {
 	sd := &SmartDownloader{gated: succeedingGatedProvider{}}
 	gatedErr := &InstagramGatedError{Gate: InstagramGate{Restricted: true}}
 
-	_, err := sd.FetchGatedPost(gatedTestPostURL, gatedErr, 114, 114, true)
+	_, err := sd.FetchGatedPost(gatedTestPostURL, gatedErr, DownloadRequester{ChatID: 114, UserID: 114, IsPrivate: true})
 	var deniedErr *GatedFetchDeniedError
 
 	if (errors.As(err, &deniedErr) == false) || (deniedErr.Denial != GatedFetchDeniedUserCap) {
@@ -269,7 +269,7 @@ func TestGatedFetchReturnsTheCreditWhenTheFetchFails(t *testing.T) {
 			sd := &SmartDownloader{gated: provider}
 			gatedErr := &InstagramGatedError{Gate: InstagramGate{Restricted: true}}
 
-			_, err := sd.FetchGatedPost(gatedTestPostURL, gatedErr, 115, 115, true)
+			_, err := sd.FetchGatedPost(gatedTestPostURL, gatedErr, DownloadRequester{ChatID: 115, UserID: 115, IsPrivate: true})
 			balance, _ := GetGatedFetchCredits(115)
 			userUsed, _ := GetGatedFetchUsage(GatedFetchScopeUser, 115)
 
@@ -287,7 +287,7 @@ func TestGatedFetchOwnerBlockIsNotOverriddenByCredits(t *testing.T) {
 	sd := &SmartDownloader{gated: succeedingGatedProvider{}}
 	gatedErr := &InstagramGatedError{Gate: InstagramGate{Restricted: true}}
 
-	_, err := sd.FetchGatedPost(gatedTestPostURL, gatedErr, 120, 120, true)
+	_, err := sd.FetchGatedPost(gatedTestPostURL, gatedErr, DownloadRequester{ChatID: 120, UserID: 120, IsPrivate: true})
 	balance, _ := GetGatedFetchCredits(120)
 
 	if (err == nil) || (balance != 10) {
@@ -353,8 +353,8 @@ func TestGroupBonusIsUsedBeforeTheSendersOwn(t *testing.T) {
 	sd := &SmartDownloader{gated: succeedingGatedProvider{}}
 	gatedErr := &InstagramGatedError{Gate: InstagramGate{Restricted: true}}
 
-	sd.FetchGatedPost(gatedTestPostURL, gatedErr, -212, 212, false)
-	media, err := sd.FetchGatedPost(gatedTestPostURL, gatedErr, -212, 212, false)
+	sd.FetchGatedPost(gatedTestPostURL, gatedErr, DownloadRequester{ChatID: -212, UserID: 212, IsPrivate: false})
+	media, err := sd.FetchGatedPost(gatedTestPostURL, gatedErr, DownloadRequester{ChatID: -212, UserID: 212, IsPrivate: false})
 	groupBalance, _ := GetGroupFetchCredits(-212)
 	userBalance, _ := GetGatedFetchCredits(212)
 
@@ -413,10 +413,10 @@ func TestFailedFetchReturnsAGroupCreditOnlyToTheGroup(t *testing.T) {
 	recordTestBoost(t, "boost-d", 218, -218, 25)
 	sd := &SmartDownloader{gated: succeedingGatedProvider{}}
 	gatedErr := &InstagramGatedError{Gate: InstagramGate{Restricted: true}}
-	sd.FetchGatedPost(gatedTestPostURL, gatedErr, -218, 219, false)
+	sd.FetchGatedPost(gatedTestPostURL, gatedErr, DownloadRequester{ChatID: -218, UserID: 219, IsPrivate: false})
 	sd.gated = failingGatedProvider{}
 
-	sd.FetchGatedPost(gatedTestPostURL, gatedErr, -218, 219, false)
+	sd.FetchGatedPost(gatedTestPostURL, gatedErr, DownloadRequester{ChatID: -218, UserID: 219, IsPrivate: false})
 
 	groupBalance, _ := GetGroupFetchCredits(-218)
 	userBalance, _ := GetGatedFetchCredits(219)
@@ -433,8 +433,8 @@ func TestGroupCreditsWaitForTheGroupsOwnCap(t *testing.T) {
 	sd := &SmartDownloader{gated: succeedingGatedProvider{}}
 	gatedErr := &InstagramGatedError{Gate: InstagramGate{Restricted: true}}
 
-	sd.FetchGatedPost(gatedTestPostURL, gatedErr, -221, 221, false)
-	_, err := sd.FetchGatedPost(gatedTestPostURL, gatedErr, -220, 222, false)
+	sd.FetchGatedPost(gatedTestPostURL, gatedErr, DownloadRequester{ChatID: -221, UserID: 221, IsPrivate: false})
+	_, err := sd.FetchGatedPost(gatedTestPostURL, gatedErr, DownloadRequester{ChatID: -220, UserID: 222, IsPrivate: false})
 	groupBalance, _ := GetGroupFetchCredits(-220)
 
 	if (err == nil) || (groupBalance != 10) {
@@ -488,8 +488,8 @@ func TestGroupCreditsApplyWhenBothCapsAreUsedUp(t *testing.T) {
 	sd := &SmartDownloader{gated: succeedingGatedProvider{}}
 	gatedErr := &InstagramGatedError{Gate: InstagramGate{Restricted: true}}
 
-	sd.FetchGatedPost(gatedTestPostURL, gatedErr, -225, 226, false)
-	_, err := sd.FetchGatedPost(gatedTestPostURL, gatedErr, -225, 227, false)
+	sd.FetchGatedPost(gatedTestPostURL, gatedErr, DownloadRequester{ChatID: -225, UserID: 226, IsPrivate: false})
+	_, err := sd.FetchGatedPost(gatedTestPostURL, gatedErr, DownloadRequester{ChatID: -225, UserID: 227, IsPrivate: false})
 	groupBalance, _ := GetGroupFetchCredits(-225)
 
 	if (err != nil) || (groupBalance != 9) {

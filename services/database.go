@@ -165,6 +165,19 @@ func CloseDatabase() error {
 	return nil
 }
 
+// UseDatabaseHandle installs db as the bot's database and returns the
+// function that restores the previous one; for tests of code that only asks
+// whether a database is configured.
+func UseDatabaseHandle(db *sql.DB) func() {
+	previous := dbService
+	dbService = &DatabaseService{db: db}
+	result := func() {
+		dbService = previous
+	}
+
+	return result
+}
+
 // IsDBInitialized returns true if database is successfully initialized
 func IsDBInitialized() bool {
 	return dbService != nil && dbService.db != nil

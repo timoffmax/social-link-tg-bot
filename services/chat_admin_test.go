@@ -50,34 +50,35 @@ func TestChatButtonsAreOnUnlessTurnedOff(t *testing.T) {
 	}
 }
 
-func TestGatedFetchIsConfiguredWithoutABotWideCap(t *testing.T) {
+func TestSpecialDownloadsAreConfiguredWithoutABotWideCap(t *testing.T) {
 	t.Setenv("APIFY_TOKEN", "test-token")
 	t.Setenv("GATED_FETCH_GLOBAL_MONTHLY_CAP", "")
 
-	if IsGatedFetchConfigured() == false {
-		t.Fatalf("no bot-wide cap (the default) must keep restricted posts on")
+	if IsSpecialDownloadsConfigured() == false {
+		t.Fatalf("no bot-wide cap (the default) must keep special downloads on")
 	}
 
 	t.Setenv("GATED_FETCH_GLOBAL_MONTHLY_CAP", "0")
 
-	if IsGatedFetchConfigured() == true {
-		t.Fatalf("a cap of 0 turns restricted posts off")
+	if IsSpecialDownloadsConfigured() == true {
+		t.Fatalf("a cap of 0 turns special downloads off")
 	}
 }
 
-func TestRestrictedPostsAreNotOfferedWithZeroDefaults(t *testing.T) {
+func TestSpecialDownloadsAreNotOfferedWithZeroDefaults(t *testing.T) {
+	markDatabaseOpenForTest(t)
 	t.Setenv("APIFY_TOKEN", "test-token")
 	t.Setenv("GATED_FETCH_USER_MONTHLY_ALLOWANCE", "0")
 	t.Setenv("GATED_FETCH_CHAT_MONTHLY_CAP", "0")
 
-	if IsRestrictedPostsOffered() == true {
-		t.Fatalf("zero default limits must not offer restricted posts")
+	if IsSpecialDownloadsOffered() == true {
+		t.Fatalf("zero default limits must not offer special downloads")
 	}
 
 	t.Setenv("GATED_FETCH_GLOBAL_MONTHLY_CAP", "-1")
 	t.Setenv("GATED_FETCH_CHAT_MONTHLY_CAP", "5")
 
-	if IsRestrictedPostsOffered() == false {
+	if IsSpecialDownloadsOffered() == false {
 		t.Fatalf("an explicit -1 bot-wide cap means no cap, not off")
 	}
 }

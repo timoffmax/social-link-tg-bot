@@ -102,75 +102,144 @@ func NewSmartDownloader() *SmartDownloader {
 	}
 }
 
-// DownloadMedia downloads media using the optimal strategy for the platform.
+// DownloadMedia downloads media using the optimal strategy for the platform,
+// counting a costed method's download for requester (special downloads).
 // Enforces a 90-second overall deadline to prevent long hangs.
-func (sd *SmartDownloader) DownloadMedia(mediaURL string) ([]*MediaInfo, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+func (sd *SmartDownloader) DownloadMedia(mediaURL string, requester DownloadRequester) ([]*MediaInfo, error) {
+	background := context.Background()
+	ctx, cancel := context.WithTimeout(background, 90*time.Second)
 	defer cancel()
 
-	return sd.downloadMediaWithContext(ctx, mediaURL)
+	download := newSpecialDownload(mediaURL, requester, dbSpecialLimit{})
+	result, err := sd.downloadMediaWithContext(ctx, mediaURL, download)
+
+	return result, err
 }
 
-// downloadMediaWithContext performs the actual download logic under a context deadline.
-func (sd *SmartDownloader) downloadMediaWithContext(ctx context.Context, mediaURL string) ([]*MediaInfo, error) {
-	startTime := time.Now()
+// downloadMediaWithContext runs the chain and settles its special download
+// once; only a limit refusal is wrapped in a GatedFetchDeniedError.
+func (sd *SmartDownloader) downloadMediaWithContext(ctx context.Context, mediaURL string, download *specialDownload) ([]*MediaInfo, error) {
+	result, winner, err := sd.runChain(ctx, mediaURL, download)
+	_, isCostedMethod := costedChainMethods[winner]
+	isCostedWin := (isCostedMethod == true) && (result != nil)
+	result = download.settle(result, isCostedWin)
+	denial := download.Denial()
+	isRefused := (err != nil) && (IsSpecialDownloadRefusal(denial) == true)
 
-	// Get the extraction strategy for this URL
+	if isRefused == true {
+		err = &GatedFetchDeniedError{Denial: denial, Cause: err}
+	}
+
+	return result, err
+}
+
+// runChain tries the strategy's methods and returns the result with the
+// method that produced it (methodNone for the concurrent and last-resort exits).
+func (sd *SmartDownloader) runChain(ctx context.Context, mediaURL string, download *specialDownload) ([]*MediaInfo, ExtractionMethod, error) {
+	startTime := time.Now()
 	strategy := GetExtractionStrategy(mediaURL)
 
 	strategy.LogStrategy()
 
-	var lastErr error
-	var lastResort []*MediaInfo
+	var result []*MediaInfo
+	var err error
+	winner := methodNone
+	run := chainRun{}
+	concurrentCount := 0
+	isSequential := (strategy.Sequential == true) || (hasCostedMethod(strategy.Methods) == true)
 
 	// Run the first 2 strategies concurrently if there are at least 2 non-FixedLink
 	// methods, unless the strategy demands strict priority ordering.
-	concurrentCount := 0
-
-	if strategy.Sequential == false {
+	if isSequential == false {
 		concurrentCount = sd.getConcurrentCount(strategy.Methods)
 	}
 
-	if concurrentCount >= 2 {
-		result, err := sd.tryConcurrentStrategies(ctx, mediaURL, strategy, startTime)
-		if result != nil {
-			return result, nil
-		}
+	isConcurrent := (concurrentCount >= 2)
 
-		if err != nil {
-			lastErr = err
-		}
-
-		lastResort = lastResortMediaOf(lastResort, err)
+	if isConcurrent == true {
+		result, run.lastErr = sd.tryConcurrentStrategies(ctx, mediaURL, strategy, startTime)
+		run.lastResort = lastResortMediaOf(run.lastResort, run.lastErr)
+		run.startIdx = concurrentCount
 	}
 
-	// Sequential fallback for remaining strategies (or all if concurrency was not used)
-	startIdx := 0
-
-	if concurrentCount >= 2 {
-		startIdx = concurrentCount
+	if result == nil {
+		result, winner, run = sd.runSequentialMethods(ctx, mediaURL, strategy, startTime, download, run)
 	}
 
+	if result == nil {
+		result, err = finishFailedChain(mediaURL, strategy, startTime, run)
+	}
+
+	return result, winner, err
+}
+
+// chainRun is what a chain carries between its phases: where the sequential
+// part starts, its last error and the result kept as a last resort.
+type chainRun struct {
+	startIdx   int
+	lastErr    error
+	lastResort []*MediaInfo
+}
+
+// runSequentialMethods tries the methods from run.startIdx one by one. A
+// costed method that can run first reserves the special download; a refusal
+// ends the chain.
+func (sd *SmartDownloader) runSequentialMethods(
+	ctx context.Context,
+	mediaURL string,
+	strategy *ExtractionStrategy,
+	startTime time.Time,
+	download *specialDownload,
+	run chainRun,
+) ([]*MediaInfo, ExtractionMethod, chainRun) {
+	var result []*MediaInfo
+	winner := methodNone
 	paidOutcome := paidChainOutcome{}
 
-	for i := startIdx; i < len(strategy.Methods); i++ {
+	for i := run.startIdx; i < len(strategy.Methods); i++ {
 		if ctx.Err() != nil {
 			log.Printf("⏰ Overall 90s deadline exceeded for %s, aborting remaining strategies", mediaURL)
 			break
 		}
 
 		method := strategy.Methods[i]
-		result, err := sd.executeStrategy(ctx, method, mediaURL, strategy, startTime)
-		if result != nil {
-			return result, nil
+		kind, isCosted := costedChainMethods[method]
+		isChargeable := (isCosted == true) && (sd.canRunCostedMethod(method, mediaURL) == true)
+		isRefused := (isChargeable == true) && (download.reserve() == false)
+
+		if isRefused == true {
+			run.lastErr = download.stopErr()
+			break
+		}
+
+		// The reservation runs on its own timeout and may use up the chain's time:
+		// then the costed method never starts and settle refunds every unit.
+		isOutOfTime := (isChargeable == true) && (ctx.Err() != nil)
+
+		if isOutOfTime == true {
+			log.Printf("⏰ No chain time left for %s after the special-download reservation", mediaURL)
+			run.lastErr = ctx.Err()
+			break
+		}
+
+		methodResult, err := sd.executeStrategy(ctx, method, mediaURL, strategy, startTime)
+
+		if methodResult != nil {
+			result = methodResult
+			winner = method
+			break
+		}
+
+		if isChargeable == true {
+			download.record(kind, err)
 		}
 
 		if err != nil {
-			lastErr = err
+			run.lastErr = err
 		}
 
 		paidOutcome.add(method, err)
-		lastResort = lastResortMediaOf(lastResort, err)
+		run.lastResort = lastResortMediaOf(run.lastResort, err)
 
 		// A paid provider's answer about the content (private account, no
 		// such story) is final: the next one would be billed for the same.
@@ -180,23 +249,101 @@ func (sd *SmartDownloader) downloadMediaWithContext(ctx context.Context, mediaUR
 		}
 	}
 
-	lastErr = paidOutcome.cause(lastErr)
+	run.lastErr = paidOutcome.cause(run.lastErr)
 
+	return result, winner, run
+}
+
+// finishFailedChain returns the result kept as a last resort, or the chain's
+// error when nothing was kept.
+func finishFailedChain(mediaURL string, strategy *ExtractionStrategy, startTime time.Time, run chainRun) ([]*MediaInfo, error) {
 	totalDuration := time.Since(startTime)
 	var chainErr error
 
-	if lastResort != nil {
+	if run.lastResort != nil {
 		log.Printf("📝 Every media method failed for %s, sending the result kept as a last resort", mediaURL)
-		LogExtraction(strategy.Platform, mediaURL, "last-resort", true, len(lastResort), totalDuration)
+		LogExtraction(strategy.Platform, mediaURL, "last-resort", true, len(run.lastResort), totalDuration)
 	}
 
 	// If all methods failed and nothing was kept, return error
-	if lastResort == nil {
+	if run.lastResort == nil {
 		LogExtraction(strategy.Platform, mediaURL, "all-methods", false, 0, totalDuration)
-		chainErr = fmt.Errorf("all extraction methods failed for %s: %w", mediaURL, lastErr)
+		chainErr = fmt.Errorf("all extraction methods failed for %s: %w", mediaURL, run.lastErr)
 	}
 
-	return lastResort, chainErr
+	return run.lastResort, chainErr
+}
+
+// costedMethodChecks tell whether a costed method can actually run; one that
+// can't runs unreserved and returns its usual error.
+var costedMethodChecks = map[ExtractionMethod]func(sd *SmartDownloader, mediaURL string) bool{
+	MethodYouTubeRelay: (*SmartDownloader).canRunYouTubeRelay,
+	MethodYouTubeApify: (*SmartDownloader).canRunYouTubeApify,
+	MethodStoriesApify: (*SmartDownloader).canRunStoriesApify,
+	MethodStoriesHiker: (*SmartDownloader).canRunStoriesHiker,
+}
+
+// canRunCostedMethod reports whether a costed method can actually run.
+func (sd *SmartDownloader) canRunCostedMethod(method ExtractionMethod, mediaURL string) bool {
+	result := false
+	check, isKnown := costedMethodChecks[method]
+
+	if isKnown == true {
+		result = check(sd, mediaURL)
+	}
+
+	return result
+}
+
+// canRunYouTubeRelay reports a YouTube relay client the relay hasn't disabled.
+func (sd *SmartDownloader) canRunYouTubeRelay(_ string) bool {
+	isDisabled := isRelayPlatformDisabled(relayPlatformYouTube)
+	result := (sd.youtubeRelay != nil) && (isDisabled == false)
+
+	return result
+}
+
+// canRunYouTubeApify reports the YouTube actor with Apify configured.
+func (sd *SmartDownloader) canRunYouTubeApify(_ string) bool {
+	result := (sd.youtubeApify != nil) && (isApifyConfigured() == true)
+
+	return result
+}
+
+// canRunStoriesApify reports the stories actor with Apify configured, for a
+// story link it accepts (highlights are not).
+func (sd *SmartDownloader) canRunStoriesApify(mediaURL string) bool {
+	result := (sd.storiesApify != nil) && (isApifyConfigured() == true) && (isFetchableStoryURL(mediaURL) == true)
+
+	return result
+}
+
+// canRunStoriesHiker reports the HikerAPI story fetch with HikerAPI
+// configured, for a story link it accepts.
+func (sd *SmartDownloader) canRunStoriesHiker(mediaURL string) bool {
+	result := (sd.storiesHiker != nil) && (isHikerConfigured() == true) && (isFetchableStoryURL(mediaURL) == true)
+
+	return result
+}
+
+// isFetchableStoryURL reports a story link the paid extractors can fetch.
+func isFetchableStoryURL(mediaURL string) bool {
+	_, _, err := parseApifyStoryURL(mediaURL)
+	result := (err == nil)
+
+	return result
+}
+
+// hasCostedMethod reports a chain holding a costed method.
+func hasCostedMethod(methods []ExtractionMethod) bool {
+	result := false
+
+	for _, method := range methods {
+		_, isCosted := costedChainMethods[method]
+		result = (result == true) || (isCosted == true)
+	}
+
+	return result
 }
 
 // getConcurrentCount returns how many of the first strategies can run concurrently.

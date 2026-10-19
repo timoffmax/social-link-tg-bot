@@ -16,7 +16,7 @@ import (
 	"github.com/timoffmax/social-link-bot/services"
 )
 
-// boostCommand raises a group's limit of restricted posts with Stars.
+// boostCommand raises a group's limit of special downloads with Stars.
 const boostCommand = "/boost"
 
 // boostStartPrefix starts the /start payload "boost_<chat_id>" that opens a
@@ -43,15 +43,15 @@ const boostTitleLimit = 60
 
 // Boost texts.
 const (
-	boostGroupText            = "🚀 <b>Boost this group</b>\n\nThis group gets a monthly number of restricted posts for free. Anyone can raise it with Telegram Stars: the group's bonus downloads are shared by everyone here and used once the free monthly ones run out. They don't expire.\n\nThe payment happens in a private chat with me."
+	boostGroupText            = "🚀 <b>Boost this group</b>\n\nThis group gets a monthly number of special downloads for free (see /info). Anyone can raise it with Telegram Stars: the group's bonus downloads are shared by everyone here and used once the free monthly ones run out. They don't expire.\n\nThe payment happens in a private chat with me."
 	boostPrivateText          = "🚀 To boost a group, send /boost in that group and tap the button."
 	boostUnavailableText      = "🚀 Boosting groups with Telegram Stars isn't available right now."
-	boostClosedText           = "🚀 This group can't be boosted: restricted posts are turned off there, or it has no monthly limit."
+	boostClosedText           = "🚀 This group can't be boosted: special downloads are turned off there, or it has no monthly limit."
 	boostUnknownGroupText     = "🚀 I couldn't find that group, or you aren't in it. Send /boost in the group you want to boost."
-	boostScreenTemplate       = "🚀 <b>Boost %s</b>\n\nBonus downloads for this group are shared by all its members and used once its free monthly restricted posts run out. They don't expire, and a post I can't fetch doesn't use one.\n\n🎟️ Group bonus downloads now: %d\n\nPick an amount. By paying you agree to the /terms. Help with payments: /paysupport."
-	boostInvoiceTemplate      = "Bonus downloads of restricted Instagram posts for %s: +%d, shared by all members and used after the group's free monthly ones. They don't expire. By paying you agree to /terms."
-	boostThanksTemplate       = "🚀 Thank you! %s got %d bonus downloads of restricted posts. Group bonus downloads now: %d."
-	boostGroupNoticeTemplate  = "🚀 %s boosted this group: +%d restricted-post downloads, shared by everyone here. Thank you! Group bonus downloads: %d."
+	boostScreenTemplate       = "🚀 <b>Boost %s</b>\n\nBonus downloads for this group are shared by all its members and used once its free monthly special downloads run out. They don't expire, and a link I can't fetch doesn't use one.\n\n🎟️ Group bonus downloads now: %d\n\nPick an amount. By paying you agree to the /terms. Help with payments: /paysupport."
+	boostInvoiceTemplate      = "Bonus special downloads for %s: +%d, shared by all members and used after the group's free monthly ones. They don't expire. By paying you agree to /terms."
+	boostThanksTemplate       = "🚀 Thank you! %s got %d bonus special downloads. Group bonus downloads now: %d."
+	boostGroupNoticeTemplate  = "🚀 %s boosted this group: +%d special downloads, shared by everyone here. Thank you! Group bonus downloads: %d."
 	boostRepeatTemplate       = "🚀 Thank you! This payment was already counted. Group bonus downloads: %d."
 	boostGatedHintTemplate    = "Raise this group's limit with Telegram Stars: %s"
 	boostDefaultGroupNameText = "the group"
@@ -379,7 +379,7 @@ func sendBoostGroupNotice(chatID int64, notice string) {
 // moveGroupCredits moves a group's paid rows; a variable for tests.
 var moveGroupCredits = services.MoveGroupCredits
 
-// moveUpgradedGroup moves a group's bonus downloads, its restricted-post
+// moveUpgradedGroup moves a group's bonus downloads, its special-download
 // policy and its boosts to the supergroup's new id, logging the outcome.
 func moveUpgradedGroup(oldChatID int64, newChatID int64) {
 	err := moveGroupCredits(oldChatID, newChatID)

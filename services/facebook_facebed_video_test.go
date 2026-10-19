@@ -37,7 +37,7 @@ func TestFacebookChainSendsTheFacebedVideoWhenYtDlpFails(t *testing.T) {
 	server := serveFacebed(t, "facebed_video_post.html", serveFacebedVideo)
 	downloader := newFacebookTestDownloader(t, server, failingYtDlp, &calls)
 
-	media, err := downloader.downloadMediaWithContext(context.Background(), facebedTestVideoPostURL)
+	media, err := downloader.downloadMediaWithContext(context.Background(), facebedTestVideoPostURL, newAllowedDownload(facebedTestVideoPostURL))
 
 	if (err != nil) || (len(media) != 1) || (media[0].Type != MediaTypeVideo) {
 		t.Fatalf("want the facebed video, got %d item(s) %v", len(media), err)
@@ -66,7 +66,7 @@ func TestFacebookChainPrefersTheYtDlpVideoOfAVideoPost(t *testing.T) {
 	server := serveFacebed(t, "facebed_video_post.html", serveFacebedVideo)
 	downloader := newFacebookTestDownloader(t, server, videoYtDlp, &calls)
 
-	media, err := downloader.downloadMediaWithContext(context.Background(), facebedTestVideoPostURL)
+	media, err := downloader.downloadMediaWithContext(context.Background(), facebedTestVideoPostURL, newAllowedDownload(facebedTestVideoPostURL))
 
 	if (err != nil) || (len(media) != 1) || (media[0] != video) {
 		t.Fatalf("want the yt-dlp video, got %d item(s) %v", len(media), err)

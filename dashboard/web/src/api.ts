@@ -3,7 +3,7 @@
 
 /** "YYYY-MM-DD" in the dashboard timezone. */
 export type Day = string;
-/** "YYYY-MM" in the dashboard timezone (gated usage: UTC month start). */
+/** "YYYY-MM" in the dashboard timezone (special-download usage: UTC month start). */
 export type Month = string;
 /** RFC3339 timestamp. */
 export type Timestamp = string;

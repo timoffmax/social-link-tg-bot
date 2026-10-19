@@ -53,8 +53,9 @@ func (e *InstagramRelayExtractor) ExtractMedia(ctx context.Context, instagramURL
 	return result, err
 }
 
-// instagramRelayCaption builds the author line and the post text; a user
-// name that is not a plain Instagram name is left out.
+// instagramRelayCaption builds the author line and the post text, keeping
+// room for the remaining-quota note; a user name that is not a plain
+// Instagram name is left out.
 func instagramRelayCaption(meta relayMeta, instagramURL string) string {
 	username := meta.Channel
 	isSafeUsername := profileUsernamePattern.MatchString(username)
@@ -69,6 +70,7 @@ func instagramRelayCaption(meta relayMeta, instagramURL string) string {
 		Username:    username,
 		Text:        meta.Description,
 		PostURL:     instagramURL,
+		Reserve:     gatedQuotaNoteReserve,
 		PlainText:   true,
 	}
 	result := buildAuthorCaption(caption)

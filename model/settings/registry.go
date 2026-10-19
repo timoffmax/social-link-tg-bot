@@ -55,7 +55,7 @@ var registry = []Setting{
 		Approval:  ApprovalRaise,
 		SafeValue: 0.0,
 		Label:     "Apify monthly budget (USD)",
-		Impact:    "Real-dollar cap on Apify spend a month (restricted posts, stories, the YouTube Shorts fallback); 0 turns Apify off.",
+		Impact:    "Real-dollar cap on Apify spend a month (restricted posts, reel videos, stories, YouTube Shorts); 0 turns Apify off.",
 	},
 	{
 		Key:       KeyHikerMonthlyBudgetUsd,
@@ -95,7 +95,7 @@ var registry = []Setting{
 		Enum:     []string{ProviderApify, ProviderHiker},
 		Approval: ApprovalNever,
 		Label:    "Paid Instagram providers, in order",
-		Impact:   "The paid providers tried for restricted posts and stories, first to last.",
+		Impact:   "The paid providers tried for restricted posts, reel videos and stories, first to last.",
 	},
 	{
 		Key:      KeyHikerLowBalanceRequests,
@@ -118,8 +118,8 @@ var registry = []Setting{
 		Min:      bound(-1),
 		Ceiling:  bound(CeilingGatedGlobalMonthlyCap),
 		Approval: ApprovalNever,
-		Label:    "Restricted posts a month, bot-wide",
-		Impact:   "-1: no cap (only the dollar budgets stop them); 0 turns restricted posts off for everyone.",
+		Label:    "Special downloads a month, bot-wide",
+		Impact:   "-1: no cap (only the dollar budgets stop the paid ones); 0 turns special downloads off for everyone, the home relay included (Shorts then use the server's yt-dlp).",
 	},
 	{
 		Key:      KeyGatedUserMonthlyAllowance,
@@ -130,7 +130,7 @@ var registry = []Setting{
 		Min:      bound(0),
 		Ceiling:  bound(CeilingGatedMonthlyQuota),
 		Approval: ApprovalNever,
-		Label:    "Restricted posts a month per person (private chats)",
+		Label:    "Special downloads a month per person (private chats)",
 		Impact:   "The default monthly allowance in private chats; shown in the bot's description and /info.",
 	},
 	{
@@ -142,7 +142,7 @@ var registry = []Setting{
 		Min:      bound(0),
 		Ceiling:  bound(CeilingGatedMonthlyQuota),
 		Approval: ApprovalNever,
-		Label:    "Restricted posts a month per group",
+		Label:    "Special downloads a month per group",
 		Impact:   "The default monthly cap of a group; shown in the bot's description and /info.",
 	},
 	{

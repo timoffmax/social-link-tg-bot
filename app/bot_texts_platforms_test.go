@@ -37,6 +37,7 @@ func useSettingsSnapshot(t *testing.T, values map[string]any) {
 }
 
 func TestStartPlatformsWithEveryPlatformOnAreTheHeadList(t *testing.T) {
+	markDatabaseOpenForTest(t)
 	for _, envVar := range []string{"ENABLE_INSTAGRAM", "ENABLE_TIKTOK", "ENABLE_TWITTER", "ENABLE_YOUTUBE", "ENABLE_REDDIT", "ENABLE_FACEBOOK", "ENABLE_9GAG", "ENABLE_THREADS"} {
 		t.Setenv(envVar, "")
 	}

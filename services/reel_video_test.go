@@ -54,7 +54,7 @@ func TestFetchReelVideoLeavesOtherDownloadsAlone(t *testing.T) {
 	cases := [][]*MediaInfo{{photo}, {coverOfMany, photo}, nil}
 
 	for _, media := range cases {
-		got := sd.FetchReelVideo(reelVideoTestURL, media, 1, 1, true)
+		got, _ := sd.FetchReelVideo(reelVideoTestURL, media, DownloadRequester{ChatID: 1, UserID: 1, IsPrivate: true})
 
 		if len(got) != len(media) {
 			t.Fatalf("expected the download unchanged, got %d items", len(got))
@@ -66,14 +66,15 @@ func TestFetchReelVideoLeavesOtherDownloadsAlone(t *testing.T) {
 	}
 }
 
-func TestFetchReelVideoKeepsTheCoverWithANoteWhenThePaidFetchIsOff(t *testing.T) {
+func TestFetchReelVideoKeepsTheCoverWithANoteWhenSpecialDownloadsAreOff(t *testing.T) {
+	t.Setenv("GATED_FETCH_GLOBAL_MONTHLY_CAP", "0")
 	cover := newReelCover(t)
-	sd := &SmartDownloader{}
+	sd, fake := newReelRelayDownloader(t, serveRelayVideo("", relayTestMP4), &recordingGatedProvider{})
 
-	got := sd.FetchReelVideo(reelVideoTestURL, []*MediaInfo{cover}, 1, 1, true)
+	got, denial := sd.FetchReelVideo(reelVideoTestURL, []*MediaInfo{cover}, DownloadRequester{ChatID: 1, UserID: 1, IsPrivate: true})
 
-	if (len(got) != 1) || (got[0] != cover) {
-		t.Fatalf("expected the cover back, got %+v", got)
+	if (len(got) != 1) || (got[0] != cover) || (denial != GatedFetchDeniedOff) || (len(fake.recorded()) != 0) {
+		t.Fatalf("expected the cover back, denial off and no relay call, got %+v, %q, %d call(s)", got, denial, len(fake.recorded()))
 	}
 
 	if strings.HasSuffix(cover.Caption, reelCoverNote) == false {
@@ -111,7 +112,7 @@ func TestReelCoverNoteStandsAloneOnAnEmptyCaption(t *testing.T) {
 	cover.Caption = ""
 	sd := &SmartDownloader{}
 
-	sd.FetchReelVideo(reelVideoTestURL, []*MediaInfo{cover}, 1, 1, true)
+	sd.FetchReelVideo(reelVideoTestURL, []*MediaInfo{cover}, DownloadRequester{ChatID: 1, UserID: 1, IsPrivate: true})
 
 	if cover.Caption != reelCoverNote {
 		t.Fatalf("expected only the note, got %q", cover.Caption)

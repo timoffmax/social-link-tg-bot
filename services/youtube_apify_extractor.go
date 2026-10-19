@@ -127,7 +127,7 @@ func (e *YouTubeApifyExtractor) ExtractMedia(ctx context.Context, youtubeURL str
 
 	if isRetryable == true {
 		log.Printf("📉 [apify-youtube] %sp is over the upload limit, retrying at %sp", quality, youtubeQualityFallback)
-		item, err = e.runActor(ctx, youtubeURL, youtubeQualityFallback)
+		item, err = e.retryActor(ctx, youtubeURL, item, err)
 	}
 
 	if err == nil {
@@ -163,7 +163,7 @@ func checkYouTubeVideoURL(youtubeURL string) error {
 	isVideo := youtubeVideoURLPattern.MatchString(youtubeURL)
 
 	if isVideo == false {
-		result = fmt.Errorf("not a YouTube Shorts URL: %s", youtubeURL)
+		result = fmt.Errorf("%w: not a YouTube Shorts URL: %s", errCostedNotStarted, youtubeURL)
 	}
 
 	return result
@@ -200,6 +200,20 @@ func (e *YouTubeApifyExtractor) runActor(ctx context.Context, youtubeURL, qualit
 
 	if (err == nil) && (result.FileSizeBytes > telegramBotUploadLimit) {
 		err = fmt.Errorf("%w: %d bytes at %sp", errYouTubeTooLarge, result.FileSizeBytes, quality)
+	}
+
+	return result, err
+}
+
+// retryActor runs the 360p attempt; when it is refused before any spend, the
+// first run's row and error stand, since that run was billed.
+func (e *YouTubeApifyExtractor) retryActor(ctx context.Context, youtubeURL string, firstItem youtubeApifyItem, firstErr error) (youtubeApifyItem, error) {
+	result, err := e.runActor(ctx, youtubeURL, youtubeQualityFallback)
+
+	if isCostedSkip(err) == true {
+		log.Printf("⏭️ [apify-youtube] %sp retry not started (%v), keeping the first run's result", youtubeQualityFallback, err)
+		result = firstItem
+		err = firstErr
 	}
 
 	return result, err

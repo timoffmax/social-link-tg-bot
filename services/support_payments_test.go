@@ -44,9 +44,9 @@ func TestParseSupportPayloadRejectsUnknownOrMalformedPayloads(t *testing.T) {
 	}
 }
 
-func TestAppendGatedCreditNoteEndsTheCaption(t *testing.T) {
-	caption := appendGatedCreditNote("📷 author", gatedCredit{IsUsed: true, Left: 9})
-	groupCaption := appendGatedCreditNote("📷 author", gatedCredit{IsUsed: true, IsGroup: true, Left: 4})
+func TestGatedCreditNoteNamesThePool(t *testing.T) {
+	caption := gatedCreditNote(gatedCredit{IsUsed: true, Left: 9})
+	groupCaption := gatedCreditNote(gatedCredit{IsUsed: true, IsGroup: true, Left: 4})
 
 	if strings.HasSuffix(caption, "🎟️ Bonus downloads left: 9") == false {
 		t.Fatalf("unexpected caption %q", caption)

@@ -711,14 +711,14 @@ func TestHikerIsOffWithoutAKeyOrBudget(t *testing.T) {
 		t.Fatalf("expected not-configured errors, got %v / %v", storyErr, balanceErr)
 	}
 
-	if (IsPaidServiceConfigured() == true) || (len(instagramStoriesMethods()) != 1) {
+	if (isStoriesFetchConfigured() == true) || (len(instagramStoriesMethods()) != 1) {
 		t.Fatalf("expected no paid service and Apify alone in the stories chain")
 	}
 
 	t.Setenv("HIKERAPI_TOKEN", hikerTestKey)
 	t.Setenv("HIKERAPI_MONTHLY_BUDGET_USD", "0")
 
-	if (newHikerClient() != nil) || (IsPaidServiceConfigured() == true) {
+	if (newHikerClient() != nil) || (isStoriesFetchConfigured() == true) {
 		t.Fatalf("a budget of 0 turns HikerAPI off")
 	}
 

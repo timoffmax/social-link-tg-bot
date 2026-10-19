@@ -19,4 +19,7 @@ type MediaInfo struct {
 	ContentType string
 	Spoiler     bool // send blurred (Telegram has_spoiler), e.g. age-gated posts
 	VideoCover  bool // the cover image of a video post whose video the source did not give
+	// Notes are what AppendCaptionNote put at the caption's end; they are kept
+	// when descriptions are off.
+	Notes []string
 }

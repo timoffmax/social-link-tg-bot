@@ -938,6 +938,7 @@ func TestYouTubeRelayExtractorNeverSendsAnIDOtherThan11Characters(t *testing.T) 
 }
 
 func TestYouTubeShortsStrategyDependsOnTheRelayConfig(t *testing.T) {
+	markDatabaseOpenForTest(t)
 	tokenFile := writeRelayTestToken(t)
 	headChain := []ExtractionMethod{MethodYtDlp, MethodYouTubeApify}
 	relayChain := []ExtractionMethod{MethodYouTubeRelay, MethodYouTubeApify}
@@ -1024,11 +1025,12 @@ func TestRelayChainFallsThroughToTheNextMethod(t *testing.T) {
 	fake := startRelayTestServer(t, serveRelayError(http.StatusServiceUnavailable, relayCodeBusy))
 	client, _ := newTestRelayClient(t, fake.server.URL)
 	configureTestRelayEnv(t, fake.server.URL, client.tokenFile)
+	markDatabaseOpenForTest(t)
 	downloader := &SmartDownloader{youtubeRelay: &YouTubeRelayExtractor{client: client}, tempDir: client.tempDir}
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 
-	_, err := downloader.downloadMediaWithContext(ctx, relayTestShortsURL)
+	_, err := downloader.downloadMediaWithContext(ctx, relayTestShortsURL, newAllowedDownload(relayTestShortsURL))
 
 	if (err == nil) || (errors.Is(err, errApifyNotConfigured) == false) {
 		t.Errorf("want the chain to reach Apify (not configured here), got %v", err)

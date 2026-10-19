@@ -54,7 +54,7 @@ export const GROUP_LABELS: Record<string, string> = {
   platforms: 'Platforms',
   proxies_services: 'Proxies & free services',
   paid: 'Paid providers & budgets',
-  restricted_posts: 'Restricted posts quotas',
+  restricted_posts: 'Special downloads limits',
   stars: 'Stars support',
   limits: 'Limits',
 };

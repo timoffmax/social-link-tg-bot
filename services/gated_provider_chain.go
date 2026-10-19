@@ -68,6 +68,7 @@ func (p *fallbackGatedProvider) FetchPost(instagramURL string, spoiler bool) ([]
 // gatedAttempts collects the outcome of each provider of a chain.
 type gatedAttempts struct {
 	succeeded bool
+	hasRun    bool
 	skips     []error
 	failures  []error
 }
@@ -77,6 +78,11 @@ type gatedAttempts struct {
 func (a *gatedAttempts) add(name string, err error) {
 	isSkip := (err != nil) && (isPaidSkip(err) == true)
 	isFailure := (err != nil) && (isSkip == false)
+	isRun := (isFailure == true) && (errors.Is(err, errCostedNotStarted) == false)
+
+	if isRun == true {
+		a.hasRun = true
+	}
 
 	if err == nil {
 		a.succeeded = true
@@ -121,6 +127,12 @@ func (a gatedAttempts) err() error {
 		failed := errors.Join(a.failures...)
 		skipped := skipSummary(a.skips)
 		result = fmt.Errorf("every gated provider failed%s: %w", skipped, failed)
+	}
+
+	// A provider that got past its pre-spend checks may have billed the run,
+	// even when another one of the chain was refused before any spend.
+	if (isFailed == true) && (a.hasRun == true) {
+		result = &costedRanError{err: result}
 	}
 
 	return result

@@ -13,8 +13,8 @@ import (
 // Lines of the owner's "Paid fetching" stats section.
 const (
 	paidStatsHeading            = "\n<b>💳 Paid fetching</b>\n"
-	paidStatsFetchesTemplate    = "• Restricted posts this month (counted ones): <b>%d</b> of %s\n"
-	paidStatsFetchesUnknown     = "• Restricted posts this month: <i>unavailable</i> (cap %s)\n"
+	paidStatsFetchesTemplate    = "• Special downloads this month (counted ones): <b>%d</b> of %s\n"
+	paidStatsFetchesUnknown     = "• Special downloads this month: <i>unavailable</i> (cap %s)\n"
 	paidStatsApifyTemplate      = "• Apify this month: <b>$%.2f</b> of $%.2f\n"
 	paidStatsApifyUnknown       = "• Apify budget: $%.2f <i>(usage unavailable)</i>\n"
 	paidStatsStarsMonthTemplate = "• Stars this month: <b>%d</b> payments, <b>%d</b> ⭐\n"
@@ -100,7 +100,7 @@ func loadPaidFetchingStats() paidFetchingStats {
 
 	wg.Wait()
 
-	logPaidStatsError("restricted-post usage", result.FetchesErr)
+	logPaidStatsError("special-download usage", result.FetchesErr)
 	logPaidStatsError("Apify usage", result.ApifyErr)
 	logPaidStatsError("Stars support totals", result.SupportErr)
 	logPaidStatsError("HikerAPI ledger", result.HikerStatsErr)

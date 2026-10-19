@@ -38,7 +38,7 @@ const (
 // gatedUsageText documents the /gated subcommands.
 const gatedUsageText = `<b>Usage</b> (owner only):
 • <code>/gated</code> or <code>/gated status [chat_id]</code>
-• <code>/gated on|off [chat_id]</code>: allow or stop paid fetches in a group (on by default)
+• <code>/gated on|off [chat_id]</code>: allow or stop special downloads in a group (on by default)
 • <code>/gated cap N|unlimited|default [chat_id]</code>: group monthly cap
 • reply to a user + <code>/gated user N|unlimited|default</code>, or <code>/gated user USER_ID N|unlimited|default</code>: private monthly allowance
 The global monthly cap (GATED_FETCH_GLOBAL_MONTHLY_CAP) always applies.`
@@ -66,7 +66,7 @@ var gatedCommandHandlers = map[string]gatedCommandHandler{
 	gatedActionUser:   handleGatedUser,
 }
 
-// handleGatedCommand manages the paid fetch of author-gated Instagram posts.
+// handleGatedCommand manages the special-download limit.
 // Non-owners are ignored silently, like the other owner commands.
 func handleGatedCommand(origMessage *response.TgMessage, origChat *response.TgChat, origUser *response.TgUser) {
 	isAllowed := isOwner(origUser.Id)
@@ -112,13 +112,17 @@ func handleGatedStatus(params []string, origMessage *response.TgMessage, origCha
 	globalCap := config.GetGatedFetchGlobalMonthlyCap()
 	userAllowance := config.GetGatedFetchUserMonthlyAllowance()
 	provider := gatedProvidersText()
+	relay := gatedRelayText()
+	counted := gatedCountedText()
 
 	if (err == nil) && (hasExplicitChat == true) && (chatID >= 0) {
 		err = errGatedNotGroup
 	}
 
-	text.WriteString("🔞 <b>Gated Instagram fetch</b>\n\n")
-	fmt.Fprintf(&text, "Providers: %s\n", provider)
+	text.WriteString("💎 <b>Special downloads</b>\n\n")
+	fmt.Fprintf(&text, "Paid providers: %s\n", provider)
+	fmt.Fprintf(&text, "Home relay: %s\n", relay)
+	fmt.Fprintf(&text, "Counted: %s\n", counted)
 	capText := globalCapText(globalCap)
 	fmt.Fprintf(&text, "This month, all chats: <b>%d</b> of %s\n", globalUsed, capText)
 	fmt.Fprintf(&text, "Private chats: %d free per user per month by default\n\n", userAllowance)
@@ -172,14 +176,14 @@ func gatedChatStatusText(chatID int64) string {
 	return result
 }
 
-// handleGatedOn allows paid fetches in a group.
+// handleGatedOn allows special downloads in a group.
 func handleGatedOn(params []string, origMessage *response.TgMessage, origChat *response.TgChat) string {
 	result := setGatedChatEnabled(params, origChat, true)
 
 	return result
 }
 
-// handleGatedOff denies paid fetches in a group.
+// handleGatedOff denies special downloads in a group.
 func handleGatedOff(params []string, origMessage *response.TgMessage, origChat *response.TgChat) string {
 	result := setGatedChatEnabled(params, origChat, false)
 
@@ -422,7 +426,66 @@ func replyGated(origMessage *response.TgMessage, origChat *response.TgChat, text
 }
 
 // globalNoCapText shows a bot-wide cap of GatedFetchNoGlobalCap.
-const globalNoCapText = "no cap (the paid services' budgets are the limit)"
+const globalNoCapText = "no cap (only the paid services' budgets stop the paid ones)"
+
+// Texts of the /gated status relay and counted lines.
+const (
+	gatedListSeparator      = ", "
+	gatedRelayOffText       = "off"
+	gatedCountedNothingText = "nothing"
+	gatedCountedRestricted  = "restricted posts"
+	gatedCountedReelVideos  = "reel videos"
+	gatedCountedStories     = "Stories"
+	gatedCountedAllShorts   = "Shorts"
+	gatedCountedSomeShorts  = "Shorts after yt-dlp"
+)
+
+// gatedRelayText lists the platforms the home relay serves, or off.
+func gatedRelayText() string {
+	result := gatedRelayOffText
+	platforms := services.RelayPlatformsInUse()
+
+	if len(platforms) > 0 {
+		result = strings.Join(platforms, gatedListSeparator)
+	}
+
+	return result
+}
+
+// gatedCountedText lists the kinds of downloads the limit counts with the
+// current config, or nothing.
+func gatedCountedText() string {
+	result := gatedCountedNothingText
+	kinds := services.CurrentSpecialDownloadKinds()
+	isSomeShorts := (kinds.Shorts == true) && (kinds.AllShorts == false)
+	items := []string{}
+
+	if kinds.RestrictedPosts == true {
+		items = append(items, gatedCountedRestricted)
+	}
+
+	if kinds.ReelVideos == true {
+		items = append(items, gatedCountedReelVideos)
+	}
+
+	if kinds.Stories == true {
+		items = append(items, gatedCountedStories)
+	}
+
+	if kinds.AllShorts == true {
+		items = append(items, gatedCountedAllShorts)
+	}
+
+	if isSomeShorts == true {
+		items = append(items, gatedCountedSomeShorts)
+	}
+
+	if len(items) > 0 {
+		result = strings.Join(items, gatedListSeparator)
+	}
+
+	return result
+}
 
 // Texts of the /gated status providers line.
 const (
@@ -469,7 +532,7 @@ func gatedProviderLabel(provider services.GatedProviderState) string {
 	return result
 }
 
-// globalCapText shows the bot-wide monthly cap of restricted posts.
+// globalCapText shows the bot-wide monthly cap of special downloads.
 func globalCapText(globalCap int) string {
 	result := fmt.Sprintf("%d", globalCap)
 

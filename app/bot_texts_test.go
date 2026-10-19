@@ -6,13 +6,14 @@ import (
 )
 
 func TestStartGuideExplainsChatsAndContentWithTheConfiguredLimits(t *testing.T) {
+	markDatabaseOpenForTest(t)
 	t.Setenv("APIFY_TOKEN", "test-token")
 	t.Setenv("GATED_FETCH_USER_MONTHLY_ALLOWANCE", "7")
 	t.Setenv("GATED_FETCH_CHAT_MONTHLY_CAP", "11")
 
 	guide := startGuideText(false)
 
-	for _, part := range []string{"In a private chat", "In a group", "Free, no monthly limit", "Restricted posts (monthly limit)", "7 a month for you", "11 a month by default, shared"} {
+	for _, part := range []string{"In a private chat", "In a group", "Free, no monthly limit", "Special downloads (monthly limit)", "7 a month for you", "11 a month by default, shared"} {
 		if strings.Contains(guide, part) == false {
 			t.Fatalf("expected %q in the guide, got %q", part, guide)
 		}
@@ -27,17 +28,18 @@ func TestStartGuideExplainsChatsAndContentWithTheConfiguredLimits(t *testing.T) 
 	}
 }
 
-func TestStartGuideDoesNotPromiseRestrictedPostsWhenTheyAreOff(t *testing.T) {
+func TestStartGuideDoesNotPromiseSpecialDownloadsWhenTheyAreOff(t *testing.T) {
 	t.Setenv("APIFY_TOKEN", "")
 
 	guide := startGuideText(true)
 
-	if (strings.Contains(guide, startRestrictedOffText) == false) || (strings.Contains(guide, "a month for you") == true) {
-		t.Fatalf("expected restricted posts to be described as unavailable, got %q", guide)
+	if (strings.Contains(guide, startSpecialOffText) == false) || (strings.Contains(guide, "a month for you") == true) {
+		t.Fatalf("expected special downloads to be described as unavailable, got %q", guide)
 	}
 }
 
 func TestInfoShowsTheGuideWithTheReasonForLimits(t *testing.T) {
+	markDatabaseOpenForTest(t)
 	t.Setenv("APIFY_TOKEN", "test-token")
 	text := infoText()
 

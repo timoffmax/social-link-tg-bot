@@ -140,12 +140,18 @@ func parseStoryURL(url string) (string, string, error) {
 
 // parseApifyStoryURL parses a story URL with the shared parseStoryURL and
 // rejects highlights URLs (/stories/highlights/<id>), which would otherwise be
-// looked up as an account named "highlights".
+// looked up as an account named "highlights". Both refusals happen before any
+// spend.
 func parseApifyStoryURL(storyURL string) (string, string, error) {
 	username, storyID, err := parseStoryURL(storyURL)
+	isHighlights := (err == nil) && (username == storiesHighlightsUsername)
 
-	if (err == nil) && (username == storiesHighlightsUsername) {
-		err = fmt.Errorf("story highlights are not supported: %s", storyURL)
+	if err != nil {
+		err = fmt.Errorf("%w: %w", errCostedNotStarted, err)
+	}
+
+	if isHighlights == true {
+		err = fmt.Errorf("%w: story highlights are not supported: %s", errCostedNotStarted, storyURL)
 	}
 
 	return username, storyID, err

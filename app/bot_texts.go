@@ -3,6 +3,8 @@ package app
 import (
 	"fmt"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/timoffmax/social-link-bot/config"
 	"github.com/timoffmax/social-link-bot/model/settings"
@@ -20,7 +22,7 @@ Send a social media link and I reply with the actual photos and videos, right in
 const startPlatformsTitle = "🌐 <b>Supported platforms:</b>\n"
 
 // startPlatformLines are the platform list's lines, by platform id; the
-// Instagram line takes the Stories item, shown while the paid service is on.
+// Instagram line takes the Stories item, shown while Stories can be fetched.
 var startPlatformLines = map[string]string{
 	settings.PlatformInstagram: "📷 <b>Instagram</b> — Posts, Reels%s\n",
 	settings.PlatformTikTok:    "🎵 <b>TikTok</b> — Videos, Photo Slideshows\n",
@@ -39,14 +41,14 @@ const startNoPlatformsText = "⏸ Link downloads are paused right now.\n"
 const startStoriesItem = ", Stories"
 
 // startPlatformsText returns the list of the platforms that are on, with
-// Stories while the paid service that fetches them is on.
+// Stories while they can be fetched.
 func startPlatformsText() string {
 	var text strings.Builder
 	storiesItem := ""
-	isPaidServiceOn := services.IsPaidServiceConfigured()
+	isStoriesOn := services.IsStoriesOffered()
 	enabled := services.EnabledPlatforms()
 
-	if isPaidServiceOn == true {
+	if isStoriesOn == true {
 		storiesItem = startStoriesItem
 	}
 
@@ -78,7 +80,7 @@ func startPlatformLine(platformID string, storiesItem string) string {
 	return result
 }
 
-// startPrivateTemplate explains private chats; %s is the restricted-post
+// startPrivateTemplate explains private chats; %s is the special-download
 // line.
 const startPrivateTemplate = `💬 <b>In a private chat</b>
 • Send me any supported link, and I reply with the media.
@@ -86,7 +88,7 @@ const startPrivateTemplate = `💬 <b>In a private chat</b>
 
 `
 
-// startGroupTemplate explains groups: the restricted-post line, the support
+// startGroupTemplate explains groups: the special-download line, the support
 // button rate, then the admin-rights line (see startGroupAdminRightsText).
 const startGroupTemplate = `👥 <b>In a group</b>
 • Add me to the group. I answer every supported link anyone posts, no commands needed.
@@ -116,11 +118,11 @@ func startGroupAdminRightsText() string {
 	return result
 }
 
-// Restricted-post lines of the chat sections; %s is the default monthly
+// Special-download lines of the chat sections; %s is the default monthly
 // limit (see monthlyLimitText).
 const (
-	startPrivateRestrictedTemplate = "• Restricted posts: %s for you by default.\n"
-	startGroupRestrictedTemplate   = "• Restricted posts: %s by default, shared by the whole group.\n"
+	startPrivateSpecialTemplate = "• Special downloads: %s for you by default.\n"
+	startGroupSpecialTemplate   = "• Special downloads: %s by default, shared by the whole group.\n"
 )
 
 // Monthly limit wordings: a count, none, or no limit.
@@ -156,16 +158,17 @@ const (
 	startDefaultDailyTemplate = "Daily limit: %d media a day by default; group admins can change it for their group.\n"
 )
 
-// startStoriesFreeText notes Stories go through the paid service.
-const startStoriesFreeText = "Instagram Stories are free for you too, and so are YouTube Shorts, but Stories (and Shorts the free way can't get) go through the paid service (see below).\n"
+// startSpecialExceptText notes special downloads aren't free.
+const startSpecialExceptText = "Except special downloads (see below).\n"
 
 // startFreeText returns the section on what comes without restrictions,
-// with the default daily limit and Stories as configured.
+// with the default daily limit and, while any are counted, the special
+// downloads excepted.
 func startFreeText() string {
 	var text strings.Builder
 	dailyLimit := config.GetDefaultDailyMediaLimit()
 	dailyLine := startNoDailyLimitText
-	isPaidServiceOn := services.IsPaidServiceConfigured()
+	isSpecialOn := services.IsSpecialDownloadsConfigured()
 
 	if dailyLimit > 0 {
 		dailyLine = fmt.Sprintf(startDefaultDailyTemplate, dailyLimit)
@@ -174,8 +177,8 @@ func startFreeText() string {
 	text.WriteString(startFreeTitleText)
 	text.WriteString(dailyLine)
 
-	if isPaidServiceOn == true {
-		text.WriteString(startStoriesFreeText)
+	if isSpecialOn == true {
+		text.WriteString(startSpecialExceptText)
 	}
 
 	text.WriteString("\n")
@@ -184,56 +187,200 @@ func startFreeText() string {
 	return result
 }
 
-// startRestrictedTemplate says what restricted content is and how it is
-// limited: the default allowance per person, per group, then the bonus line.
-const startRestrictedTemplate = `🔞 <b>Restricted posts (monthly limit)</b>
-Instagram posts whose author limited them by age or region, and reels whose video Instagram shows only to logged-in users. I can only fetch them through a paid third-party service, so they have a monthly limit: by default %s per person in a private chat and %s per group. Age-limited posts arrive blurred: tap to view. Each one shows how many are left this month.%s
+// startSpecialTemplate says what special downloads are and how they are
+// limited: the kinds, the channel, the default limits per person and per
+// group, the blur and "left" lines, the bonus line, then why.
+const startSpecialTemplate = `💎 <b>Special downloads (monthly limit)</b>
+%s: I can only get these %s, so they share one monthly limit: by default %s per person in a private chat and %s per group.%s%s%s
 
 💸 <b>Why the limits?</b>
-The paid service charges for every restricted post, Story and Short it fetches, and the developer pays for it out of pocket. The monthly limits keep that affordable. If the month's budget runs out, these pause until it resets. With more support (/donate), the limits can go up.
+%s
 
 `
 
-// startRestrictedOffText replaces the restricted section while restricted
-// posts can't be fetched at all.
-const startRestrictedOffText = `🔞 <b>Restricted posts</b>
-Instagram posts whose author limited them by age or region can't be downloaded right now.
+// startSpecialOffText replaces the special section while special downloads
+// can't be fetched at all.
+const startSpecialOffText = `💎 <b>Special downloads</b>
+Links that only a paid service or the developer's home connection can fetch can't be downloaded right now.
 
 `
 
-// startBonusStarsText adds bonus downloads to the restricted section while
+// Kinds of special downloads, in the order the guide lists them.
+const (
+	startKindRestrictedText = "Instagram posts whose author limited them by age or region"
+	startKindReelsText      = "reels whose video Instagram shows only to logged-in users"
+	startKindStoriesText    = "Instagram Stories"
+	startKindAllShortsText  = "YouTube Shorts"
+	startKindSomeShortsText = "YouTube Shorts I can't get for free"
+)
+
+// startSpecialBlurText notes age-limited posts arrive blurred.
+const startSpecialBlurText = " Age-limited posts arrive blurred: tap to view."
+
+// startSpecialLeftText notes the "left" count; it shows only under a limit.
+const startSpecialLeftText = " Each one shows how many are left this month."
+
+// Routes special downloads take: a paid service, the home relay or both.
+const (
+	specialRoutePaid  = "paid"
+	specialRouteRelay = "relay"
+	specialRouteBoth  = "both"
+)
+
+// startSpecialChannelTexts say how special downloads are fetched, by route.
+var startSpecialChannelTexts = map[string]string{
+	specialRoutePaid:  "through a paid third-party service",
+	specialRouteRelay: "through the developer's own home connection",
+	specialRouteBoth:  "through a paid third-party service or the developer's own home connection",
+}
+
+// startSpecialWhyTexts say why special downloads are limited, by route.
+var startSpecialWhyTexts = map[string]string{
+	specialRoutePaid:  "The paid service charges for each one, and the developer pays for it out of pocket. The monthly limits keep that affordable. If the month's budget runs out, these pause until it resets. With more support (/donate), the limits can go up.",
+	specialRouteRelay: "Each one goes over the developer's home connection, which sites block if it fetches too much. The monthly limits keep it working for everyone.",
+	specialRouteBoth:  "The paid service charges for each one and the developer pays for it out of pocket; the home connection gets blocked by sites if it fetches too much. The monthly limits keep both working. If the month's budget runs out, the paid ones pause until it resets. With more support (/donate), the limits can go up.",
+}
+
+// startSpecialRoute returns the route the configured special downloads take.
+func startSpecialRoute(kinds services.SpecialDownloadKindSet) string {
+	result := specialRoutePaid
+	isBoth := (kinds.ViaRelay == true) && (kinds.ViaPaid == true)
+
+	if kinds.ViaRelay == true {
+		result = specialRouteRelay
+	}
+
+	if isBoth == true {
+		result = specialRouteBoth
+	}
+
+	return result
+}
+
+// startSpecialKindsText lists the configured kinds, capitalised, joined
+// "a, b and c".
+func startSpecialKindsText(kinds services.SpecialDownloadKindSet) string {
+	items := []string{}
+	isSomeShorts := (kinds.Shorts == true) && (kinds.AllShorts == false)
+
+	if kinds.RestrictedPosts == true {
+		items = append(items, startKindRestrictedText)
+	}
+
+	if kinds.ReelVideos == true {
+		items = append(items, startKindReelsText)
+	}
+
+	if kinds.Stories == true {
+		items = append(items, startKindStoriesText)
+	}
+
+	if kinds.AllShorts == true {
+		items = append(items, startKindAllShortsText)
+	}
+
+	if isSomeShorts == true {
+		items = append(items, startKindSomeShortsText)
+	}
+
+	joined := joinWithAnd(items)
+	result := capitaliseFirst(joined)
+
+	return result
+}
+
+// Separators of joinWithAnd.
+const (
+	listSeparator     = ", "
+	listLastSeparator = " and "
+)
+
+// joinWithAnd joins items as "a, b and c".
+func joinWithAnd(items []string) string {
+	result := strings.Join(items, listSeparator)
+	last := len(items) - 1
+
+	if last > 0 {
+		head := strings.Join(items[:last], listSeparator)
+		result = fmt.Sprintf("%s%s%s", head, listLastSeparator, items[last])
+	}
+
+	return result
+}
+
+// capitaliseFirst upper-cases the first letter of a text.
+func capitaliseFirst(text string) string {
+	result := text
+
+	if text != "" {
+		first, size := utf8.DecodeRuneInString(text)
+		upper := unicode.ToUpper(first)
+		result = fmt.Sprintf("%c%s", upper, text[size:])
+	}
+
+	return result
+}
+
+// startSpecialText returns the special-download section of the guide for the
+// configured kinds and default limits.
+func startSpecialText(userAllowance int, chatCap int, bonusLine string) string {
+	kinds := services.CurrentSpecialDownloadKinds()
+	route := startSpecialRoute(kinds)
+	kindsText := startSpecialKindsText(kinds)
+	userLimit := monthlyLimitText(userAllowance)
+	chatLimit := monthlyLimitText(chatCap)
+	hasDefaultLimit := (userAllowance > 0) || (chatCap > 0)
+	blurText := ""
+	leftText := ""
+
+	if kinds.RestrictedPosts == true {
+		blurText = startSpecialBlurText
+	}
+
+	if hasDefaultLimit == true {
+		leftText = startSpecialLeftText
+	}
+
+	channel := startSpecialChannelTexts[route]
+	why := startSpecialWhyTexts[route]
+	result := fmt.Sprintf(startSpecialTemplate, kindsText, channel, userLimit, chatLimit, blurText, leftText, bonusLine, why)
+
+	return result
+}
+
+// startBonusStarsText adds bonus downloads to the special section while
 // Stars support is on.
 const startBonusStarsText = "\nUsed them all? Supporting the bot with Telegram Stars (/donate) adds bonus downloads for you, and anyone in a group can raise the group's limit for everyone with 🚀 /boost."
 
 // startGuideText returns the "how it works" part of /start: private chats,
-// groups, free and restricted content, with the default limits from the
-// config (owners can change them per chat and person).
+// groups, free content and special downloads, with the default limits from
+// the config (owners can change them per chat and person).
 func startGuideText(isStarsEnabled bool) string {
 	userAllowance := config.GetGatedFetchUserMonthlyAllowance()
 	chatCap := config.GetGatedFetchChatMonthlyCap()
-	isRestrictedOn := services.IsRestrictedPostsOffered()
-	privateRestricted := ""
-	groupRestricted := ""
-	restrictedText := startRestrictedOffText
+	isSpecialOn := services.IsSpecialDownloadsOffered()
+	privateSpecial := ""
+	groupSpecial := ""
+	specialText := startSpecialOffText
 	bonusLine := ""
 
 	if isStarsEnabled == true {
 		bonusLine = startBonusStarsText
 	}
 
-	if isRestrictedOn == true {
+	if isSpecialOn == true {
 		userLimit := monthlyLimitText(userAllowance)
 		chatLimit := monthlyLimitText(chatCap)
-		privateRestricted = fmt.Sprintf(startPrivateRestrictedTemplate, userLimit)
-		groupRestricted = fmt.Sprintf(startGroupRestrictedTemplate, chatLimit)
-		restrictedText = fmt.Sprintf(startRestrictedTemplate, userLimit, chatLimit, bonusLine)
+		privateSpecial = fmt.Sprintf(startPrivateSpecialTemplate, userLimit)
+		groupSpecial = fmt.Sprintf(startGroupSpecialTemplate, chatLimit)
+		specialText = startSpecialText(userAllowance, chatCap, bonusLine)
 	}
 
-	privateText := fmt.Sprintf(startPrivateTemplate, privateRestricted)
+	privateText := fmt.Sprintf(startPrivateTemplate, privateSpecial)
 	adminRightsText := startGroupAdminRightsText()
-	groupText := fmt.Sprintf(startGroupTemplate, groupRestricted, groupSupportEvery, adminRightsText)
+	groupText := fmt.Sprintf(startGroupTemplate, groupSpecial, groupSupportEvery, adminRightsText)
 	freeText := startFreeText()
-	result := fmt.Sprintf("%s%s%s%s", privateText, groupText, freeText, restrictedText)
+	result := fmt.Sprintf("%s%s%s%s", privateText, groupText, freeText, specialText)
 
 	return result
 }
@@ -256,8 +403,8 @@ Hey! Here's what's been improved recently:
 🧵 <b>Threads support</b>
 Send any Threads link — text, photos, videos and carousels arrive right in the chat.
 
-🔞 <b>Restricted Instagram posts</b>
-Age- or region-limited posts now download too, within a monthly quota per chat.
+💎 <b>Special downloads</b>
+Restricted Instagram posts, login-only reels, Stories and Shorts that need a paid service or the developer's home connection now share one monthly limit; each one shows how many are left.
 
 🖼️ <b>One album per post</b>
 Posts with both photos and videos now arrive as a single album.

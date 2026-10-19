@@ -170,14 +170,14 @@ func TestStoriesNeverFallBackToAnUnlistedApify(t *testing.T) {
 	t.Setenv("HIKERAPI_TOKEN", "")
 	t.Setenv("INSTAGRAM_PAID_PROVIDERS", "hiker")
 
-	if stories := instagramStoriesMethods(); (len(stories) != 0) || (IsPaidServiceConfigured() == true) {
+	if stories := instagramStoriesMethods(); (len(stories) != 0) || (isStoriesFetchConfigured() == true) {
 		t.Fatalf("expected no stories method and Stories not offered, got %v", stories)
 	}
 
 	t.Setenv("HIKERAPI_TOKEN", hikerTestKey)
 	t.Setenv("HIKERAPI_MONTHLY_BUDGET_USD", "0")
 
-	if paused := instagramStoriesMethods(); (len(paused) != 0) || (IsPaidServiceConfigured() == true) {
+	if paused := instagramStoriesMethods(); (len(paused) != 0) || (isStoriesFetchConfigured() == true) {
 		t.Fatalf("expected no stories method with a paused HikerAPI budget, got %v", paused)
 	}
 
@@ -209,13 +209,13 @@ func TestHikerOnlySetupOffersRestrictedPosts(t *testing.T) {
 
 	_, isHiker := NewGatedPostProvider(t.TempDir()).(*HikerInstagramProvider)
 
-	if (IsGatedFetchConfigured() == false) || (IsPaidServiceConfigured() == false) || (isHiker == false) {
+	if (CurrentSpecialDownloadKinds().RestrictedPosts == false) || (isStoriesFetchConfigured() == false) || (isHiker == false) {
 		t.Fatalf("a HikerAPI-only setup must still fetch restricted posts")
 	}
 
 	t.Setenv("INSTAGRAM_PAID_PROVIDERS", "apify")
 
-	if IsGatedFetchConfigured() == true {
+	if CurrentSpecialDownloadKinds().RestrictedPosts == true {
 		t.Fatalf("HikerAPI left out of INSTAGRAM_PAID_PROVIDERS must not fetch restricted posts")
 	}
 }
@@ -226,7 +226,7 @@ func TestStoriesAreOfferedOnlyWhenTheStoriesChainCanRun(t *testing.T) {
 	t.Setenv("HIKERAPI_MONTHLY_BUDGET_USD", "1")
 	t.Setenv("INSTAGRAM_PAID_PROVIDERS", "apify")
 
-	if IsPaidServiceConfigured() == true {
+	if isStoriesFetchConfigured() == true {
 		t.Fatalf("HikerAPI left out of INSTAGRAM_PAID_PROVIDERS must not offer Stories")
 	}
 
@@ -235,7 +235,7 @@ func TestStoriesAreOfferedOnlyWhenTheStoriesChainCanRun(t *testing.T) {
 	t.Setenv("HIKERAPI_TOKEN", "")
 	t.Setenv("INSTAGRAM_PAID_PROVIDERS", "hiker")
 
-	if IsPaidServiceConfigured() == true {
+	if isStoriesFetchConfigured() == true {
 		t.Fatalf("Apify left out of INSTAGRAM_PAID_PROVIDERS must not offer Stories")
 	}
 }
@@ -406,7 +406,7 @@ func TestStoriesChainStopsOnAPrivateAccount(t *testing.T) {
 	fake.bodies[hikerPathStoryByURL] = hikerStoryVideoBody
 	sd := newStoriesTestDownloader(t, apifyServer, fake)
 
-	_, err := sd.downloadMediaWithContext(context.Background(), storyTestURL)
+	_, err := sd.downloadMediaWithContext(context.Background(), storyTestURL, newAllowedDownload(storyTestURL))
 
 	if (err == nil) || (isPaidContentOutcome(err) == false) || (fake.callCount(hikerPathStoryByURL) != 0) {
 		t.Fatalf("a private account must stop the chain, got %v hiker calls=%d", err, fake.callCount(hikerPathStoryByURL))
@@ -420,7 +420,7 @@ func TestStoriesChainUsesHikerAfterAnApifyError(t *testing.T) {
 	sd := newStoriesTestDownloader(t, newFailingApify(t), fake)
 
 	sharedURL := fmt.Sprintf("%s?utm_source=ig_story_item_share", storyTestURL)
-	media, err := sd.downloadMediaWithContext(context.Background(), sharedURL)
+	media, err := sd.downloadMediaWithContext(context.Background(), sharedURL, newAllowedDownload(sharedURL))
 
 	if (err != nil) || (len(media) != 1) || (media[0].Type != MediaTypeVideo) || (strings.Contains(media[0].Caption, "@nasa") == false) {
 		t.Fatalf("expected the HikerAPI story, got %+v %v", media, err)
@@ -482,7 +482,7 @@ func TestStoriesChainBudgetReplyOnlyWhenEveryProviderWasSkipped(t *testing.T) {
 
 			sd := newStoriesTestDownloader(t, apifyServer, fake)
 
-			_, err := sd.downloadMediaWithContext(context.Background(), storyTestURL)
+			_, err := sd.downloadMediaWithContext(context.Background(), storyTestURL, newAllowedDownload(storyTestURL))
 
 			if (err == nil) || (IsPaidBudgetError(err) != row.isBudget) {
 				t.Fatalf("expected budget=%v, got %v", row.isBudget, err)

@@ -213,7 +213,7 @@ func TestAlbumSendErrorTellsRejectionFromUnknownOutcome(t *testing.T) {
 
 func TestAlbumCaptionStripsTagsWhenSentAsPlainText(t *testing.T) {
 	long := `📷 <a href="https://www.instagram.com/a.b/">@a.b</a>` + "\n\n" + strings.Repeat("x &amp; y ", 200)
-	caption, parseMode := albumCaption(long, 1, "https://example.com/post")
+	caption, parseMode := albumCaption(&services.MediaInfo{Caption: long}, 1, "https://example.com/post")
 
 	if (parseMode != "") || (strings.Contains(caption, "<a href") == true) || (strings.Contains(caption, "@a.b") == false) || (strings.Contains(caption, "x & y") == false) {
 		t.Fatalf("expected plain text without tags, got mode=%q caption=%q", parseMode, caption[:80])

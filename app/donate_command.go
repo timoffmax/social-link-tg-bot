@@ -30,12 +30,12 @@ const donateIntroCryptoText = "Support is optional: the bot stays free, with no 
 // donateStarsText describes the Stars tiers; only Stars support adds bonus
 // downloads, crypto donations unlock nothing.
 const donateStarsText = `⭐ <b>Telegram Stars:</b>
-Pick an amount with the buttons below. As a thank-you you get bonus downloads of restricted Instagram posts: age- or region-limited posts the bot can only fetch through a paid service. To raise a group's limit for everyone there instead, send /boost in that group.
+Pick an amount with the buttons below. As a thank-you you get bonus downloads: extra special downloads (see /info for what counts) for when the free monthly limit runs out. To raise a group's limit for everyone there instead, send /boost in that group.
 
 <b>How bonus downloads work:</b>
 • They're yours: they work in any chat, but only for links you send. They aren't shared with the group.
 • Free downloads come first. A bonus download is used only once the free monthly limit (yours, the chat's or the bot's) runs out.
-• If the bot can't fetch the post, no bonus download is used. They don't expire.
+• If the bot can't fetch the link, no bonus download is used. They don't expire.
 • Card and crypto donations don't add bonus downloads.
 
 Telegram sells Stars in packs; anything left over stays in your Telegram balance.

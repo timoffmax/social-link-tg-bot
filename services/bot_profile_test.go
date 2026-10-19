@@ -56,13 +56,11 @@ func TestProfileWithEveryPlatformOnIsTheHeadProfile(t *testing.T) {
 	for _, token := range []string{"", "test-token"} {
 		t.Setenv("APIFY_TOKEN", token)
 		useSettingsSnapshot(t, map[string]any{})
-		restrictedLine := ""
-
-		if IsRestrictedPostsOffered() == true {
-			restrictedLine = fmt.Sprintf(botDescriptionRestrictedTemplate, 20, 20)
+		if IsSpecialDownloadsOffered() == true {
+			t.Fatalf("token %q: special downloads must not be offered without a database", token)
 		}
 
-		if BotDescription() != fmt.Sprintf(headBotDescriptionTemplate, restrictedLine) {
+		if BotDescription() != fmt.Sprintf(headBotDescriptionTemplate, "") {
 			t.Fatalf("token %q: description changed: %q", token, BotDescription())
 		}
 
@@ -85,6 +83,7 @@ func platformCombination(mask int) map[string]any {
 }
 
 func TestDescriptionsFitForEveryPlatformCombination(t *testing.T) {
+	markDatabaseOpenForTest(t)
 	t.Setenv("APIFY_TOKEN", "test-token")
 	t.Setenv("GATED_FETCH_USER_MONTHLY_ALLOWANCE", "1000")
 	t.Setenv("GATED_FETCH_CHAT_MONTHLY_CAP", "1000")

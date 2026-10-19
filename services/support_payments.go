@@ -12,7 +12,7 @@ import (
 )
 
 // SupportTier is one fixed "support the developer" price in Telegram Stars
-// and the bonus restricted-post credits given as a thank-you.
+// and the bonus special-download credits given as a thank-you.
 type SupportTier struct {
 	Stars   int
 	Credits int
@@ -586,11 +586,11 @@ func finishSupportTx(tx *sql.Tx, err error) error {
 const creditsCheckTimeout = 3 * time.Second
 
 // CanUseGroupFetchCredits reports whether bonus credits bought for a group
-// could ever be used: the paid fetch is configured, and the group isn't
+// could ever be used: special downloads are configured, and the group isn't
 // turned off (an explicit off, or a monthly cap of 0) or unlimited (it never
 // runs out, so credits would never apply). Boosts are declined otherwise.
 func CanUseGroupFetchCredits(chatID int64) bool {
-	isConfigured := (IsGatedFetchConfigured() == true) && (IsDBInitialized() == true) && (chatID < 0)
+	isConfigured := (IsSpecialDownloadsConfigured() == true) && (IsDBInitialized() == true) && (chatID < 0)
 	result := false
 
 	if isConfigured == true {
@@ -669,14 +669,14 @@ func moveGroupRows(ctx context.Context, tx *sql.Tx, oldChatID int64, newChatID i
 }
 
 // CanUseGatedFetchCredits reports whether bonus credits bought by a user could
-// ever be used: the paid fetch is configured (Apify token, a bot-wide cap
-// that isn't 0, a database) and the user's effective allowance (the owner's
+// ever be used: special downloads are configured (a costed source, a
+// bot-wide cap that isn't 0, a database) and the user's effective allowance (the owner's
 // override, else the default) isn't 0, which blocks credits too. Credits work
 // in the user's private chat, so a group turned off doesn't make them
 // unusable. Payments are declined otherwise, so nobody pays for unusable
 // credits.
 func CanUseGatedFetchCredits(userID int64) bool {
-	isConfigured := (IsGatedFetchConfigured() == true) && (IsDBInitialized() == true)
+	isConfigured := (IsSpecialDownloadsConfigured() == true) && (IsDBInitialized() == true)
 	result := false
 
 	if isConfigured == true {

@@ -440,19 +440,22 @@ func processMediaDownload(url string, origChat *response.TgChat, origMessage *re
 	defer close(stopAction)
 
 	// Try to download media using smart downloader
-	mediaInfos, err := downloader.DownloadMedia(url)
 	isPrivate := (chatTypePrivate == origChat.Type)
 	userID := int64(origMessage.From.Id)
+	requester := services.DownloadRequester{ChatID: origChat.Id, UserID: userID, IsPrivate: isPrivate}
+	mediaInfos, err := downloader.DownloadMedia(url, requester)
 
 	// An Instagram post gated by its author may still be fetched through the
-	// paid provider, within the chat's or user's monthly quota.
+	// paid provider, within the special-download limit.
 	if err != nil {
-		mediaInfos, err = downloader.FetchGatedPost(url, err, origChat.Id, userID, isPrivate)
+		mediaInfos, err = downloader.FetchGatedPost(url, err, requester)
 	}
 
 	// So may the video of a reel the free methods got only the cover of.
 	if err == nil {
-		mediaInfos = downloader.FetchReelVideo(url, mediaInfos, origChat.Id, userID, isPrivate)
+		reelMedia, reelDenial := downloader.FetchReelVideo(url, mediaInfos, requester)
+		appendReelDenialNote(reelMedia, reelDenial)
+		mediaInfos = reelMedia
 	}
 
 	if err != nil {
@@ -498,6 +501,12 @@ func processMediaDownload(url string, origChat *response.TgChat, origMessage *re
 		// Instagram posts gated by their author can't be fetched logged out, and a
 		// fixed link can't show them either: explain instead.
 		if replyInstagramGate(err, origMessage, origChat) == true {
+			return
+		}
+
+		// The special-download limit refused a Short or a Story: say why
+		// instead of a generic error or a fixed link.
+		if replySpecialDownloadDenied(err, origMessage, origChat) == true {
 			return
 		}
 
@@ -773,6 +782,16 @@ func extractAuthorInfo(fullCaption, platform string) string {
 	return result
 }
 
+// minimalCaption is the caption sent while descriptions are off: the author
+// line, then the notes the bot added (limit, bonus, cover).
+func minimalCaption(item *services.MediaInfo, platform string) string {
+	body := services.CaptionWithoutNotes(item)
+	authorLine := extractAuthorInfo(body, platform)
+	result := services.CaptionWithNotes(authorLine, item.Notes)
+
+	return result
+}
+
 // threadsAuthorFallback is the author line when a Threads caption has none.
 const threadsAuthorFallback = "🧵 Threads"
 
@@ -876,8 +895,8 @@ func sendMediaFile(mediaInfo *services.MediaInfo, origChat *response.TgChat, ori
 	platform := detectPlatformFromUrl(url)
 	if platform != "" && !services.IsDescriptionEnabledForChat(origChat.Id, platform) {
 		log.Printf("📝 Descriptions disabled for %s in chat %d, using minimal caption", platform, origChat.Id)
-		// Keep only author info, remove the main description
-		caption = extractAuthorInfo(caption, platform)
+		// Keep only author info and the bot's notes, remove the main description
+		caption = minimalCaption(mediaInfo, platform)
 	}
 
 	// For Twitter/X posts, handle long text intelligently
@@ -1155,25 +1174,139 @@ func buildVxRedditURL(originalURL string) string {
 const instagramGatedLogType = "instagram-gated"
 
 // gatedAllowanceUsedHint is appended when a private user's monthly allowance of
-// paid gated-post fetches is used up.
-const gatedAllowanceUsedHint = "You've used all your free downloads of restricted posts for this month."
+// special downloads is used up.
+const gatedAllowanceUsedHint = "You've used all your free special downloads for this month."
 
-// gatedChatCapReachedHint is appended when a group's monthly cap of paid
-// gated-post fetches is used up.
-const gatedChatCapReachedHint = "This chat has used all its downloads of restricted posts for this month."
+// gatedChatCapReachedHint is appended when a group's monthly cap of special
+// downloads is used up.
+const gatedChatCapReachedHint = "This chat has used all its special downloads for this month."
 
 // gatedGlobalCapReachedHint is appended when the bot-wide monthly cap is used up.
-const gatedGlobalCapReachedHint = "The bot has used all its downloads of restricted posts for this month."
+const gatedGlobalCapReachedHint = "The bot has used all its special downloads for this month."
 
 // paidBudgetPausedText says the paid service is paused for the month and
-// why; it answers restricted posts and other paid downloads alike.
-const paidBudgetPausedText = "⏸ The bot's monthly budget for the paid service (restricted Instagram posts, Stories and some YouTube Shorts) is used up for now, so these are paused. Please try again later: at the latest it resets next month. The developer pays for it; with more support (/donate) the limits can go up."
+// why; it answers every special download that needs the paid service.
+const paidBudgetPausedText = "⏸ The bot's monthly budget for the paid service is used up for now, so special downloads that need it are paused. Please try again later: at the latest it resets next month. The developer pays for it; with more support (/donate) the limits can go up."
 
-// gatedChatOffHint is appended when the owner turned the paid fetch off here.
-const gatedChatOffHint = "Downloads of restricted posts are turned off in this chat."
+// gatedChatOffHint is appended when the owner turned special downloads off here.
+const gatedChatOffHint = "Special downloads are turned off in this chat."
 
 // gatedUserBlockedHint is appended when the user's allowance is 0.
-const gatedUserBlockedHint = "Downloads of restricted posts are turned off for you."
+const gatedUserBlockedHint = "Special downloads are turned off for you."
+
+// specialDownloadDeniedLeadText opens the reply to a special download the
+// limit refused.
+const specialDownloadDeniedLeadText = "💎 This link is a special download: fetching it costs the developer, so it counts toward a monthly limit (see /info)."
+
+// Telegram message log keys of the limit and budget replies.
+const (
+	specialDownloadDeniedLogType = "special-download-denied"
+	paidBudgetPausedLogType      = "paid-budget-paused"
+)
+
+// specialDownloadDenialHints maps a limit refusal (and a budget pause) to its hint.
+var specialDownloadDenialHints = map[services.GatedFetchDenial]string{
+	services.GatedFetchDeniedUserCap: gatedAllowanceUsedHint,
+	services.GatedFetchDeniedChatCap: gatedChatCapReachedHint,
+	services.GatedFetchDeniedGlobal:  gatedGlobalCapReachedHint,
+	services.GatedFetchDeniedChatOff: gatedChatOffHint,
+	services.GatedFetchDeniedBlocked: gatedUserBlockedHint,
+	services.GatedFetchDeniedBudget:  paidBudgetPausedText,
+}
+
+// specialDownloadDenialText is the hint plus the /donate or /boost line; "" for no hint.
+func specialDownloadDenialText(denial services.GatedFetchDenial) string {
+	result := specialDownloadDenialHints[denial]
+	isStarsEnabled := config.IsStarsSupportEnabled()
+	supportHint := supportGatedHint(denial, isStarsEnabled)
+
+	if (result != "") && (supportHint != "") {
+		result = fmt.Sprintf("%s\n%s", result, supportHint)
+	}
+
+	return result
+}
+
+// specialDownloadDeniedText is the full limit message: the lead and the hint,
+// or the budget-paused text alone.
+func specialDownloadDeniedText(denial services.GatedFetchDenial) string {
+	hint := specialDownloadDenialText(denial)
+	result := fmt.Sprintf("%s\n\n%s", specialDownloadDeniedLeadText, hint)
+
+	if denial == services.GatedFetchDeniedBudget {
+		result = paidBudgetPausedText
+	}
+
+	return result
+}
+
+// specialDownloadRefusalOf returns the limit refusal behind a download error
+// that isn't a gated post; "" for any other error.
+func specialDownloadRefusalOf(downloadErr error) services.GatedFetchDenial {
+	result := services.GatedFetchAllowed
+	var deniedErr *services.GatedFetchDeniedError
+	var gatedErr *services.InstagramGatedError
+	isDenied := errors.As(downloadErr, &deniedErr)
+	isGated := errors.As(downloadErr, &gatedErr)
+	isRefusal := (isDenied == true) && (isGated == false) && (services.IsSpecialDownloadRefusal(deniedErr.Denial) == true)
+
+	if isRefusal == true {
+		result = deniedErr.Denial
+	}
+
+	return result
+}
+
+// replySpecialDownloadDenied answers a Short or Story the limit refused and
+// reports whether the reply was sent.
+func replySpecialDownloadDenied(downloadErr error, origMessage *response.TgMessage, origChat *response.TgChat) bool {
+	result := false
+	denial := specialDownloadRefusalOf(downloadErr)
+
+	if denial != services.GatedFetchAllowed {
+		log.Printf("💎 Special download refused (%s) in chat %d", denial, origChat.Id)
+
+		deniedMsg := payload.TgPlSendMessage{
+			ChatId:              origChat.Id,
+			Text:                specialDownloadDeniedText(denial),
+			ReplyToMessageId:    origMessage.MessageId,
+			DisableNotification: true,
+		}
+		sent := message.NewSendMessage(deniedMsg)
+		result = (sent != nil)
+		services.LogTelegramMessage(origChat.Id, specialDownloadDeniedLogType, result, "")
+	}
+
+	return result
+}
+
+// appendReelDenialNote adds the limit message under a reel cover the limit
+// refused or the paused budget stopped.
+func appendReelDenialNote(media []*services.MediaInfo, denial services.GatedFetchDenial) {
+	isRefusal := services.IsSpecialDownloadRefusal(denial)
+	isBudget := (denial == services.GatedFetchDeniedBudget)
+	isNoted := ((isRefusal == true) || (isBudget == true)) && (len(media) == 1)
+
+	if isNoted == true {
+		cover := media[0]
+		deniedText := specialDownloadDeniedText(denial)
+		note := reelDenialNote(cover, deniedText)
+		services.AppendCaptionNote(cover, note)
+	}
+}
+
+// reelDenialNote takes the cover note off the cover's caption and returns it
+// with the limit message under it, so a caption cut to fit never drops it.
+func reelDenialNote(cover *services.MediaInfo, deniedText string) string {
+	result := deniedText
+	hasCoverNote := services.DropCaptionNote(cover, services.ReelCoverNote)
+
+	if hasCoverNote == true {
+		result = fmt.Sprintf("%s\n\n%s", services.ReelCoverNote, deniedText)
+	}
+
+	return result
+}
 
 // replyInstagramGate replies to an Instagram link whose author limited its
 // audience (e.g. "People under 15 can't see this content") with an explanation.
@@ -1211,64 +1344,41 @@ func isAuthorLine(line string) bool {
 	return result
 }
 
-// instagramGateReplyText explains a gated post, adding a hint when the user's
-// private allowance of paid fetches is what stopped the download.
+// instagramGateReplyText explains a gated post, adding the hint of the limit
+// or budget that stopped the download.
 func instagramGateReplyText(downloadErr error, gate services.InstagramGate) string {
 	result := services.InstagramGateMessage(gate)
 	var deniedErr *services.GatedFetchDeniedError
 	isDenied := errors.As(downloadErr, &deniedErr)
-
-	if (isDenied == true) && (deniedErr.Denial == services.GatedFetchDeniedUserCap) {
-		result = fmt.Sprintf("%s\n\n%s", result, gatedAllowanceUsedHint)
-	}
-
-	if (isDenied == true) && (deniedErr.Denial == services.GatedFetchDeniedChatCap) {
-		result = fmt.Sprintf("%s\n\n%s", result, gatedChatCapReachedHint)
-	}
-
-	if (isDenied == true) && (deniedErr.Denial == services.GatedFetchDeniedGlobal) {
-		result = fmt.Sprintf("%s\n\n%s", result, gatedGlobalCapReachedHint)
-	}
-
-	if (isDenied == true) && (deniedErr.Denial == services.GatedFetchDeniedChatOff) {
-		result = fmt.Sprintf("%s\n\n%s", result, gatedChatOffHint)
-	}
-
-	if (isDenied == true) && (deniedErr.Denial == services.GatedFetchDeniedBlocked) {
-		result = fmt.Sprintf("%s\n\n%s", result, gatedUserBlockedHint)
-	}
-
-	if (isDenied == true) && (deniedErr.Denial == services.GatedFetchDeniedBudget) {
-		result = fmt.Sprintf("%s\n\n%s", result, paidBudgetPausedText)
-	}
-
-	supportHint := ""
+	hint := ""
 
 	if isDenied == true {
-		isSupportEnabled := config.IsStarsSupportEnabled()
-		supportHint = supportGatedHint(deniedErr.Denial, isSupportEnabled)
+		hint = specialDownloadDenialText(deniedErr.Denial)
 	}
 
-	if supportHint != "" {
-		result = fmt.Sprintf("%s\n%s", result, supportHint)
+	if hint != "" {
+		result = fmt.Sprintf("%s\n\n%s", result, hint)
 	}
 
 	return result
 }
 
 // replyPaidBudgetPaused answers a download stopped by the paid service's
-// monthly budget and reports whether it did.
+// monthly budget and reports whether the reply was sent.
 func replyPaidBudgetPaused(downloadErr error, origMessage *response.TgMessage, origChat *response.TgChat) bool {
-	result := services.IsPaidBudgetError(downloadErr)
+	result := false
+	isBudgetError := services.IsPaidBudgetError(downloadErr)
 
-	if result == true {
+	if isBudgetError == true {
 		pausedMsg := payload.TgPlSendMessage{
 			ChatId:              origChat.Id,
 			Text:                paidBudgetPausedText,
 			ReplyToMessageId:    origMessage.MessageId,
 			DisableNotification: true,
 		}
-		message.NewSendMessage(pausedMsg)
+		sent := message.NewSendMessage(pausedMsg)
+		result = (sent != nil)
+		services.LogTelegramMessage(origChat.Id, paidBudgetPausedLogType, result, "")
 	}
 
 	return result

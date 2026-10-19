@@ -31,13 +31,13 @@ make logs      # Tail production logs (needs bin/deploy.conf)
 make help      # List all targets
 ```
 
-Unit tests are hermetic: external services (Telegram, Apify, Threads, the redirectors) are replaced by local `httptest` servers. The gated-fetch quota tests need a disposable PostgreSQL and are skipped without one:
+Unit tests are hermetic: external services (Telegram, Apify, Threads, the redirectors) are replaced by local `httptest` servers. The database tests (special-download limits and their accounting, bonus credits, paid requests, report replies) need a disposable PostgreSQL and are skipped without one:
 
 ```bash
 docker run -d --rm --name gated-fetch-test-pg -e POSTGRES_PASSWORD=test \
   -p 127.0.0.1:55432:5432 --tmpfs /var/lib/postgresql/data postgres:16-alpine
 GATED_FETCH_TEST_DSN="postgres://postgres:test@127.0.0.1:55432/postgres?sslmode=disable" \
-  go test ./services -run 'GatedFetch|FetchReelVideo'
+  go test ./services -count=1
 docker stop gated-fetch-test-pg
 ```
 

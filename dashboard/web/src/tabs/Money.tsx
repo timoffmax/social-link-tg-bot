@@ -30,7 +30,7 @@ function limitKind(row: GatedCurrent): string {
   return result;
 }
 
-const GATED_SERIES: Series[] = [{ key: 'global_used', label: 'Restricted posts', color: SERIES_1 }];
+const GATED_SERIES: Series[] = [{ key: 'global_used', label: 'Special downloads', color: SERIES_1 }];
 
 const STARS_SERIES: Series[] = [
   { key: 'stars', label: 'Stars received', color: SERIES_1 },
@@ -108,13 +108,13 @@ function GatedMonthly({ query }: { query: Query<MoneyResponse> }) {
 
   return (
     <Panel
-      title="Restricted posts per month"
-      subtitle="Paid fetches of author-restricted Instagram posts, bot-wide"
+      title="Special downloads per month"
+      subtitle="Restricted or login-only Instagram posts, Stories and Shorts fetched through a paid service or the home relay, bot-wide"
       loading={query.loading}
       error={query.error}
       hasData={query.data !== null}
       isEmpty={isAllZero(rows, (row) => row.global_used)}
-      emptyText={`No restricted posts fetched in the last ${MONEY_MONTHS} months.`}
+      emptyText={`No special downloads in the last ${MONEY_MONTHS} months.`}
       table={{ columns: GATED_COLUMNS, rows, rowKey: (row) => row.month }}
     >
       <ColumnChart
@@ -167,16 +167,16 @@ function GatedThisMonth({ query }: { query: Query<MoneyResponse> }) {
 
   return (
     <Panel
-      title="Restricted posts this month"
+      title="Special downloads this month"
       subtitle="Per group and user quota. A default limit comes from the bot’s config and is not shown here."
       loading={query.loading}
       error={query.error}
       hasData={query.data !== null}
       isEmpty={rows.length === 0}
-      emptyText="No restricted posts fetched this month."
+      emptyText="No special downloads this month."
       wide
     >
-      <DataTable columns={CURRENT_COLUMNS} rows={rows} rowKey={(row) => `${row.scope}:${row.scope_id}`} caption="Restricted posts this month" />
+      <DataTable columns={CURRENT_COLUMNS} rows={rows} rowKey={(row) => `${row.scope}:${row.scope_id}`} caption="Special downloads this month" />
     </Panel>
   );
 }

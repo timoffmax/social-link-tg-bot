@@ -95,7 +95,7 @@ func (c *apifyClient) runSync(ctx context.Context, actor string, input interface
 	}
 
 	if (err == nil) && (runTimeout <= 0) {
-		err = fmt.Errorf("no time left for an apify run: %w", context.DeadlineExceeded)
+		err = fmt.Errorf("%w: no time left for an apify run: %w", errCostedNotStarted, context.DeadlineExceeded)
 	}
 
 	if err == nil {
@@ -145,7 +145,7 @@ func (c *apifyClient) reserveBudget(ctx context.Context, maxChargeUsd float64) e
 	budget := config.GetApifyMonthlyBudgetUsd()
 
 	if err != nil {
-		err = fmt.Errorf("apify budget check failed: %w", err)
+		err = fmt.Errorf("%w: apify budget check failed: %w", errCostedNotStarted, err)
 	}
 
 	apifyInFlight.Lock()

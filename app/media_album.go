@@ -213,24 +213,25 @@ func albumInputMedia(item *services.MediaInfo, index int, chatID int64, url stri
 	}
 
 	if (index == 0) && (item.Caption != "") {
-		result.Caption, result.ParseMode = albumCaption(item.Caption, chatID, url)
+		result.Caption, result.ParseMode = albumCaption(item, chatID, url)
 	}
 
 	return result
 }
 
-// albumCaption applies the chat's description setting (author line only when
-// descriptions are off) and Telegram's caption limit. Captions are sent with
-// ParseModeHTML, so entities stay escaped; an over-long caption is cut at a
-// rune boundary and sent as plain text, since a blind cut could split a tag.
-func albumCaption(caption string, chatID int64, url string) (string, string) {
-	result := caption
+// albumCaption applies the chat's description setting (author line and the
+// bot's notes only when descriptions are off) and Telegram's caption limit.
+// Captions are sent with ParseModeHTML, so entities stay escaped; an
+// over-long caption is cut at a rune boundary and sent as plain text, since a
+// blind cut could split a tag.
+func albumCaption(item *services.MediaInfo, chatID int64, url string) (string, string) {
+	result := item.Caption
 	parseMode := payload.ParseModeHTML
 	platform := detectPlatformFromUrl(url)
 	isDescriptionOff := (platform != "") && (services.IsDescriptionEnabledForChat(chatID, platform) == false)
 
 	if isDescriptionOff == true {
-		result = extractAuthorInfo(caption, platform)
+		result = minimalCaption(item, platform)
 	}
 
 	if len(result) > services.TelegramCaptionLimitBytes {

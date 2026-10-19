@@ -71,18 +71,21 @@ func facebookExtractionStrategy(rawURL string) *ExtractionStrategy {
 
 // youtubeShortsStrategy is the chain of Shorts (the only videos detected):
 // the home relay then the paid Apify downloader when the relay is usable
-// for YouTube (isRelayUsableFor, the same check that builds its extractor),
-// else yt-dlp (YouTube blocks it from datacenter IPs since 2026-08) then
-// Apify.
+// for YouTube (isRelayUsableFor, the same check that builds its extractor)
+// and special downloads are on, else yt-dlp (YouTube blocks it from
+// datacenter IPs since 2026-08) then Apify.
 func youtubeShortsStrategy() *ExtractionStrategy {
 	methods := []ExtractionMethod{MethodYtDlp, MethodYouTubeApify}
-	isRelayOn := isRelayUsableFor(relayPlatformYouTube)
+	isRelayUsable := isRelayUsableFor(relayPlatformYouTube)
+	isRelayChain := (isRelayUsable == true) && (IsSpecialDownloadsOn() == true)
 
 	// With the relay configured the server's yt-dlp stays out of the chain
 	// even while the relay is down or disabled on its side (the owner's
 	// decision): it has not fetched a Short from the datacenter IP since
-	// 2026-08, so it would only spend chain time before Apify.
-	if isRelayOn == true {
+	// 2026-08, so it would only spend chain time before Apify. Relay Shorts
+	// are special downloads, so while those are off (bot-wide cap 0 or no
+	// database) the chain goes back to yt-dlp rather than fetching nothing.
+	if isRelayChain == true {
 		methods = []ExtractionMethod{MethodYouTubeRelay, MethodYouTubeApify}
 	}
 

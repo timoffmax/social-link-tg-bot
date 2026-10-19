@@ -218,12 +218,19 @@ func TestGatedFetchConcurrentReservationsNeverExceedCap(t *testing.T) {
 	}
 }
 
-func TestGatedFetchIsOffWithoutToken(t *testing.T) {
+func TestResolveGatedFetchQuotasIsOffOnlyAtCapZero(t *testing.T) {
 	setupGatedFetchTestDB(t)
 	t.Setenv("APIFY_TOKEN", "")
+	t.Setenv("HIKERAPI_TOKEN", "")
 
-	if denial := reserveOnce(t, 1, 1, true); denial != GatedFetchDeniedOff {
-		t.Fatalf("expected off without a token, got %q", denial)
+	if denial := reserveOnce(t, 1, 1, true); denial != GatedFetchAllowed {
+		t.Fatalf("expected a relay-only setup (no tokens) allowed, got %q", denial)
+	}
+
+	t.Setenv("GATED_FETCH_GLOBAL_MONTHLY_CAP", "0")
+
+	if denial := reserveOnce(t, 2, 2, true); denial != GatedFetchDeniedOff {
+		t.Fatalf("expected off at a bot-wide cap of 0, got %q", denial)
 	}
 }
 
@@ -245,7 +252,7 @@ func TestGatedFetchFailureRefundsUserButKeepsGlobalSpend(t *testing.T) {
 	sd := &SmartDownloader{gated: failingGatedProvider{}}
 	gatedErr := &InstagramGatedError{Gate: InstagramGate{Restricted: true}}
 
-	_, err := sd.FetchGatedPost("https://www.instagram.com/p/DeYsKEDjbGB/", gatedErr, 31, 31, true)
+	_, err := sd.FetchGatedPost("https://www.instagram.com/p/DeYsKEDjbGB/", gatedErr, DownloadRequester{ChatID: 31, UserID: 31, IsPrivate: true})
 
 	if err == nil {
 		t.Fatalf("expected the failed fetch to return an error")
@@ -336,9 +343,9 @@ func TestGatedFetchCaptionEndsWithTheRemainingQuota(t *testing.T) {
 	sd := &SmartDownloader{gated: succeedingGatedProvider{}}
 	gatedErr := &InstagramGatedError{Gate: InstagramGate{Restricted: true}}
 
-	media, err := sd.FetchGatedPost("https://www.instagram.com/p/DeYsKEDjbGB/", gatedErr, -500, 5, false)
+	media, err := sd.FetchGatedPost("https://www.instagram.com/p/DeYsKEDjbGB/", gatedErr, DownloadRequester{ChatID: -500, UserID: 5, IsPrivate: false})
 
-	if (err != nil) || (strings.HasSuffix(media[0].Caption, "📊 Restricted posts left this month: 19 of 20") == false) {
+	if (err != nil) || (strings.HasSuffix(media[0].Caption, "📊 Special downloads left this month: 19 of 20") == false) {
 		t.Fatalf("expected the quota note, got %q %v", media[0].Caption, err)
 	}
 }
@@ -391,7 +398,7 @@ func TestFetchReelVideoReplacesTheCoverAndUsesTheQuota(t *testing.T) {
 	sd := &SmartDownloader{gated: provider}
 	cover := newReelCover(t)
 
-	got := sd.FetchReelVideo(reelVideoTestURL, []*MediaInfo{cover}, 41, 41, true)
+	got, _ := sd.FetchReelVideo(reelVideoTestURL, []*MediaInfo{cover}, DownloadRequester{ChatID: 41, UserID: 41, IsPrivate: true})
 
 	if (len(got) != 1) || (got[0].Type != MediaTypeVideo) {
 		t.Fatalf("expected the paid video, got %+v", got)
@@ -417,7 +424,7 @@ func TestFetchReelVideoKeepsTheCoverWhenThePaidFetchFails(t *testing.T) {
 	sd := &SmartDownloader{gated: failingGatedProvider{}}
 	cover := newReelCover(t)
 
-	got := sd.FetchReelVideo(reelVideoTestURL, []*MediaInfo{cover}, 42, 42, true)
+	got, _ := sd.FetchReelVideo(reelVideoTestURL, []*MediaInfo{cover}, DownloadRequester{ChatID: 42, UserID: 42, IsPrivate: true})
 
 	if (len(got) != 1) || (got[0] != cover) || (strings.HasSuffix(cover.Caption, reelCoverNote) == false) {
 		t.Fatalf("expected the cover with the note, got %+v", got)
@@ -435,7 +442,7 @@ func TestFetchReelVideoKeepsTheCoverWhenThePaidResultIsNoVideo(t *testing.T) {
 	sd := &SmartDownloader{gated: coverGatedProvider{}}
 	cover := newReelCover(t)
 
-	got := sd.FetchReelVideo(reelVideoTestURL, []*MediaInfo{cover}, 43, 43, true)
+	got, _ := sd.FetchReelVideo(reelVideoTestURL, []*MediaInfo{cover}, DownloadRequester{ChatID: 43, UserID: 43, IsPrivate: true})
 
 	if (len(got) != 1) || (got[0] != cover) || (strings.HasSuffix(cover.Caption, reelCoverNote) == false) {
 		t.Fatalf("expected the cover with the note, got %+v", got)

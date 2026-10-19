@@ -25,7 +25,7 @@ type BotCommand struct {
 // starsSupportCommands are listed only while Telegram Stars support is on.
 // /support stays an unlisted alias of /donate.
 var starsSupportCommands = []BotCommand{
-	{Command: "boost", Description: "Raise a group's limit of restricted posts (Stars)"},
+	{Command: "boost", Description: "Raise a group's limit of special downloads (Stars)"},
 	{Command: "paysupport", Description: "Help with Stars payments"},
 	{Command: "terms", Description: "Terms of Stars support"},
 }
@@ -69,8 +69,8 @@ func botCommandList(isStarsSupportEnabled bool) []BotCommand {
 
 // botDescriptionTemplate is shown in the empty chat with the bot
 // (setMyDescription, up to 512 characters): the platform line (the platforms
-// that are on), then the restricted-post line with the monthly limits per
-// person and per group.
+// that are on), the free line, then the special-download line with the
+// monthly limits per person and per group.
 const botDescriptionTemplate = `Send a link, get the actual photos and videos right in Telegram.
 
 %s
@@ -78,13 +78,39 @@ const botDescriptionTemplate = `Send a link, get the actual photos and videos ri
 💬 Private chat: send me any link.
 👥 Groups: add me, and I answer every link anyone posts.
 
-🔓 Public posts: free, no monthly limit.
+%s
 %s
 No ads, no forced subscriptions. Tap Start for details.`
 
-// botDescriptionRestrictedTemplate is the restricted-post line of the
+// Free lines of the description: "most" while special downloads are offered.
+const (
+	botDescriptionFreeOfferedText = "🔓 Most public posts: free, no monthly limit."
+	botDescriptionFreeText        = "🔓 Public posts: free, no monthly limit."
+)
+
+// botDescriptionSpecialTemplate is the special-download line of the
 // description: the default monthly limits per person and per group.
-const botDescriptionRestrictedTemplate = "🔞 Restricted Instagram posts (age- or region-limited): by default %d a month per person, %d per group.\n"
+const botDescriptionSpecialTemplate = "💎 Special downloads (they cost the developer, see /info): by default %s per person, %s per group.\n"
+
+// Default limit wordings of the special-download line: a count or none; the
+// person's count carries "a month".
+const (
+	botDescriptionUserLimitTemplate = "%d a month"
+	botDescriptionChatLimitTemplate = "%d"
+	botDescriptionLimitNoneText     = "none"
+)
+
+// botDescriptionLimitText words a default monthly limit in the description;
+// 0 is none.
+func botDescriptionLimitText(template string, limit int) string {
+	result := fmt.Sprintf(template, limit)
+
+	if limit == 0 {
+		result = botDescriptionLimitNoneText
+	}
+
+	return result
+}
 
 // botDescriptionPlatforms name the platforms in the description's platform
 // line, by platform id.
@@ -106,20 +132,24 @@ const (
 )
 
 // BotDescription returns the bot description with the platforms that are on
-// and the configured default limits; the restricted-post line only while
-// they can be fetched.
+// and the configured default limits; the special-download line only while
+// special downloads are offered.
 func BotDescription() string {
 	userAllowance := config.GetGatedFetchUserMonthlyAllowance()
 	chatCap := config.GetGatedFetchChatMonthlyCap()
-	isRestrictedOn := IsRestrictedPostsOffered()
+	isSpecialOn := IsSpecialDownloadsOffered()
 	platformLine := botDescriptionPlatformLine()
-	restrictedLine := ""
+	freeLine := botDescriptionFreeText
+	specialLine := ""
 
-	if isRestrictedOn == true {
-		restrictedLine = fmt.Sprintf(botDescriptionRestrictedTemplate, userAllowance, chatCap)
+	if isSpecialOn == true {
+		userLimit := botDescriptionLimitText(botDescriptionUserLimitTemplate, userAllowance)
+		chatLimit := botDescriptionLimitText(botDescriptionChatLimitTemplate, chatCap)
+		freeLine = botDescriptionFreeOfferedText
+		specialLine = fmt.Sprintf(botDescriptionSpecialTemplate, userLimit, chatLimit)
 	}
 
-	result := fmt.Sprintf(botDescriptionTemplate, platformLine, restrictedLine)
+	result := fmt.Sprintf(botDescriptionTemplate, platformLine, freeLine, specialLine)
 
 	return result
 }

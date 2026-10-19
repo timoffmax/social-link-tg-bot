@@ -589,7 +589,7 @@ func attachChatSettings(q readTx, chats []CustomChat, falseValues interface{}) e
 	return err
 }
 
-// Money loads the restricted-post usage, the Stars payments and the unused
+// Money loads the special-download usage, the Stars payments and the unused
 // bonus credits.
 func (s *PGStore) Money(ctx context.Context, months int) (Money, error) {
 	result := Money{Months: months, GatedMonthly: []GatedMonth{}, GatedCurrent: []GatedCurrent{}, StarsMonthly: []StarsMonth{}}

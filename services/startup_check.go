@@ -174,7 +174,7 @@ func (sc *StartupChecker) printPlatformSupport() {
 	}{
 		{
 			Name:      "📷 Instagram",
-			Supported: []string{"Posts and Reels (kkinstagram, page preview)", "Restricted posts and Stories (paid, per-chat quota)"},
+			Supported: []string{"Posts and Reels (kkinstagram, page preview)", "Restricted posts, login-only reels and Stories (special downloads, monthly limit)"},
 			FixedLink: instagramFixedLink,
 		},
 		{
@@ -189,7 +189,7 @@ func (sc *StartupChecker) printPlatformSupport() {
 		},
 		{
 			Name:      "📺 YouTube",
-			Supported: []string{"Shorts", "Community posts"},
+			Supported: []string{"Shorts", "Shorts via the home relay or Apify (special downloads)", "Community posts"},
 			FixedLink: "none",
 		},
 		{

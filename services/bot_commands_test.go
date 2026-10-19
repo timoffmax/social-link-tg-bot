@@ -71,9 +71,20 @@ func TestDonateDescriptionMentionsStarsOnlyWhenEnabled(t *testing.T) {
 }
 
 func TestBotDescriptionsFitTelegramLimits(t *testing.T) {
+	markDatabaseOpenForTest(t)
+	unsetPlatformEnv(t)
 	t.Setenv("APIFY_TOKEN", "test-token")
 	t.Setenv("GATED_FETCH_USER_MONTHLY_ALLOWANCE", "1000")
 	t.Setenv("GATED_FETCH_CHAT_MONTHLY_CAP", "1000")
+	useSettingsSnapshot(t, map[string]any{})
+
+	if strings.Contains(BotDescription(), "💎 Special downloads") == false {
+		t.Fatalf("the worst case must include the special-download line: %q", BotDescription())
+	}
+
+	if utf16Length(BotDescription()) != 474 {
+		t.Fatalf("expected the worst case at 474 UTF-16 units, got %d", utf16Length(BotDescription()))
+	}
 
 	descriptions := []struct {
 		text      string
@@ -94,16 +105,34 @@ func TestBotDescriptionsFitTelegramLimits(t *testing.T) {
 	}
 }
 
-func TestBotDescriptionMentionsRestrictedPostsOnlyWhenTheyCanBeFetched(t *testing.T) {
+func TestBotDescriptionMentionsSpecialDownloadsOnlyWhileOffered(t *testing.T) {
+	markDatabaseOpenForTest(t)
 	t.Setenv("APIFY_TOKEN", "test-token")
+	t.Setenv("GATED_FETCH_USER_MONTHLY_ALLOWANCE", "")
+	t.Setenv("GATED_FETCH_CHAT_MONTHLY_CAP", "")
+	offered := BotDescription()
 
-	if strings.Contains(BotDescription(), "Restricted Instagram posts") == false {
-		t.Fatalf("expected the restricted line while paid fetching is configured")
+	if (strings.Contains(offered, "💎 Special downloads (they cost the developer, see /info): by default 20 a month per person, 20 per group.") == false) || (strings.Contains(offered, botDescriptionFreeOfferedText) == false) {
+		t.Fatalf("expected the special line and \"Most public posts\" while offered, got %q", offered)
 	}
 
 	t.Setenv("APIFY_TOKEN", "")
+	t.Setenv("HIKERAPI_TOKEN", "")
+	t.Setenv("RELAY_PLATFORMS", "")
+	off := BotDescription()
 
-	if strings.Contains(BotDescription(), "Restricted Instagram posts") == true {
-		t.Fatalf("the restricted line must go while paid fetching is off")
+	if (strings.Contains(off, "Special downloads") == true) || (strings.Contains(off, botDescriptionFreeText) == false) {
+		t.Fatalf("the special line must go and the free line stay plain while nothing is offered, got %q", off)
+	}
+}
+
+func TestBotDescriptionWordsANoneDefault(t *testing.T) {
+	markDatabaseOpenForTest(t)
+	t.Setenv("APIFY_TOKEN", "test-token")
+	t.Setenv("GATED_FETCH_USER_MONTHLY_ALLOWANCE", "5")
+	t.Setenv("GATED_FETCH_CHAT_MONTHLY_CAP", "0")
+
+	if strings.Contains(BotDescription(), "by default 5 a month per person, none per group.") == false {
+		t.Fatalf("unexpected limit wording: %q", BotDescription())
 	}
 }

@@ -208,8 +208,8 @@ func (p *ApifyInstagramProvider) FetchPost(instagramURL string, spoiler bool) ([
 // runActor runs the actor for one post and returns the post's item. An empty
 // dataset is retried once after a short pause: on the free plan a run is
 // turned away (with an empty dataset) while the shared free capacity is busy.
-// A non-empty answer without the post is final. If the retry is refused (e.g.
-// budget), the first run's result stands, since that run may be billed.
+// A non-empty answer without the post is final. If the retry is refused before
+// any spend, the first run's result stands, since that run may be billed.
 func (p *ApifyInstagramProvider) runActor(postURL string) (apifyPostItem, error) {
 	result, isEmpty, err := p.runActorOnce(postURL)
 
@@ -222,11 +222,12 @@ func (p *ApifyInstagramProvider) runActor(postURL string) (apifyPostItem, error)
 	return result, err
 }
 
-// retryActor runs the second attempt, keeping firstErr when it is refused.
+// retryActor runs the second attempt, keeping firstErr when it is refused
+// before any spend (budget, provider unavailable, budget check failed).
 func (p *ApifyInstagramProvider) retryActor(postURL string, firstErr error) (apifyPostItem, error) {
 	result, _, err := p.runActorOnce(postURL)
 
-	if isPaidBudgetError(err) == true {
+	if isCostedSkip(err) == true {
 		err = firstErr
 	}
 

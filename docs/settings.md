@@ -26,10 +26,10 @@ One entry per key: type, range, hard ceiling, `.env` variable, default, approval
 | Platforms | `platform.<p>.enabled` for instagram, tiktok, twitter, youtube, reddit, facebook, 9gag, threads; `platform.instagram.fixed_link_service` | `ENABLE_<P>`, `INSTAGRAM_SERVICE` |
 | Proxies & free services | `proxy.enabled`, `proxy.<p>.enabled` for youtube, twitter, tiktok, facebook, reddit, 9gag; `service.<name>.host` for kkinstagram, kktiktok, vxreddit, facebed | `ENABLE_PROXIES`, `ENABLE_<P>_PROXY`, `<NAME>_HOST` |
 | Paid providers & budgets | `paid.apify.monthly_budget_usd`, `paid.hiker.monthly_budget_usd`, `paid.hiker.price_per_request_usd`, `paid.instagram.provider_order`, `alerts.hiker_low_balance_requests` | `APIFY_MONTHLY_BUDGET_USD`, `HIKERAPI_*`, `INSTAGRAM_PAID_PROVIDERS` |
-| Restricted posts | `gated.global_monthly_cap`, `gated.user_monthly_allowance`, `gated.chat_monthly_cap` | `GATED_FETCH_*` |
+| Special downloads | `gated.global_monthly_cap`, `gated.user_monthly_allowance`, `gated.chat_monthly_cap` | `GATED_FETCH_*` |
 | Stars and limits | `stars.enabled`, `limits.default_daily_media` | `STARS_SUPPORT_ENABLED`, `DEFAULT_DAILY_MEDIA_LIMIT` |
 
-Hard ceilings (raising one needs a code change and a deploy): Apify budget 20 USD a month, HikerAPI budget 10 USD a month, bot-wide restricted posts 5000 a month, per person and per group 1000 a month.
+Hard ceilings (raising one needs a code change and a deploy): Apify budget 20 USD a month, HikerAPI budget 10 USD a month, bot-wide special downloads 5000 a month, per person and per group 1000 a month.
 
 Approval rules (data in the registry): raising a dollar budget (also from 0, which is how a provider is switched on), lowering the HikerAPI price, and any change of a `service.*.host` wait for the owner's Approve in Telegram. Everything else, Stars on included, applies directly. Without `ADMIN_USER_ID` there is nobody to ask, so a request that needs approval is rejected with "needs the owner's approval, but ADMIN_USER_ID is not set".
 

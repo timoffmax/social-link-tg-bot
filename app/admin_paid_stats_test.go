@@ -18,7 +18,7 @@ func TestFormatPaidFetchingStatsShowsEveryValue(t *testing.T) {
 	}
 	expected := `
 <b>💳 Paid fetching</b>
-• Restricted posts this month (counted ones): <b>12</b> of 100
+• Special downloads this month (counted ones): <b>12</b> of 100
 • Apify this month: <b>$1.23</b> of $4.00
 • Stars this month: <b>2</b> payments, <b>75</b> ⭐
 • Stars all time: <b>5</b> payments, <b>250</b> ⭐

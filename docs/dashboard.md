@@ -9,7 +9,7 @@ A statistics page for the bot's owner: a React app (`dashboard/web`) embedded in
 | Overview | Downloads 7d/30d, active users and chats, all-time groups and private users, daily private vs group downloads, platform mix, new chats per week |
 | Platforms | Per-platform health (ok / drop / stale), daily downloads per platform, photo vs video split |
 | Chats | Top groups, top private users, month-over-month retention, chats with custom settings or limits |
-| Money | Restricted (gated) posts per month and per chat/user this month, Stars payments, refunds and boosts per month, unused bonus credits |
+| Money | Special downloads (restricted or login-only Instagram posts, Stories and Shorts through a paid service or the home relay; one shared counter, older months hold restricted posts only) per month and per chat/user this month, Stars payments, refunds and boosts per month, unused bonus credits |
 | Reports | Open vs resolved bug reports, reports per week, latest reports (filter Open / Resolved / All) with their replies and status (Queued / Sending / Sent / Failed with the reason / Delivery unknown: "May have been delivered — check before sending again"; a queued reply waiting for another attempt shows Telegram's last answer). Reply opens a composer with the blog editor's toolbar, a Telegram preview of the message as the reporter gets it (heading and length limit come from the server) and a length counter; "Resolve after it's delivered" is on by default: the bot resolves the report only once Telegram confirms the delivery. Resolve / Reopen sets the flag and the resolve time (resolving again keeps the first resolve time) |
 | Settings | The dashboard-managed bot settings ([settings.md](settings.md)) by group, each with the value the bot uses and where it comes from, the owner-set value and who changed it when; a change is queued as a request and shown until the bot applied, rejected or expired it; then the audit log |
 | Blog | The posts the bot's owner panel broadcasts: list, editor with a live Telegram preview, publish/unpublish, delete. Broadcasting stays in Telegram (`/owner` → 📢 Broadcast), which sends only the content as the message text, never the title |
@@ -124,7 +124,7 @@ Platform health lists every platform with a download in the last 90 days and com
 
 Custom settings list the chats with a daily limit, per-user limits or a setting changed from its default (every setting defaults to on: a platform is off by its enabled flag, any other setting by a false value). The all-default rows the bot stores when a group opens its platform menu are left out, and only the changed settings are shown.
 
-In `gated_current`, `limit` is a chat's or user's custom monthly limit of restricted posts and `custom` says whether one is set; `limit` is `null` both for the bot's default limit (`custom: false`) and for an unlimited chat or user (`unlimited: true`, `custom: true`, the stored `-1`).
+In `gated_current`, `limit` is a chat's or user's custom monthly limit of special downloads and `custom` says whether one is set; `limit` is `null` both for the bot's default limit (`custom: false`) and for an unlimited chat or user (`unlimited: true`, `custom: true`, the stored `-1`).
 
 The exact response shapes are defined twice and kept in sync:
 

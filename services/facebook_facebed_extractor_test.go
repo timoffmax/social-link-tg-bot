@@ -1198,7 +1198,7 @@ func TestFacebookChainSendsTheTextPostWhenYtDlpFails(t *testing.T) {
 			server := serveFacebed(t, "facebed_text.html", serveFacebedImage)
 			downloader := newFacebookTestDownloader(t, server, failingYtDlp, &calls)
 
-			media, err := downloader.downloadMediaWithContext(context.Background(), postURL)
+			media, err := downloader.downloadMediaWithContext(context.Background(), postURL, newAllowedDownload(postURL))
 
 			if (err != nil) || (len(media) != 1) || (media[0].Type != MediaTypeText) {
 				t.Fatalf("want the text post, got %d item(s) %v", len(media), err)
@@ -1225,7 +1225,7 @@ func TestFacebookChainPrefersTheYtDlpVideoToTheTextPost(t *testing.T) {
 	server := serveFacebed(t, "facebed_text.html", serveFacebedImage)
 	downloader := newFacebookTestDownloader(t, server, videoYtDlp, &calls)
 
-	media, err := downloader.downloadMediaWithContext(context.Background(), facebedTestTextURL)
+	media, err := downloader.downloadMediaWithContext(context.Background(), facebedTestTextURL, newAllowedDownload(facebedTestTextURL))
 
 	if (err != nil) || (len(media) != 1) || (media[0] != video) {
 		t.Fatalf("want the yt-dlp video, got %d item(s) %v", len(media), err)
@@ -1253,7 +1253,7 @@ func TestFacebookChainSendsPhotosWithoutYtDlp(t *testing.T) {
 			server := serveFacebed(t, testCase.fixture, serveFacebedImage)
 			downloader := newFacebookTestDownloader(t, server, failingYtDlp, &calls)
 
-			media, err := downloader.downloadMediaWithContext(context.Background(), testCase.url)
+			media, err := downloader.downloadMediaWithContext(context.Background(), testCase.url, newAllowedDownload(testCase.url))
 
 			if (err != nil) || (len(media) != testCase.want) || (media[0].Type != MediaTypePhoto) {
 				t.Fatalf("want %d photo(s), got %d %v", testCase.want, len(media), err)
@@ -1272,7 +1272,7 @@ func TestFacebookChainFailsWhenNothingIsFound(t *testing.T) {
 	server := serveFacebed(t, "facebed_login.html", serveFacebedImage)
 	downloader := newFacebookTestDownloader(t, server, failingYtDlp, &calls)
 
-	media, err := downloader.downloadMediaWithContext(context.Background(), facebedTestTextURL)
+	media, err := downloader.downloadMediaWithContext(context.Background(), facebedTestTextURL, newAllowedDownload(facebedTestTextURL))
 
 	if (err == nil) || (len(media) != 0) || (calls != 1) {
 		t.Fatalf("want a failure after yt-dlp, got %d item(s), %d yt-dlp run(s), %v", len(media), calls, err)

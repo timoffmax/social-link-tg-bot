@@ -182,7 +182,7 @@ type Chats struct {
 	CustomSettings []CustomChat `json:"custom_settings"`
 }
 
-// GatedMonth is one month of restricted-post usage.
+// GatedMonth is one month of special-download usage.
 type GatedMonth struct {
 	Month      string `json:"month"`
 	GlobalUsed int64  `json:"global_used"`
@@ -190,7 +190,7 @@ type GatedMonth struct {
 	UsersUsed  int64  `json:"users_used"`
 }
 
-// GatedCurrent is a chat's or user's restricted-post usage this month.
+// GatedCurrent is a chat's or user's special-download usage this month.
 type GatedCurrent struct {
 	Scope   string `json:"scope"`
 	ScopeID int64  `json:"scope_id"`
@@ -212,7 +212,7 @@ type StarsMonth struct {
 	Boosts        int64  `json:"boosts"`
 }
 
-// Credits are the unused bonus restricted-post credits.
+// Credits are the unused bonus special-download credits.
 type Credits struct {
 	UsersWithCredits int64 `json:"users_with_credits"`
 	UserCredits      int64 `json:"user_credits"`

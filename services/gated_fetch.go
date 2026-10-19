@@ -8,8 +8,8 @@ import (
 	"strings"
 )
 
-// GatedFetchDeniedError wraps the InstagramGatedError of a post the bot was not
-// allowed to fetch through the paid provider, keeping the reason for the reply.
+// GatedFetchDeniedError is a special download the limit refused, or a gated
+// post that could not be fetched; keeps the reason for the reply.
 type GatedFetchDeniedError struct {
 	Denial GatedFetchDenial
 	Cause  error
@@ -17,7 +17,7 @@ type GatedFetchDeniedError struct {
 
 // Error implements error.
 func (e *GatedFetchDeniedError) Error() string {
-	result := fmt.Sprintf("gated fetch denied (%s): %v", e.Denial, e.Cause)
+	result := fmt.Sprintf("special download denied (%s): %v", e.Denial, e.Cause)
 
 	return result
 }
@@ -27,20 +27,16 @@ func (e *GatedFetchDeniedError) Unwrap() error {
 	return e.Cause
 }
 
-// FetchGatedPost retries a failed Instagram download through the paid provider
-// when the failure is an author-gated post and the chat/user quota allows it.
-// It returns the downloadErr unchanged when the post isn't gated. When the
-// fetch isn't allowed or fails, a region/audience-limited post falls back to
-// its OG preview; otherwise the error is wrapped in a GatedFetchDeniedError.
-func (sd *SmartDownloader) FetchGatedPost(instagramURL string, downloadErr error, chatID, userID int64, isPrivate bool) ([]*MediaInfo, error) {
+// FetchGatedPost fetches an author-gated post through the paid provider within
+// the special-download limit; other download errors pass through unchanged.
+func (sd *SmartDownloader) FetchGatedPost(instagramURL string, downloadErr error, requester DownloadRequester) ([]*MediaInfo, error) {
 	var result []*MediaInfo
 	err := downloadErr
 	var gatedErr *InstagramGatedError
 	isGated := errors.As(downloadErr, &gatedErr)
 
 	if isGated == true {
-		spoiler := gatedErr.Gate.NeedsSpoiler()
-		result, err = sd.fetchGatedWithQuota(instagramURL, downloadErr, spoiler, chatID, userID, isPrivate)
+		result, err = sd.fetchGatedPostWithinLimit(instagramURL, downloadErr, gatedErr, requester)
 	}
 
 	// A post limited by region or audience still has a public preview: when
@@ -55,100 +51,58 @@ func (sd *SmartDownloader) FetchGatedPost(instagramURL string, downloadErr error
 	return result, err
 }
 
-// fetchGatedWithQuota reserves the quota, calls the provider and refunds the
-// quota when the provider fails.
-func (sd *SmartDownloader) fetchGatedWithQuota(instagramURL string, downloadErr error, spoiler bool, chatID, userID int64, isPrivate bool) ([]*MediaInfo, error) {
-	var result []*MediaInfo
-	var quotas []GatedFetchQuota
-	var fetchErr error
-	var usage GatedFetchUsage
-	denial := GatedFetchDeniedOff
+// fetchGatedPostWithinLimit fetches a gated post through the paid provider
+// as one special download; a failure keeps the reason for the reply (off
+// when no provider can run).
+func (sd *SmartDownloader) fetchGatedPostWithinLimit(instagramURL string, downloadErr error, gatedErr *InstagramGatedError, requester DownloadRequester) ([]*MediaInfo, error) {
 	var err error
+	spoiler := gatedErr.Gate.NeedsSpoiler()
+	download := newSpecialDownload(instagramURL, requester, dbSpecialLimit{})
+	fetch := sd.gatedPostFetch(instagramURL, spoiler, requester)
+	isProviderReady := sd.canRunGatedProvider()
+	steps := []costedStep{{kind: costPaid, canRun: isProviderReady, run: fetch}}
+	result, stepErr := runCostedSteps(download, steps)
 
-	if sd.gated != nil {
-		quotas, denial, err = ResolveGatedFetchQuotas(chatID, userID, isPrivate)
-	}
+	if stepErr != nil {
+		log.Printf("❌ [gated-fetch] fetch failed for %s: %v", instagramURL, stepErr)
+		denial := download.Denial()
+		isNothingAsked := (download.isAsked == false) && (denial == GatedFetchAllowed)
 
-	if (denial == GatedFetchAllowed) && (err == nil) {
-		denial, usage, err = ReserveGatedFetch(quotas)
-	}
+		if isNothingAsked == true {
+			denial = GatedFetchDeniedOff
+		}
 
-	credit := gatedCredit{}
-	isCreditEligible := (err == nil) && (IsCreditDenial(denial) == true)
-
-	if isCreditEligible == true {
-		credit, err = takeGatedCredit(chatID, userID, denial)
-	}
-
-	isCreditUsed := credit.IsUsed
-
-	// A bonus credit replaces the monthly counters: the denied reservation
-	// took nothing, so nothing must be refunded from them. Like unlimited
-	// scopes, credits skip the shared fetch cap; the dollar budget applies.
-	if isCreditUsed == true {
-		log.Printf("🎟️ [gated-fetch] chat %d, user %d used a bonus credit (group pool: %t, %d left)", chatID, userID, credit.IsGroup, credit.Left)
-		denial = GatedFetchAllowed
-		quotas = nil
-		usage = GatedFetchUsage{}
-	}
-
-	if (denial == GatedFetchAllowed) && (err == nil) {
-		providerName := sd.gated.Name()
-		log.Printf("🔞 [%s] fetching gated post %s (chat %d, user %d)", providerName, instagramURL, chatID, userID)
-		result, fetchErr = sd.gated.FetchPost(instagramURL, spoiler)
-	}
-
-	isBudgetRefusal := isPaidBudgetError(fetchErr)
-	isNothingRun := isPaidSkip(fetchErr)
-
-	if isBudgetRefusal == true {
-		denial = GatedFetchDeniedBudget
-	}
-
-	if fetchErr != nil {
-		log.Printf("❌ [gated-fetch] fetch failed for %s: %v", instagramURL, fetchErr)
-	}
-
-	if (fetchErr != nil) && (isNothingRun == false) {
-		sd.refundScopedGatedFetch(quotas)
-	}
-
-	// A skip (a budget refusal, or a provider unavailable before running,
-	// e.g. an unreadable spend ledger) happens before any run, so nothing
-	// was billed: the global unit goes back too. Only a budget refusal gets
-	// the "budget used up" reply.
-	if isNothingRun == true {
-		sd.refundGatedQuotas(quotas)
-	}
-
-	// A paid-for credit goes back on any failure, budget refusal included.
-	if (fetchErr != nil) && (isCreditUsed == true) {
-		sd.returnGatedCredit(credit, chatID, userID)
-	}
-
-	if err != nil {
-		log.Printf("⚠️ [gated-fetch] quota check failed for %s: %v", instagramURL, err)
-	}
-
-	if (denial != GatedFetchAllowed) || (err != nil) || (fetchErr != nil) {
 		result = nil
 		err = &GatedFetchDeniedError{Denial: denial, Cause: downloadErr}
-	}
-
-	if (err == nil) && (len(result) > 0) && (usage.IsLimited == true) {
-		result[0].Caption = appendGatedQuotaNote(result[0].Caption, usage)
-	}
-
-	if (err == nil) && (len(result) > 0) && (isCreditUsed == true) {
-		result[0].Caption = appendGatedCreditNote(result[0].Caption, credit)
 	}
 
 	return result, err
 }
 
-// gatedQuotaNoteTemplate tells a limited chat or user how many restricted
-// posts are left this month; it ends the post's caption.
-const gatedQuotaNoteTemplate = "\n\n📊 Restricted posts left this month: %d of %d"
+// canRunGatedProvider reports a paid provider that can fetch a post now.
+func (sd *SmartDownloader) canRunGatedProvider() bool {
+	providers := ConfiguredGatedProviders()
+	result := (sd.gated != nil) && (len(providers) > 0)
+
+	return result
+}
+
+// gatedPostFetch returns the paid fetch of a gated post.
+func (sd *SmartDownloader) gatedPostFetch(instagramURL string, spoiler bool, requester DownloadRequester) func() ([]*MediaInfo, error) {
+	result := func() ([]*MediaInfo, error) {
+		providerName := sd.gated.Name()
+		log.Printf("🔞 [%s] fetching gated post %s (chat %d, user %d)", providerName, instagramURL, requester.ChatID, requester.UserID)
+		media, err := sd.gated.FetchPost(instagramURL, spoiler)
+
+		return media, err
+	}
+
+	return result
+}
+
+// gatedQuotaNoteTemplate tells a limited chat or user how many special
+// downloads are left this month; it ends the post's caption.
+const gatedQuotaNoteTemplate = "\n\n📊 Special downloads left this month: %d of %d"
 
 // Credit notes end the post's caption instead of the monthly note: how many
 // of the poster's or the group's bonus downloads are left.
@@ -207,7 +161,7 @@ func isGroupCapUsedUp(chatID int64) bool {
 
 // returnGatedCredit gives a used credit back to the one pool it came from,
 // logging a failure.
-func (sd *SmartDownloader) returnGatedCredit(credit gatedCredit, chatID, userID int64) {
+func returnGatedCredit(credit gatedCredit, chatID, userID int64) {
 	var err error
 
 	if credit.IsGroup == true {
@@ -232,8 +186,8 @@ func IsCreditDenial(denial GatedFetchDenial) bool {
 	return result
 }
 
-// appendGatedCreditNote adds the remaining bonus credits line to a caption.
-func appendGatedCreditNote(caption string, credit gatedCredit) string {
+// gatedCreditNote is the remaining bonus credits line.
+func gatedCreditNote(credit gatedCredit) string {
 	template := gatedCreditNoteTemplate
 
 	if credit.IsGroup == true {
@@ -241,7 +195,7 @@ func appendGatedCreditNote(caption string, credit gatedCredit) string {
 	}
 
 	note := fmt.Sprintf(template, credit.Left)
-	result := strings.TrimSpace(caption + note)
+	result := strings.TrimSpace(note)
 
 	return result
 }
@@ -249,11 +203,11 @@ func appendGatedCreditNote(caption string, credit gatedCredit) string {
 // gatedQuotaNoteReserve is the caption space kept free for the note.
 const gatedQuotaNoteReserve = 80
 
-// appendGatedQuotaNote adds the remaining-quota line to a caption.
-func appendGatedQuotaNote(caption string, usage GatedFetchUsage) string {
+// gatedQuotaNote is the remaining-quota line.
+func gatedQuotaNote(usage GatedFetchUsage) string {
 	remaining := usage.Remaining()
 	note := fmt.Sprintf(gatedQuotaNoteTemplate, remaining, usage.Limit)
-	result := strings.TrimSpace(caption + note)
+	result := strings.TrimSpace(note)
 
 	return result
 }
@@ -282,7 +236,7 @@ func (sd *SmartDownloader) gatedPreviewFallback(instagramURL string, fetchErr er
 }
 
 // refundGatedQuotas gives every reserved unit back, logging a failed refund.
-func (sd *SmartDownloader) refundGatedQuotas(quotas []GatedFetchQuota) {
+func refundGatedQuotas(quotas []GatedFetchQuota) {
 	err := RefundGatedFetch(quotas)
 
 	if err != nil {
@@ -294,7 +248,7 @@ func (sd *SmartDownloader) refundGatedQuotas(quotas []GatedFetchQuota) {
 // fetch, so they aren't charged for it. The global unit is kept: the provider
 // may already have billed the run (e.g. the post resolved but its media failed
 // to download), and the global cap is what bounds real spending.
-func (sd *SmartDownloader) refundScopedGatedFetch(quotas []GatedFetchQuota) {
+func refundScopedGatedFetch(quotas []GatedFetchQuota) {
 	var scoped []GatedFetchQuota
 
 	for _, quota := range quotas {

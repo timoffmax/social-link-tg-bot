@@ -22,8 +22,8 @@ const (
 // GatedFetchGlobalScopeID is the scope_id of the bot-wide counter.
 const GatedFetchGlobalScopeID = 0
 
-// GatedFetchDenial says why a paid gated-post fetch was not allowed; empty
-// means allowed.
+// GatedFetchDenial says why a special download was not allowed; empty means
+// allowed.
 type GatedFetchDenial string
 
 const (
@@ -34,8 +34,8 @@ const (
 	GatedFetchDeniedUserCap GatedFetchDenial = "user_allowance"
 	GatedFetchDeniedGlobal  GatedFetchDenial = "global_cap"
 	GatedFetchDeniedNoDB    GatedFetchDenial = "no_database"
-	// GatedFetchDeniedBudget is this month's Apify budget used up: the paid
-	// service is paused until the next month.
+	// GatedFetchDeniedBudget is a paid service's (Apify or HikerAPI) monthly
+	// budget used up: it is paused until the next month.
 	GatedFetchDeniedBudget GatedFetchDenial = "budget"
 	// GatedFetchDeniedBlocked is a user whose allowance is 0 (the owner's
 	// override or the default): bonus credits can't override it. A chat with
@@ -109,11 +109,11 @@ func ResolveGatedFetchQuotas(chatID, userID int64, isPrivate bool) ([]GatedFetch
 	denial := GatedFetchAllowed
 	var err error
 	globalCap := config.GetGatedFetchGlobalMonthlyCap()
-	isConfigured := IsGatedFetchConfigured()
+	isOff := (globalCap == 0)
 	var scoped GatedFetchQuota
 	period := gatedFetchPeriod()
 
-	if isConfigured == false {
+	if isOff == true {
 		denial = GatedFetchDeniedOff
 	}
 
@@ -381,36 +381,4 @@ func execGatedFetchPolicy(query string, args ...interface{}) error {
 	}
 
 	return err
-}
-
-// IsRestrictedPostsOffered reports whether restricted posts are offered at
-// all: they can be fetched, and private chats or groups get some by default.
-func IsRestrictedPostsOffered() bool {
-	userAllowance := config.GetGatedFetchUserMonthlyAllowance()
-	chatCap := config.GetGatedFetchChatMonthlyCap()
-	isConfigured := IsGatedFetchConfigured()
-	result := (isConfigured == true) && ((userAllowance != 0) || (chatCap != 0))
-
-	return result
-}
-
-// IsPaidServiceConfigured reports whether a paid service of the stories
-// chain (Apify or HikerAPI, as INSTAGRAM_PAID_PROVIDERS lists them) can run
-// at all: a token and a monthly budget above 0. It decides whether Stories
-// are offered.
-func IsPaidServiceConfigured() bool {
-	result := isStoriesFetchConfigured()
-
-	return result
-}
-
-// IsGatedFetchConfigured reports whether restricted posts can be fetched at
-// all: a provider of INSTAGRAM_PAID_PROVIDERS that can run and a bot-wide
-// monthly cap that isn't 0 (no cap by default).
-func IsGatedFetchConfigured() bool {
-	globalCap := config.GetGatedFetchGlobalMonthlyCap()
-	providers := ConfiguredGatedProviders()
-	result := (len(providers) > 0) && (globalCap != 0)
-
-	return result
 }

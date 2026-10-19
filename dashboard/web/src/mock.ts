@@ -10,7 +10,7 @@
 // when it was queued with resolve), except to Dmytro (report #6), who has
 // blocked the bot, so it fails.
 // Settings changes are applied by a pretend bot about 3 seconds after they are
-// queued; the first change of the bot-wide restricted-posts cap is rejected as
+// queued; the first change of the bot-wide special-downloads cap is rejected as
 // "changed meanwhile, reload", and the Reddit proxy has a change queued from
 // another tab at load, so changing it answers 409 until that one is applied.
 // Changes that need the owner's approval wait for it about 10 seconds and are
@@ -394,7 +394,7 @@ const BLOG_FIXTURES: BlogPostDraft[] = [
   },
   {
     title: 'Draft: Stars support',
-    content: '💚 You can now <b>support the bot with Telegram Stars</b>.\n\nSend <code>/donate</code> and pick a tier:\n<pre><code class="language-text">25 ⭐  +10 bonus downloads\n50 ⭐  +25 bonus downloads</code></pre>\nBonus downloads unlock restricted Instagram posts &amp; never expire.',
+    content: '💚 You can now <b>support the bot with Telegram Stars</b>.\n\nSend <code>/donate</code> and pick a tier:\n<pre><code class="language-text">25 ⭐  +10 bonus downloads\n50 ⭐  +25 bonus downloads</code></pre>\nBonus downloads are extra special downloads &amp; never expire.',
   },
   {
     title: 'Changelog dump (too long for one message)',
@@ -402,7 +402,7 @@ const BLOG_FIXTURES: BlogPostDraft[] = [
   },
   {
     title: 'October update: Threads and YouTube posts',
-    content: '📢 <b>What’s new</b>\n\n• <b>Threads</b> links now come back as real photos and videos.\n• <i>YouTube community posts</i> are supported.\n• Reddit works again, even when Reddit blocks us.\n\n<blockquote expandable>Restricted Instagram posts use a monthly quota per chat. When it runs out, group admins can raise it with Stars: send /boost in the group.</blockquote>\n\nOne more thing: <tg-spoiler>the bot now has a Report a bug button under posts</tg-spoiler>.\n\nQuestions? <a href="https://t.me/example">Write to us</a>.',
+    content: '📢 <b>What’s new</b>\n\n• <b>Threads</b> links now come back as real photos and videos.\n• <i>YouTube community posts</i> are supported.\n• Reddit works again, even when Reddit blocks us.\n\n<blockquote expandable>Special downloads use a monthly limit per chat. When it runs out, group admins can raise it with Stars: send /boost in the group.</blockquote>\n\nOne more thing: <tg-spoiler>the bot now has a Report a bug button under posts</tg-spoiler>.\n\nQuestions? <a href="https://t.me/example">Write to us</a>.',
   },
 ];
 
@@ -929,7 +929,7 @@ const REGISTRY: RegistryEntry[] = [
     approval: 'raise',
     safe_value: 0,
     label: 'Apify monthly budget (USD)',
-    impact: 'Real-dollar cap on Apify spend a month (restricted posts, stories, the YouTube Shorts fallback); 0 turns Apify off.',
+    impact: 'Real-dollar cap on Apify spend a month (restricted posts, reel videos, stories, YouTube Shorts); 0 turns Apify off.',
   },
   {
     key: 'paid.hiker.monthly_budget_usd',
@@ -969,7 +969,7 @@ const REGISTRY: RegistryEntry[] = [
     enum: ['apify', 'hiker'],
     approval: 'never',
     label: 'Paid Instagram providers, in order',
-    impact: 'The paid providers tried for restricted posts and stories, first to last.',
+    impact: 'The paid providers tried for restricted posts, reel videos and stories, first to last.',
   },
   {
     key: 'alerts.hiker_low_balance_requests',
@@ -992,8 +992,8 @@ const REGISTRY: RegistryEntry[] = [
     min: -1,
     ceiling: 5000,
     approval: 'never',
-    label: 'Restricted posts a month, bot-wide',
-    impact: '-1: no cap (only the dollar budgets stop them); 0 turns restricted posts off for everyone.',
+    label: 'Special downloads a month, bot-wide',
+    impact: '-1: no cap (only the dollar budgets stop the paid ones); 0 turns special downloads off for everyone, the home relay included (Shorts then use the server\'s yt-dlp).',
   },
   {
     key: 'gated.user_monthly_allowance',
@@ -1004,7 +1004,7 @@ const REGISTRY: RegistryEntry[] = [
     min: 0,
     ceiling: 1000,
     approval: 'never',
-    label: 'Restricted posts a month per person (private chats)',
+    label: 'Special downloads a month per person (private chats)',
     impact: 'The default monthly allowance in private chats; shown in the bot\'s description and /info.',
   },
   {
@@ -1016,7 +1016,7 @@ const REGISTRY: RegistryEntry[] = [
     min: 0,
     ceiling: 1000,
     approval: 'never',
-    label: 'Restricted posts a month per group',
+    label: 'Special downloads a month per group',
     impact: 'The default monthly cap of a group; shown in the bot\'s description and /info.',
   },
   {

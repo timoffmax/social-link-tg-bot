@@ -162,7 +162,7 @@ func TestHikerBudgetFailsClosedWithoutTheLedgerTable(t *testing.T) {
 func fetchThroughChain(userID int64, apify, hiker GatedPostProvider) error {
 	sd := &SmartDownloader{gated: &fallbackGatedProvider{providers: []GatedPostProvider{apify, hiker}}}
 	gatedErr := &InstagramGatedError{Gate: InstagramGate{Restricted: true}}
-	_, err := sd.FetchGatedPost(gatedTestPostURL, gatedErr, userID, userID, true)
+	_, err := sd.FetchGatedPost(gatedTestPostURL, gatedErr, DownloadRequester{ChatID: userID, UserID: userID, IsPrivate: true})
 
 	return err
 }
@@ -264,7 +264,7 @@ func TestChainHiker404KeepsTheGlobalUnitWithoutAThirdCall(t *testing.T) {
 	sd := &SmartDownloader{gated: &fallbackGatedProvider{providers: []GatedPostProvider{apify, hiker, third}}}
 	gatedErr := &InstagramGatedError{Gate: InstagramGate{Restricted: true}}
 
-	_, err := sd.FetchGatedPost(gatedTestPostURL, gatedErr, 306, 306, true)
+	_, err := sd.FetchGatedPost(gatedTestPostURL, gatedErr, DownloadRequester{ChatID: 306, UserID: 306, IsPrivate: true})
 	userUsed, globalUsed := gatedUsage(t, 306)
 	rows := ledger.recorded()
 	var deniedErr *GatedFetchDeniedError
@@ -297,7 +297,7 @@ func TestUnreadableHikerLedgerRefundsEverythingWithoutABudgetReply(t *testing.T)
 			gatedErr := &InstagramGatedError{Gate: InstagramGate{Restricted: true}}
 			_, globalBefore := gatedUsage(t, userID)
 
-			_, err := sd.FetchGatedPost(gatedTestPostURL, gatedErr, userID, userID, true)
+			_, err := sd.FetchGatedPost(gatedTestPostURL, gatedErr, DownloadRequester{ChatID: userID, UserID: userID, IsPrivate: true})
 			userUsed, globalUsed := gatedUsage(t, userID)
 			var deniedErr *GatedFetchDeniedError
 
@@ -308,7 +308,7 @@ func TestUnreadableHikerLedgerRefundsEverythingWithoutABudgetReply(t *testing.T)
 			userID++
 			useUpAllowance(t, userID)
 			recordTestPayment(t, fmt.Sprintf("charge-ledger-%d", userID), userID, 25)
-			sd.FetchGatedPost(gatedTestPostURL, gatedErr, userID, userID, true)
+			sd.FetchGatedPost(gatedTestPostURL, gatedErr, DownloadRequester{ChatID: userID, UserID: userID, IsPrivate: true})
 			balance, _ := GetGatedFetchCredits(userID)
 
 			if (balance != 10) || (fake.callCount(hikerPathMediaByCode) != 0) {
