@@ -55,14 +55,35 @@ const startPrivateTemplate = `💬 <b>In a private chat</b>
 
 `
 
-// startGroupTemplate explains groups: the restricted-post line, then the
-// support button rate.
+// startGroupTemplate explains groups: the restricted-post line, the support
+// button rate, then the admin-rights line (see startGroupAdminRightsText).
 const startGroupTemplate = `👥 <b>In a group</b>
 • Add me to the group. I answer every supported link anyone posts, no commands needed.
 %s• Under posts that arrive as a single message: 🐞 Report a bug, and 💚 Support under about 1 in %d, which opens a private chat.
-• Group admins set daily limits from the menu, and choose platforms, descriptions, timezone and both buttons in Group Settings.
+%s• Group admins set daily limits from the menu, and choose platforms, descriptions, timezone and both buttons in Group Settings.
+• To have messages over a daily limit removed, make me an admin with the "Delete messages" right; without it, the limit still works and those messages just stay.
 
 `
+
+// Admin-rights lines of the group section: the claim that no admin rights
+// are needed only once getMe confirmed the bot reads every group message
+// (Group Privacy off); otherwise a hint that stays true either way.
+const (
+	startGroupNoAdminRightsText = "• I don't need admin rights to work in a group.\n"
+	startGroupAdminHintText     = "• If I don't answer links in your group, make me an admin there.\n"
+)
+
+// startGroupAdminRightsText returns the admin-rights line of the group
+// section, by the Group Privacy state read at startup.
+func startGroupAdminRightsText() string {
+	result := startGroupAdminHintText
+
+	if isGroupPrivacyOff() == true {
+		result = startGroupNoAdminRightsText
+	}
+
+	return result
+}
 
 // Restricted-post lines of the chat sections; %s is the default monthly
 // limit (see monthlyLimitText).
@@ -178,7 +199,8 @@ func startGuideText(isStarsEnabled bool) string {
 	}
 
 	privateText := fmt.Sprintf(startPrivateTemplate, privateRestricted)
-	groupText := fmt.Sprintf(startGroupTemplate, groupRestricted, groupSupportEvery)
+	adminRightsText := startGroupAdminRightsText()
+	groupText := fmt.Sprintf(startGroupTemplate, groupRestricted, groupSupportEvery, adminRightsText)
 	freeText := startFreeText()
 	result := fmt.Sprintf("%s%s%s%s", privateText, groupText, freeText, restrictedText)
 

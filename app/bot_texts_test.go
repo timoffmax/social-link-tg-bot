@@ -67,3 +67,32 @@ func TestFreeSectionFollowsTheConfig(t *testing.T) {
 		t.Fatalf("unexpected monthly limit wordings")
 	}
 }
+
+func TestGuideSaysGroupsNeedNoAdminRightsOnlyWithGroupPrivacyOff(t *testing.T) {
+	t.Setenv("APIFY_TOKEN", "test-token")
+	useGroupPrivacy(t, groupPrivacyOff)
+
+	for _, limit := range []string{"0", "30"} {
+		t.Setenv("DEFAULT_DAILY_MEDIA_LIMIT", limit)
+		guide := startGuideText(false)
+
+		for _, part := range []string{startGroupNoAdminRightsText, "\"Delete messages\" right"} {
+			if strings.Count(guide, part) != 1 {
+				t.Fatalf("limit %s: expected %q once in the guide, got %q", limit, part, guide)
+			}
+		}
+	}
+}
+
+func TestGuideClaimsNoAdminRightsFreedomWhileGroupPrivacyIsOnOrUnknown(t *testing.T) {
+	t.Setenv("APIFY_TOKEN", "test-token")
+
+	for _, state := range []int32{groupPrivacyOn, groupPrivacyUnknown} {
+		useGroupPrivacy(t, state)
+		guide := startGuideText(false)
+
+		if (strings.Contains(guide, "don't need admin rights") == true) || (strings.Contains(guide, startGroupAdminHintText) == false) {
+			t.Fatalf("state %d: expected the admin hint and no claim, got %q", state, guide)
+		}
+	}
+}

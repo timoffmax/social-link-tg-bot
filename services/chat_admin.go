@@ -3,8 +3,11 @@ package services
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/timoffmax/social-link-bot/config"
@@ -25,8 +28,9 @@ type chatMemberAnswer struct {
 	Ok          bool   `json:"ok"`
 	Description string `json:"description"`
 	Result      struct {
-		Status   string `json:"status"`
-		IsMember bool   `json:"is_member"`
+		Status            string `json:"status"`
+		IsMember          bool   `json:"is_member"`
+		CanDeleteMessages bool   `json:"can_delete_messages"`
 	} `json:"result"`
 }
 
@@ -56,6 +60,48 @@ func IsChatAdmin(chatID int64, userID int64) (bool, error) {
 	answer, err := getChatMemberAnswer(chatID, userID)
 	status := answer.Result.Status
 	result := (err == nil) && ((status == chatMemberStatusCreator) || (status == chatMemberStatusAdministrator))
+
+	return result, err
+}
+
+// botTokenIDSeparator ends the bot's numeric id at the start of its token.
+const botTokenIDSeparator = ":"
+
+// errBotIDUnknown is returned when the token has no numeric bot id; it
+// never carries the token.
+var errBotIDUnknown = errors.New("the bot token has no numeric bot id")
+
+// FetchBotDeleteRight asks Telegram whether the bot may delete members'
+// messages in the chat: it is the creator, or an administrator with the
+// "Delete messages" right. A failed check returns false with the error,
+// meaning the right is unknown, so callers claim neither way. Nothing is
+// remembered here; the app keeps a pruned cache of the answers.
+func FetchBotDeleteRight(chatID int64) (bool, error) {
+	answer := chatMemberAnswer{}
+	botID, err := botUserID()
+
+	if err == nil {
+		answer, err = getChatMemberAnswer(chatID, botID)
+	}
+
+	status := answer.Result.Status
+	isCreator := (status == chatMemberStatusCreator)
+	isAdminWithRight := (status == chatMemberStatusAdministrator) && (answer.Result.CanDeleteMessages == true)
+	result := (err == nil) && ((isCreator == true) || (isAdminWithRight == true))
+
+	return result, err
+}
+
+// botUserID returns the bot's own user id: the number before ':' in its
+// token.
+func botUserID() (int64, error) {
+	token := config.GetTgBotToken()
+	idText, _, _ := strings.Cut(token, botTokenIDSeparator)
+	result, err := strconv.ParseInt(idText, 10, 64)
+
+	if err != nil {
+		err = errBotIDUnknown
+	}
 
 	return result, err
 }

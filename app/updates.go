@@ -71,6 +71,7 @@ func fetchBotInfo() error {
 
 	botUsername = strings.ToLower(result.Result.Username)
 	log.Printf("✅ Bot username fetched: @%s", botUsername)
+	recordGroupPrivacy(result.Result.CanReadAllGroupMessages)
 
 	return nil
 }
@@ -2481,8 +2482,9 @@ func handleSetLimitCommand(origMessage *response.TgMessage, origChat *response.T
 	successText.WriteString("✅ <b>User Limit Updated</b>\n\n")
 
 	if limitValue == 0 {
-		successText.WriteString(fmt.Sprintf("🔓 <b>User %d:</b> Limit removed\n", targetUserID))
-		successText.WriteString("💚 Status: <b>Unlimited</b>\n")
+		successText.WriteString(fmt.Sprintf("🔓 <b>User %d:</b> Individual limit removed\n", targetUserID))
+		removedStatus := removedUserLimitStatus(targetUserID, origChat.Id)
+		successText.WriteString(removedStatus)
 	} else {
 		successText.WriteString(fmt.Sprintf("🔒 <b>User %d:</b> Limit set to %d\n", targetUserID, limitValue))
 		successText.WriteString(fmt.Sprintf("📊 <b>Today's Usage:</b> %d media items\n", dailyCount))
@@ -2496,6 +2498,9 @@ func handleSetLimitCommand(origMessage *response.TgMessage, origChat *response.T
 	}
 
 	successText.WriteString(fmt.Sprintf("\n👮 <i>Set by admin: %s</i>", html.EscapeString(origUser.Username)))
+	isInForce := isLimitInForce(origChat.Id, targetUserID)
+	deleteRightNote := limitDeleteRightNoteFor(origChat.Id, isInForce)
+	successText.WriteString(deleteRightNote)
 
 	successMsg := payload.TgPlSendMessage{
 		ChatId:              origChat.Id,
@@ -2585,7 +2590,8 @@ func handleSetGroupLimitCommand(origMessage *response.TgMessage, origChat *respo
 
 	if limitValue == 0 {
 		successText.WriteString("🔓 <b>Group Limit:</b> Removed\n")
-		successText.WriteString("💚 <b>Status:</b> No default limit for new users\n")
+		removedStatus := removedGroupLimitStatus(origChat.Id)
+		successText.WriteString(removedStatus)
 	} else {
 		successText.WriteString(fmt.Sprintf("🔒 <b>Group Limit:</b> %d media items per day\n", limitValue))
 		successText.WriteString("📋 <b>Status:</b> Applied to all users without individual limits\n")
@@ -2599,6 +2605,9 @@ func handleSetGroupLimitCommand(origMessage *response.TgMessage, origChat *respo
 
 	successText.WriteString(fmt.Sprintf("\n👮 <i>Set by admin: %s</i>", html.EscapeString(origUser.Username)))
 	successText.WriteString("\n\n💡 <i>Individual user limits override group default</i>")
+	isInForce := isLimitInForce(origChat.Id, anyUserID)
+	deleteRightNote := limitDeleteRightNoteFor(origChat.Id, isInForce)
+	successText.WriteString(deleteRightNote)
 
 	successMsg := payload.TgPlSendMessage{
 		ChatId:              origChat.Id,
@@ -3543,10 +3552,14 @@ func handleSetGroupLimitCallback(callbackQuery *response.TgCallbackQuery) {
 	// Send success message
 	var successText string
 	if limitValue == 0 {
-		successText = "✅ <b>Group limit removed!</b>\n\n🔓 Users now have unlimited access to send media."
+		removedStatus := removedGroupLimitStatus(callbackQuery.Message.Chat.Id)
+		successText = fmt.Sprintf("✅ <b>Group limit removed!</b>\n\n%s", removedStatus)
 	} else {
 		successText = fmt.Sprintf("✅ <b>Group limit updated!</b>\n\n🔒 New limit: %d media items per day\n📋 Applied to all users without individual limits", limitValue)
 	}
+
+	isInForce := isLimitInForce(callbackQuery.Message.Chat.Id, anyUserID)
+	successText += limitDeleteRightNoteFor(callbackQuery.Message.Chat.Id, isInForce)
 
 	// Send success message with updated keyboard
 	newMsg := payload.TgPlSendMessage{
@@ -3701,11 +3714,7 @@ func shouldEnforceLimit(userID int64, chatID int64, username string, messageID i
 		log.Printf("🚫 User %d has exceeded daily limit (%d/%d)", userID, dailyCount, limit)
 
 		// Delete the message that triggered the limit
-		deletePayload := payload.TgPlDeleteMessage{
-			ChatId:    chatID,
-			MessageId: messageID,
-		}
-		message.NewDeleteMessage(deletePayload)
+		deleteOverLimitMessage(chatID, messageID)
 
 		// Get reset time information
 		resetTime, timeUntilReset, err := services.GetTimezoneAwareResetTime(chatID)

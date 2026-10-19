@@ -40,6 +40,11 @@ A Telegram bot that downloads and sends actual media files from social media lin
 | `/paysupport`, `/terms` | Help with Stars payments and the support terms. They always answer (Telegram requires `/paysupport` once a bot has taken payments); they appear in the command menu only when `STARS_SUPPORT_ENABLED=true` |
 
 **Group admins**
+
+Requirement: **Group Privacy disabled in BotFather** (`/mybots` → Bot Settings → Group Privacy → Turn off; groups the bot is already in may need it removed and added again). Only then does the bot see every message in groups without admin rights; with Group Privacy on, Telegram gives it only commands, replies to its messages and mentions, unless it is an admin. At startup the bot reads this from `getMe` (`can_read_all_group_messages`): while Group Privacy is on, it logs a warning and tells `ADMIN_USER_ID`, and `/start` and `/info` say "I don't need admin rights" only when the check passed.
+
+Admin rights matter for one more thing: a message sent over a daily limit is deleted only when the bot is an admin with the "Delete messages" right; without it the limit still applies (the bot answers with the limit notice instead of the media) and the message stays. Removing a limit (`/setlimit <user> 0`, `/setgrouplimit 0`, the Group Settings remove button) confirms the limit that applies afterwards (a removed individual limit falls back to the group limit, a removed group limit leaves `DEFAULT_DAILY_MEDIA_LIMIT` for users never given an individual limit, and no limit for users whose individual limit was removed). The confirmations of `/setlimit`, `/setgrouplimit` and the Group Settings limit buttons add a note about the missing right only when a limit is still enforced after the change (for a group change: the default or group limit, or any individual limit above 0 in that chat; nothing without a database) and the bot lacks the right; they check the right afresh each time, so promoting the bot shows at once.
+
 | Command | Description |
 |---|---|
 | `/setlimit` | Set a user's daily media limit |

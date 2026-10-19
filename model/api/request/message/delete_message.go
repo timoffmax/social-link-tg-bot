@@ -11,6 +11,8 @@ type DeleteMessage struct {
 	Payload         payload.TgPlDeleteMessage
 	ResponsePayload *bool
 	Request         request.AuthorizedRequest
+	Response        request.ResponseInfo
+	Err             error
 }
 
 func NewDeleteMessage(payload payload.TgPlDeleteMessage) *DeleteMessage {
@@ -30,7 +32,7 @@ func NewDeleteMessage(payload payload.TgPlDeleteMessage) *DeleteMessage {
 }
 
 func (service *DeleteMessage) send() *bool {
-	service.Request.Send(service.ResponsePayload)
+	service.Response, service.Err = service.Request.Send(service.ResponsePayload)
 
 	return service.ResponsePayload
 }
