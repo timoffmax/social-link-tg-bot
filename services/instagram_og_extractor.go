@@ -14,8 +14,8 @@ import (
 // InstagramOGExtractor is the last-resort Instagram fallback: it scrapes the Open
 // Graph thumbnail and caption that instagram.com still serves to bot User-Agents
 // (even from datacenter IPs) and returns the thumbnail as a photo. It never
-// yields the actual video — only a preview image plus caption — but is strictly
-// better than a dead fixed-link fallback that shows nothing.
+// yields the actual video — only a preview image plus caption; a reel's
+// thumbnail is marked as its cover, so FetchReelVideo tries for the video.
 type InstagramOGExtractor struct {
 	tempDir string
 }
@@ -35,10 +35,12 @@ func NewInstagramOGExtractor(tempDir string) *InstagramOGExtractor {
 
 // ExtractMedia first asks Instagram whether the author gated the post: a gated
 // post yields an InstagramGatedError (its og tags would be a login wall or an
-// unrelated image). Otherwise it downloads the og:image thumbnail as a photo.
+// unrelated image). Otherwise it downloads the og:image thumbnail as a photo,
+// marked as the video's cover for a reel or IGTV post (see markReelCover).
 func (e *InstagramOGExtractor) ExtractMedia(instagramURL string) ([]*MediaInfo, error) {
 	var result []*MediaInfo
 	var err error
+	imageURL := ""
 	gate := CheckInstagramGate(instagramURL)
 
 	if gate.Restricted == true {
@@ -46,16 +48,44 @@ func (e *InstagramOGExtractor) ExtractMedia(instagramURL string) ([]*MediaInfo, 
 	}
 
 	if gate.Restricted == false {
-		result, err = e.extractPreview(instagramURL, false)
+		result, imageURL, err = e.fetchPreview(instagramURL, false)
+	}
+
+	if err == nil {
+		markReelCover(result, instagramURL, imageURL)
 	}
 
 	return result, err
+}
+
+// markReelCover flags the thumbnail of a reel or IGTV post as the cover of a
+// video, so FetchReelVideo fetches the video itself (a costed special
+// download). Only post media on the CDN counts: a login wall or logo is no
+// cover. The gated-post preview is left alone, its paid fetch already ran.
+func markReelCover(media []*MediaInfo, instagramURL, imageURL string) {
+	postType, shortcode := instagramPostPath(instagramURL)
+	isCover := isInstagramVideoPostType(postType) && isInstagramMediaCDNURL(imageURL)
+
+	if isCover == true {
+		log.Printf("🎬 [OG] Got only the cover of %s %s", postType, shortcode)
+	}
+
+	for _, item := range media {
+		item.VideoCover = isCover
+	}
 }
 
 // extractPreview scrapes the og:image thumbnail and caption and downloads the
 // thumbnail as a photo. With requireMediaCDN, an og:image that is not on
 // Instagram's media CDN (a login wall or logo) is rejected.
 func (e *InstagramOGExtractor) extractPreview(instagramURL string, requireMediaCDN bool) ([]*MediaInfo, error) {
+	result, _, err := e.fetchPreview(instagramURL, requireMediaCDN)
+
+	return result, err
+}
+
+// fetchPreview is extractPreview that also returns the og:image URL.
+func (e *InstagramOGExtractor) fetchPreview(instagramURL string, requireMediaCDN bool) ([]*MediaInfo, string, error) {
 	var result []*MediaInfo
 	imageURL := ""
 	htmlBody, err := e.fetchHTML(instagramURL)
@@ -77,7 +107,7 @@ func (e *InstagramOGExtractor) extractPreview(instagramURL string, requireMediaC
 		result, err = e.downloadPreview(instagramURL, imageURL, htmlBody)
 	}
 
-	return result, err
+	return result, imageURL, err
 }
 
 // downloadPreview downloads the og:image and builds the photo with the
