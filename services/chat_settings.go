@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"log"
 	"strconv"
+
+	"github.com/timoffmax/social-link-bot/model/settings"
 )
 
 // ChatSettings represents all settings for a chat
@@ -50,7 +52,7 @@ func GetChatSettings(chatID int64) (*ChatSettings, error) {
 	// Initialize platform settings with defaults if no settings exist
 	if _, exists := settings.Settings["platform"]; !exists {
 		settings.Settings["platform"] = make(map[string]interface{})
-		defaultPlatforms := []string{"instagram", "tiktok", "twitter", "youtube", "reddit", "facebook", ThreadsPlatform}
+		defaultPlatforms := defaultChatPlatforms()
 		for _, platform := range defaultPlatforms {
 			settings.Settings["platform"][platform] = true // Default to enabled
 		}
@@ -212,6 +214,14 @@ func GetChatPlatformSettings(chatID int64) (map[string]bool, error) {
 	return platformSettings, nil
 }
 
+// defaultChatPlatforms lists every platform a chat has on by default (a
+// function: GetChatSettings has a local named settings).
+func defaultChatPlatforms() []string {
+	result := settings.PlatformIDs()
+
+	return result
+}
+
 // InitializeChatSettings creates default settings for a new chat
 func InitializeChatSettings(chatID int64) error {
 	db := GetDB()
@@ -219,7 +229,7 @@ func InitializeChatSettings(chatID int64) error {
 		return fmt.Errorf("database not available")
 	}
 
-	defaultPlatforms := []string{"instagram", "tiktok", "twitter", "youtube", "reddit", "facebook", ThreadsPlatform}
+	defaultPlatforms := defaultChatPlatforms()
 
 	// Start transaction
 	tx, err := db.Begin()

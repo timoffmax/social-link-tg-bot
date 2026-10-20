@@ -24,6 +24,7 @@ import (
 	"github.com/timoffmax/social-link-bot/model/api/request/payload"
 	"github.com/timoffmax/social-link-bot/model/api/response"
 	"github.com/timoffmax/social-link-bot/model/api/response/utils"
+	"github.com/timoffmax/social-link-bot/model/settings"
 	"github.com/timoffmax/social-link-bot/services"
 )
 
@@ -746,24 +747,28 @@ func detectPlatformFromUrl(url string) string {
 	return result
 }
 
-// detectOtherPlatformFromUrl detects the platforms other than Threads.
+// detectOtherPlatformFromUrl detects the platforms other than Threads ("" for none).
 func detectOtherPlatformFromUrl(url string) string {
-	if services.IsInstagramLikeURL(url) {
-		return "instagram"
-	} else if strings.Contains(url, "tiktok.com") || strings.Contains(url, "tiktxk.com") {
-		return "tiktok"
-	} else if strings.Contains(url, "twitter.com") || strings.Contains(url, "x.com") || strings.Contains(url, "fixupx.com") {
-		return "twitter"
-	} else if strings.Contains(url, "youtube.com") || strings.Contains(url, "youtu.be") {
-		return "youtube"
-	} else if strings.Contains(url, "reddit.com") {
-		return "reddit"
-	} else if strings.Contains(url, "facebook.com") {
-		return "facebook"
-	} else if strings.Contains(url, "9gag.com") {
-		return "9gag"
+	result := ""
+
+	switch {
+	case services.IsInstagramLikeURL(url):
+		result = settings.PlatformInstagram
+	case (strings.Contains(url, "tiktok.com") || strings.Contains(url, "tiktxk.com")):
+		result = settings.PlatformTikTok
+	case services.IsTwitterURL(url):
+		result = settings.PlatformTwitter
+	case (strings.Contains(url, "youtube.com") || strings.Contains(url, "youtu.be")):
+		result = settings.PlatformYouTube
+	case strings.Contains(url, "reddit.com"):
+		result = settings.PlatformReddit
+	case strings.Contains(url, "facebook.com"):
+		result = settings.PlatformFacebook
+	case strings.Contains(url, "9gag.com"):
+		result = settings.Platform9GAG
 	}
-	return ""
+
+	return result
 }
 
 // extractAuthorInfo extracts only author information from caption, removing main content
@@ -812,72 +817,100 @@ func threadsAuthorInfo(fullCaption string) string {
 	return result
 }
 
-// extractOtherAuthorInfo extracts the author line of the other platforms.
+// socialMediaAuthorFallback is the author line of a platform without a label.
+const socialMediaAuthorFallback = "📱 Social Media"
+
+// authorLineMaxLength is the length under which a caption line can be an
+// author line.
+const authorLineMaxLength = 100
+
+// extractOtherAuthorInfo extracts the author line of the other platforms,
+// else the platform's emoji and name.
 func extractOtherAuthorInfo(fullCaption, platform string) string {
-	if fullCaption == "" {
-		return ""
+	result := ""
+
+	if fullCaption != "" {
+		lines := strings.Split(fullCaption, "\n")
+		result = platformAuthorLine(lines, platform)
 	}
+
+	return result
+}
+
+// platformAuthorLine finds the author line of a platform's caption lines.
+func platformAuthorLine(lines []string, platform string) string {
+	result := ""
 
 	switch platform {
-	case "twitter":
-		// For Twitter, try to extract the author line (usually first line with @username)
-		lines := strings.Split(fullCaption, "\n")
-		for _, line := range lines {
-			if strings.Contains(line, "@") && (strings.Contains(line, "👤") || len(line) < 100) {
-				return strings.TrimSpace(line) // Return just the author line
-			}
-		}
-		// Fallback: return first line if it looks like author info
-		if len(lines) > 0 && len(lines[0]) < 100 {
-			return strings.TrimSpace(lines[0])
-		}
-
-	case "instagram":
-		// For Instagram, try to extract username (usually has @username)
-		lines := strings.Split(fullCaption, "\n")
-		for _, line := range lines {
-			if isAuthorLine(line) == true {
-				return strings.TrimSpace(line)
-			}
-		}
-		// Fallback: return a generic Instagram indicator
-		return "📸 Instagram"
-
-	case "tiktok":
-		// For TikTok, extract author/creator info
-		lines := strings.Split(fullCaption, "\n")
-		for _, line := range lines {
-			if isAuthorLine(line) == true {
-				return strings.TrimSpace(line)
-			}
-		}
-		return "🎵 TikTok"
-
-	case "youtube":
-		// For YouTube, extract channel name (usually first line)
-		lines := strings.Split(fullCaption, "\n")
-		if len(lines) > 0 && len(lines[0]) < 100 {
-			return strings.TrimSpace(lines[0])
-		}
-		return "📺 YouTube"
-
-	case "reddit":
-		// For Reddit, extract subreddit/author info
-		lines := strings.Split(fullCaption, "\n")
-		for _, line := range lines {
-			if (strings.Contains(line, "r/") || strings.Contains(line, "u/")) && len(line) < 100 {
-				return strings.TrimSpace(line)
-			}
-		}
-		return "🤖 Reddit"
-
-	case "facebook":
-		// For Facebook, generic fallback
-		return "📘 Facebook"
+	case settings.PlatformTwitter:
+		result = twitterAuthorLine(lines)
+	case settings.PlatformInstagram, settings.PlatformTikTok:
+		result = firstMatchingLine(lines, isAuthorLine)
+	case settings.PlatformYouTube:
+		result = shortFirstLine(lines)
+	case settings.PlatformReddit:
+		result = firstMatchingLine(lines, isRedditAuthorLine)
 	}
 
-	// Generic fallback
-	return "📱 Social Media"
+	if result == "" {
+		result = platformLabelLine(platform)
+	}
+
+	return result
+}
+
+// twitterAuthorLine is the first line with an @username, else a short first line.
+func twitterAuthorLine(lines []string) string {
+	result := firstMatchingLine(lines, isTwitterAuthorLine)
+
+	if result == "" {
+		result = shortFirstLine(lines)
+	}
+
+	return result
+}
+
+// isTwitterAuthorLine reports whether a line holds a tweet's @username.
+func isTwitterAuthorLine(line string) bool {
+	isShort := (len(line) < authorLineMaxLength)
+	result := strings.Contains(line, "@") && (strings.Contains(line, "👤") || isShort)
+
+	return result
+}
+
+// isRedditAuthorLine reports whether a line holds the subreddit or author.
+func isRedditAuthorLine(line string) bool {
+	hasName := (strings.Contains(line, "r/") || strings.Contains(line, "u/"))
+	result := hasName && (len(line) < authorLineMaxLength)
+
+	return result
+}
+
+// firstMatchingLine returns the first line matching, trimmed, or "".
+func firstMatchingLine(lines []string, matches func(string) bool) string {
+	result := ""
+	isFound := false
+
+	for _, line := range lines {
+		if (isFound == false) && (matches(line) == true) {
+			result = strings.TrimSpace(line)
+			isFound = true
+		}
+	}
+
+	return result
+}
+
+// shortFirstLine returns the first line, trimmed, when it is short enough to
+// be an author line, else "".
+func shortFirstLine(lines []string) string {
+	result := ""
+
+	if (len(lines) > 0) && (len(lines[0]) < authorLineMaxLength) {
+		result = strings.TrimSpace(lines[0])
+	}
+
+	return result
 }
 
 // sendMediaFile sends one media item; isWholePost marks the post's only
@@ -2313,16 +2346,6 @@ func handleStatsCommand(origMessage *response.TgMessage, origChat *response.TgCh
 		if len(stats.Platforms) > 0 {
 			statsText.WriteString("🌐 <b>By Platform:</b>\n")
 			for _, platform := range stats.Platforms {
-				platformEmoji := map[string]string{
-					"instagram":              "📷",
-					"tiktok":                 "🎵",
-					"twitter":                "🐦",
-					"youtube":                "📺",
-					"reddit":                 "🔴",
-					"facebook":               "👥",
-					"9gag":                   "😂",
-					services.ThreadsPlatform: "🧵",
-				}
 				emoji := platformEmoji[strings.ToLower(platform.Platform)]
 				if emoji == "" {
 					emoji = "🔗"
@@ -3048,16 +3071,6 @@ func handleAdminStatsCommand(origMessage *response.TgMessage, origChat *response
 	// Platform breakdown
 	if len(stats.PlatformStats) > 0 {
 		statsText.WriteString("\n<b>🌐 By Platform</b>\n")
-		platformEmoji := map[string]string{
-			"instagram":              "📷",
-			"twitter":                "🐦",
-			"tiktok":                 "🎵",
-			"youtube":                "📺",
-			"reddit":                 "🔴",
-			"facebook":               "👥",
-			"9gag":                   "😂",
-			services.ThreadsPlatform: "🧵",
-		}
 		for _, ps := range stats.PlatformStats {
 			emoji := platformEmoji[strings.ToLower(ps.Platform)]
 			if emoji == "" {
@@ -3897,36 +3910,19 @@ func trackMediaSent(userID int64, username string, chatID int64, chatTitle strin
 	}
 }
 
-// getPlatformFromURL determines the platform from a URL
+// getPlatformFromURL names the platform of a URL for stats.
 func getPlatformFromURL(url string) string {
-	result := services.ThreadsPlatform
-	isThreads := services.IsThreadsURL(url)
+	result := detectPlatformFromUrl(url)
 
-	if isThreads == false {
-		result = getOtherPlatformFromURL(url)
+	if result == "" {
+		result = statsPlatformUnknown
 	}
 
 	return result
 }
 
-// getOtherPlatformFromURL maps the platforms other than Threads for stats.
-func getOtherPlatformFromURL(url string) string {
-	if strings.Contains(url, "instagram.com") {
-		return "instagram"
-	} else if strings.Contains(url, "tiktok.com") {
-		return "tiktok"
-	} else if strings.Contains(url, "twitter.com") || strings.Contains(url, "x.com") {
-		return "twitter"
-	} else if strings.Contains(url, "youtube.com") || strings.Contains(url, "youtu.be") {
-		return "youtube"
-	} else if strings.Contains(url, "reddit.com") {
-		return "reddit"
-	} else if strings.Contains(url, "facebook.com") {
-		return "facebook"
-	} else {
-		return "unknown"
-	}
-}
+// statsPlatformUnknown is the stats platform of a URL no platform matches.
+const statsPlatformUnknown = "unknown"
 
 // Platform Settings Functions
 
@@ -3938,19 +3934,7 @@ func createPlatformSettingsKeyboard(chatID int64) (*api.TgInlineKeyboardMarkup, 
 		return nil, err
 	}
 
-	platforms := []struct {
-		Key   string
-		Name  string
-		Emoji string
-	}{
-		{"instagram", "Instagram", "📷"},
-		{"tiktok", "TikTok", "🎵"},
-		{"twitter", "Twitter/X", "🐦"},
-		{"youtube", "YouTube", "📺"},
-		{"reddit", "Reddit", "🤖"},
-		{"facebook", "Facebook", "📘"},
-		{services.ThreadsPlatform, "Threads", "🧵"},
-	}
+	platforms := chatSettingsPlatforms()
 
 	var buttons [][]api.TgInlineKeyboardButton
 
@@ -4072,7 +4056,7 @@ func handlePlatformEnableAllCallback(callbackQuery response.TgCallbackQuery) {
 
 	log.Printf("📱 User %d enabling all platforms in chat %d", userID, chatID)
 
-	platforms := []string{"instagram", "tiktok", "twitter", "youtube", "reddit", "facebook", services.ThreadsPlatform}
+	platforms := settings.PlatformIDs()
 
 	for _, platform := range platforms {
 		err := services.SetChatPlatformEnabled(chatID, platform, true)
@@ -4092,7 +4076,7 @@ func handlePlatformDisableAllCallback(callbackQuery response.TgCallbackQuery) {
 
 	log.Printf("📱 User %d disabling all platforms in chat %d", userID, chatID)
 
-	platforms := []string{"instagram", "tiktok", "twitter", "youtube", "reddit", "facebook", services.ThreadsPlatform}
+	platforms := settings.PlatformIDs()
 
 	for _, platform := range platforms {
 		err := services.SetChatPlatformEnabled(chatID, platform, false)
@@ -4128,7 +4112,7 @@ func handleDescriptionSettingsCallback(origChat *response.TgChat, origUser *resp
 	// Count enabled/disabled descriptions
 	enabled := 0
 	disabled := 0
-	platforms := []string{"instagram", "tiktok", "twitter", "youtube", "reddit", "facebook", services.ThreadsPlatform}
+	platforms := settings.PlatformIDs()
 
 	for _, platform := range platforms {
 		if isEnabled, exists := descriptionSettings[platform]; !exists || isEnabled {
@@ -4170,20 +4154,7 @@ func createDescriptionSettingsKeyboard(chatID int64) (*api.TgInlineKeyboardMarku
 		descriptionSettings = make(map[string]bool)
 	}
 
-	// Platform definitions with display names and emojis
-	platforms := []struct {
-		Key   string
-		Name  string
-		Emoji string
-	}{
-		{"instagram", "Instagram", "📸"},
-		{"tiktok", "TikTok", "🎵"},
-		{"twitter", "Twitter/X", "🐦"},
-		{"youtube", "YouTube", "📺"},
-		{"reddit", "Reddit", "🤖"},
-		{"facebook", "Facebook", "📘"},
-		{services.ThreadsPlatform, "Threads", "🧵"},
-	}
+	platforms := chatSettingsPlatforms()
 
 	var rows [][]api.TgInlineKeyboardButton
 
@@ -4281,7 +4252,7 @@ func handleDescriptionEnableAllCallback(callbackQuery response.TgCallbackQuery) 
 
 	log.Printf("📝 User %d enabling descriptions for all platforms in chat %d", userID, chatID)
 
-	platforms := []string{"instagram", "tiktok", "twitter", "youtube", "reddit", "facebook", services.ThreadsPlatform}
+	platforms := settings.PlatformIDs()
 
 	for _, platform := range platforms {
 		err := services.SetChatDescriptionEnabled(chatID, platform, true)
@@ -4301,7 +4272,7 @@ func handleDescriptionDisableAllCallback(callbackQuery response.TgCallbackQuery)
 
 	log.Printf("📝 User %d disabling descriptions for all platforms in chat %d", userID, chatID)
 
-	platforms := []string{"instagram", "tiktok", "twitter", "youtube", "reddit", "facebook", services.ThreadsPlatform}
+	platforms := settings.PlatformIDs()
 
 	for _, platform := range platforms {
 		err := services.SetChatDescriptionEnabled(chatID, platform, false)

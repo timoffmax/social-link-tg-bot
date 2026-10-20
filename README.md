@@ -50,7 +50,7 @@ Admin rights matter for one more thing: a message sent over a daily limit is del
 | `/setlimit` | Set a user's daily media limit |
 | `/setgrouplimit` | Set the group default limit |
 | `/setgrouptimezone` | Set the group timezone for limit resets |
-| Platform toggles | Enable/disable individual platforms per chat |
+| Platform toggles | Enable/disable individual platforms per chat, and their descriptions (every platform the owner has on, 9GAG included); with descriptions off a post keeps only its author line, else the platform's emoji and name |
 
 **Owner**
 | Command | Description |

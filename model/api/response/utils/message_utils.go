@@ -5,6 +5,7 @@ import (
 
 	"github.com/timoffmax/social-link-bot/config"
 	"github.com/timoffmax/social-link-bot/model/api/response"
+	"github.com/timoffmax/social-link-bot/model/settings"
 	"github.com/timoffmax/social-link-bot/services"
 	"regexp"
 	"strings"
@@ -59,42 +60,42 @@ func GetAllLinks(message *response.TgMessage) []string {
 func GetAllSocialLinks(message *response.TgMessage, chatID int64) []string {
 	var result []string
 
-	if config.IsInstagramEnabled() && services.IsPlatformEnabledForChat(chatID, "instagram") {
+	if config.IsInstagramEnabled() && services.IsPlatformEnabledForChat(chatID, settings.PlatformInstagram) {
 		instagramLinks := GetOriginalInstagramLinks(message)
 		result = append(result, instagramLinks...)
 	}
 
-	if config.IsTikTokEnabled() && services.IsPlatformEnabledForChat(chatID, "tiktok") {
+	if config.IsTikTokEnabled() && services.IsPlatformEnabledForChat(chatID, settings.PlatformTikTok) {
 		tikTokLinks := GetOriginalTikTokLinks(message)
 		result = append(result, tikTokLinks...)
 	}
 
-	if config.IsTwitterEnabled() && services.IsPlatformEnabledForChat(chatID, "twitter") {
+	if config.IsTwitterEnabled() && services.IsPlatformEnabledForChat(chatID, settings.PlatformTwitter) {
 		twitterLinks := GetOriginalTwitterLinks(message)
 		result = append(result, twitterLinks...)
 	}
 
-	if config.IsYouTubeEnabled() && services.IsPlatformEnabledForChat(chatID, "youtube") {
+	if config.IsYouTubeEnabled() && services.IsPlatformEnabledForChat(chatID, settings.PlatformYouTube) {
 		youtubeLinks := GetOriginalYouTubeLinks(message)
 		result = append(result, youtubeLinks...)
 	}
 
-	if config.IsRedditEnabled() && services.IsPlatformEnabledForChat(chatID, "reddit") {
+	if config.IsRedditEnabled() && services.IsPlatformEnabledForChat(chatID, settings.PlatformReddit) {
 		redditLinks := GetOriginalRedditLinks(message)
 		result = append(result, redditLinks...)
 	}
 
-	if config.IsFacebookEnabled() && services.IsPlatformEnabledForChat(chatID, "facebook") {
+	if config.IsFacebookEnabled() && services.IsPlatformEnabledForChat(chatID, settings.PlatformFacebook) {
 		facebookLinks := GetOriginalFacebookLinks(message)
 		result = append(result, facebookLinks...)
 	}
 
-	if config.Is9GAGEnabled() && services.IsPlatformEnabledForChat(chatID, "9gag") {
+	if config.Is9GAGEnabled() && services.IsPlatformEnabledForChat(chatID, settings.Platform9GAG) {
 		ninegagLinks := GetOriginal9GAGLinks(message)
 		result = append(result, ninegagLinks...)
 	}
 
-	isThreadsOn := (config.IsThreadsEnabled() == true) && (services.IsPlatformEnabledForChat(chatID, services.ThreadsPlatform) == true)
+	isThreadsOn := (config.IsThreadsEnabled() == true) && (services.IsPlatformEnabledForChat(chatID, settings.PlatformThreads) == true)
 
 	if isThreadsOn == true {
 		threadsLinks := GetOriginalThreadsLinks(message)

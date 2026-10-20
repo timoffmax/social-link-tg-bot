@@ -190,6 +190,13 @@ func (yd *YtDlpDownloader) downloadOutputTemplate(prefix string) string {
 // merely contains "x.com", such as netflix.com).
 var ytDlpTwitterHostPattern = regexp.MustCompile(`^https?://([a-z0-9-]+\.)*(twitter|x)\.com(/|$)`)
 
+// IsTwitterURL reports whether a URL is on a twitter.com or x.com host.
+func IsTwitterURL(url string) bool {
+	result := ytDlpTwitterHostPattern.MatchString(url)
+
+	return result
+}
+
 // ytDlpPlatform names the platform of a URL for the per-platform proxy settings ("" when unknown).
 func ytDlpPlatform(url string) string {
 	result := ""

@@ -227,6 +227,17 @@ func Platforms() []Platform {
 	return result
 }
 
+// PlatformIDs returns the ids of Platforms, in the same order.
+func PlatformIDs() []string {
+	result := make([]string, 0, len(platforms))
+
+	for _, platform := range platforms {
+		result = append(result, platform.ID)
+	}
+
+	return result
+}
+
 // PlatformEnabledKey returns the on/off key of a platform.
 func PlatformEnabledKey(platformID string) (string, bool) {
 	result, isKnown := platformEnabledKeys[platformID]
