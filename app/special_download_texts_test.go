@@ -86,20 +86,22 @@ func TestSpecialDownloadDeniedTextPerDenial(t *testing.T) {
 				want = fmt.Sprintf("%s%s", want, supportLines[denial])
 			}
 
+			want = fmt.Sprintf("%s\n\n%s", want, regularLinksNoteText)
+
 			if got := specialDownloadDeniedText(denial); got != want {
 				t.Errorf("stars %t, %s: got %q, want %q", isStarsOn, denial, got, want)
 			}
 		}
 
-		if got := specialDownloadDeniedText(services.GatedFetchDeniedBudget); got != paidBudgetPausedText {
-			t.Errorf("stars %t: the budget pause must be the paused text alone, got %q", isStarsOn, got)
+		if got := specialDownloadDeniedText(services.GatedFetchDeniedBudget); got != fmt.Sprintf("%s\n\n%s", paidBudgetPausedText, regularLinksNoteText) {
+			t.Errorf("stars %t: the budget pause must be the paused text and the regular links note, got %q", isStarsOn, got)
 		}
 	}
 
 	t.Setenv("STARS_SUPPORT_ENABLED", "true")
 
-	if strings.HasSuffix(specialDownloadDeniedText(services.GatedFetchDeniedChatCap), "/boost") == false {
-		t.Errorf("chat_cap must end with /boost")
+	if strings.HasSuffix(specialDownloadDeniedText(services.GatedFetchDeniedChatCap), fmt.Sprintf("/boost\n\n%s", regularLinksNoteText)) == false {
+		t.Errorf("chat_cap must end with /boost and the regular links note")
 	}
 }
 
@@ -144,7 +146,7 @@ func TestInstagramGateReplyTextUsesTheSpecialDownloadHints(t *testing.T) {
 	t.Setenv("STARS_SUPPORT_ENABLED", "true")
 	gate := services.InstagramGate{Restricted: true, Title: "x"}
 	err := &services.GatedFetchDeniedError{Denial: services.GatedFetchDeniedUserCap, Cause: &services.InstagramGatedError{Gate: gate}}
-	want := fmt.Sprintf("%s\n\nYou've used all your free special downloads for this month.\nGet bonus downloads by supporting the bot: /donate", services.InstagramGateMessage(gate))
+	want := fmt.Sprintf("%s\n\nYou've used all your free special downloads for this month.\nGet bonus downloads by supporting the bot: /donate\n\n%s", services.InstagramGateMessage(gate), regularLinksNoteText)
 
 	if got := instagramGateReplyText(err, gate); got != want {
 		t.Fatalf("got %q, want %q", got, want)
@@ -187,7 +189,7 @@ func TestReelDenialNoteSkipsFailuresThatAreNoRefusal(t *testing.T) {
 
 	appendReelDenialNote([]*services.MediaInfo{cover}, services.GatedFetchDeniedBudget)
 
-	if strings.HasSuffix(cover.Caption, paidBudgetPausedText) == false {
+	if strings.HasSuffix(cover.Caption, fmt.Sprintf("%s\n\n%s", paidBudgetPausedText, regularLinksNoteText)) == false {
 		t.Fatalf("a paused budget must be noted, got %q", cover.Caption)
 	}
 }
@@ -374,7 +376,7 @@ func TestMinimalCaptionKeepsTheLimitMessageUnderARefusedReelCover(t *testing.T) 
 
 func TestMinimalCaptionKeepsTheQuotaNoteOfAShort(t *testing.T) {
 	short := &services.MediaInfo{Caption: "📺 Channel: Title\nA description line"}
-	note := "📊 Special downloads left this month: 2 of 3"
+	note := "💎 Special downloads left this month: 2 of 3 (regular links don't count)"
 	services.AppendCaptionNote(short, note)
 
 	got := minimalCaption(short, "youtube")

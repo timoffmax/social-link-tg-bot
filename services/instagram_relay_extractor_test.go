@@ -105,7 +105,7 @@ func TestFetchReelVideoFromTheRelayUsesTheQuotaAndSkipsThePaidProvider(t *testin
 
 	userUsed, globalUsed := scopeAndGlobalUsage(t, GatedFetchScopeUser, 51)
 
-	if (userUsed != 1) || (globalUsed != 1) || (strings.Contains(got[0].Caption, "Special downloads left this month: 2 of 3") == false) {
+	if (userUsed != 1) || (globalUsed != 1) || (strings.Contains(got[0].Caption, "Special downloads left this month: 2 of 3 (regular links don't count)") == false) {
 		t.Fatalf("expected one unit used and noted, got user=%d global=%d, caption %q", userUsed, globalUsed, got[0].Caption)
 	}
 

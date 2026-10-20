@@ -345,7 +345,7 @@ func TestGatedFetchCaptionEndsWithTheRemainingQuota(t *testing.T) {
 
 	media, err := sd.FetchGatedPost("https://www.instagram.com/p/DeYsKEDjbGB/", gatedErr, DownloadRequester{ChatID: -500, UserID: 5, IsPrivate: false})
 
-	if (err != nil) || (strings.HasSuffix(media[0].Caption, "📊 Special downloads left this month: 19 of 20") == false) {
+	if (err != nil) || (strings.HasSuffix(media[0].Caption, "💎 Special downloads left this month: 19 of 20 (regular links don't count)") == false) {
 		t.Fatalf("expected the quota note, got %q %v", media[0].Caption, err)
 	}
 }

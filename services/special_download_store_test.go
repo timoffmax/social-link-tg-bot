@@ -38,7 +38,7 @@ func TestRelayShortUsesOneUnitAndShowsTheNote(t *testing.T) {
 		t.Fatalf("expected the Short for one unit, got %v, user=%d global=%d", err, userUsed, globalUsed)
 	}
 
-	if strings.HasSuffix(media[0].Caption, "📊 Special downloads left this month: 2 of 3") == false {
+	if strings.HasSuffix(media[0].Caption, "💎 Special downloads left this month: 2 of 3 (regular links don't count)") == false {
 		t.Fatalf("expected the note, got %q", media[0].Caption)
 	}
 }

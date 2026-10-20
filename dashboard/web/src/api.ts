@@ -286,11 +286,14 @@ export interface ApiErrorBody {
 
 export class ApiError extends Error {
   readonly status: number;
+  /** False when the answer was not the dashboard's JSON error, e.g. a proxy's own refusal page. */
+  readonly isFromDashboard: boolean;
 
-  constructor(status: number, message: string) {
+  constructor(status: number, message: string, isFromDashboard = true) {
     super(message);
     this.name = 'ApiError';
     this.status = status;
+    this.isFromDashboard = isFromDashboard;
   }
 }
 
@@ -330,18 +333,20 @@ function isErrorBody(value: unknown): value is ApiErrorBody {
 
 async function readError(response: Response): Promise<ApiError> {
   let message = `Request failed with HTTP ${response.status}`;
+  let isFromDashboard = false;
 
   try {
     const body: unknown = await response.json();
 
     if (isErrorBody(body)) {
       message = body.error;
+      isFromDashboard = true;
     }
   } catch {
     // Not JSON (e.g. a proxy error page): keep the status message.
   }
 
-  return new ApiError(response.status, message);
+  return new ApiError(response.status, message, isFromDashboard);
 }
 
 // Dev-only fixtures: import.meta.env.DEV is false in production builds, so

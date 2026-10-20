@@ -31,6 +31,7 @@ import {
   paidTone,
   parseLimitInput,
   parseScopeId,
+  PROXY_REFUSED_TEXT,
   pausedFeatureLines,
   quickTargets,
   relayCardState,
@@ -363,11 +364,12 @@ describe('specialLimitLabel', () => {
 
 describe('limitErrorText', () => {
   it('maps the refusals', () => {
-    assert.equal(limitErrorText(409, 'the running bot does not take limit changes yet: deploy the bot first', true), NOT_SUPPORTED_TEXT);
-    assert.equal(limitErrorText(409, 'a change of this limit is already waiting', true), LIMIT_CONFLICT_TEXT);
-    assert.equal(limitErrorText(409, 'a change of this limit is already waiting', false), `${LIMIT_CONFLICT_TEXT} ${STALE_BOT_TEXT}`);
-    assert.equal(limitErrorText(403, 'forbidden', true), WRITE_GUARD_TEXT);
-    assert.equal(limitErrorText(400, 'scope must be user or chat', true), 'Not sent: scope must be user or chat.');
+    assert.equal(limitErrorText(409, 'the running bot does not take limit changes yet: deploy the bot first', true, true), NOT_SUPPORTED_TEXT);
+    assert.equal(limitErrorText(409, 'a change of this limit is already waiting', true, true), LIMIT_CONFLICT_TEXT);
+    assert.equal(limitErrorText(409, 'a change of this limit is already waiting', false, true), `${LIMIT_CONFLICT_TEXT} ${STALE_BOT_TEXT}`);
+    assert.equal(limitErrorText(403, 'forbidden', true, true), WRITE_GUARD_TEXT);
+    assert.equal(limitErrorText(403, 'Request failed with HTTP 403', true, false), PROXY_REFUSED_TEXT);
+    assert.equal(limitErrorText(400, 'scope must be user or chat', true, true), 'Not sent: scope must be user or chat.');
   });
 
   it('checks the sign of a typed id', () => {

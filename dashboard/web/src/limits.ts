@@ -60,7 +60,8 @@ export const WAITING_TEXT = 'A change is waiting for the bot.';
 export const LIMIT_CONFLICT_TEXT = 'A change of this limit is already waiting. Wait for it to finish, then try again.';
 export const NOT_SUPPORTED_TEXT = 'The running bot does not take limit changes yet. Deploy the bot first.';
 export const STALE_BOT_TEXT = 'The bot is not running or not applying changes, so a change would expire unapplied.';
-export const WRITE_GUARD_TEXT = 'Refused by the dashboard’s write guard; reload the page.';
+export const WRITE_GUARD_TEXT = 'Refused by the dashboard’s write guard; reload the page. If it keeps failing, check that this address is in DASHBOARD_ALLOWED_HOSTS.';
+export const PROXY_REFUSED_TEXT = 'Refused by the web server in front of the dashboard; it does not let this change through. Check its nginx site for /api/limits/requests.';
 export const TRUNCATED_TEXT = 'Showing the {shown} busiest of {total}. Use “Find by id” for anyone not listed.';
 export const ID_SIGN_HINT = 'Group ids are negative, e.g. -1001234567890; person ids are positive.';
 export const NOT_SUPPORTED_SERVER_TEXT = 'deploy the bot first';
@@ -507,17 +508,21 @@ export function formatRate(rate: number | null): string {
   return (rate === null) ? '—' : `${Math.round(rate * 100)}%`;
 }
 
+// Copies of api.ts's constants: importing api.ts would load import.meta.env, which `node --test` lacks.
 const HTTP_FORBIDDEN = 403;
 const HTTP_CONFLICT = 409;
 
-/** A refused limit change as one sentence for its row. */
-export function limitErrorText(status: number, message: string, isApplying: boolean): string {
+/** A refused limit change as one sentence for its row; a 403 not from the dashboard came from the proxy. */
+export function limitErrorText(status: number, message: string, isApplying: boolean, isFromDashboard: boolean): string {
   const isNotSupported = (status === HTTP_CONFLICT) && message.includes(NOT_SUPPORTED_SERVER_TEXT);
   const conflict = isApplying ? LIMIT_CONFLICT_TEXT : `${LIMIT_CONFLICT_TEXT} ${STALE_BOT_TEXT}`;
+  const isForbidden = (status === HTTP_FORBIDDEN);
+  const isWriteGuard = isForbidden && isFromDashboard;
   const texts: [boolean, string][] = [
     [isNotSupported, NOT_SUPPORTED_TEXT],
     [(status === HTTP_CONFLICT), conflict],
-    [(status === HTTP_FORBIDDEN), WRITE_GUARD_TEXT],
+    [isWriteGuard, WRITE_GUARD_TEXT],
+    [isForbidden, PROXY_REFUSED_TEXT],
   ];
   const found = texts.find(([isFound]) => isFound);
 

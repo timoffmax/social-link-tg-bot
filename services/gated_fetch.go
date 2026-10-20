@@ -101,8 +101,9 @@ func (sd *SmartDownloader) gatedPostFetch(instagramURL string, spoiler bool, req
 }
 
 // gatedQuotaNoteTemplate tells a limited chat or user how many special
-// downloads are left this month; it ends the post's caption.
-const gatedQuotaNoteTemplate = "\n\n📊 Special downloads left this month: %d of %d"
+// downloads are left this month and that regular links don't count; it ends
+// the post's caption.
+const gatedQuotaNoteTemplate = "\n\n💎 Special downloads left this month: %d of %d (regular links don't count)"
 
 // Credit notes end the post's caption instead of the monthly note: how many
 // of the poster's or the group's bonus downloads are left.
@@ -201,7 +202,7 @@ func gatedCreditNote(credit gatedCredit) string {
 }
 
 // gatedQuotaNoteReserve is the caption space kept free for the note.
-const gatedQuotaNoteReserve = 80
+const gatedQuotaNoteReserve = 96
 
 // gatedQuotaNote is the remaining-quota line.
 func gatedQuotaNote(usage GatedFetchUsage) string {

@@ -103,6 +103,10 @@ function statusOf(error: unknown): number {
   return (error instanceof ApiError) ? error.status : 0;
 }
 
+function isFromDashboard(error: unknown): boolean {
+  return (error instanceof ApiError) ? error.isFromDashboard : false;
+}
+
 export function LimitsTab({ tick, onLoaded }: TabProps) {
   const [localTick, reload] = useVisibleTick(LIMITS_REFRESH_MS);
   const query = useApi((signal) => getLimits(signal).then(onLoaded), [tick, localTick]);
@@ -581,7 +585,10 @@ function LimitItem({ row, context }: { row: LimitRow; context: LimitsContext }) 
       })
       .catch((error: unknown) => {
         setConfirming(null);
-        setSendError(limitErrorText(statusOf(error), messageOf(error), context.applying));
+        const status = statusOf(error);
+        const message = messageOf(error);
+        const isDashboard = isFromDashboard(error);
+        setSendError(limitErrorText(status, message, context.applying, isDashboard));
       })
       .finally(() => setSending(false));
   };

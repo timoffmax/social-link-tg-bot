@@ -49,7 +49,7 @@ func TestSpecialDownloadKeepsTheUnitsAndAddsTheNoteOnACostedWin(t *testing.T) {
 
 	media, _ := runCostedSteps(download, []costedStep{winningStep(costRelay)})
 
-	if (len(limit.refundCalls()) != 0) || (strings.HasSuffix(media[0].Caption, "Special downloads left this month: 2 of 3") == false) {
+	if (len(limit.refundCalls()) != 0) || (strings.HasSuffix(media[0].Caption, "Special downloads left this month: 2 of 3 (regular links don't count)") == false) {
 		t.Fatalf("expected the units kept and the note, got refunds %v, caption %q", limit.refundCalls(), media[0].Caption)
 	}
 }
@@ -183,7 +183,7 @@ func TestSpecialDownloadRefusalOnlyMatchesLimitDenials(t *testing.T) {
 }
 
 func TestAppendCaptionNoteFitsTheCaptionLimit(t *testing.T) {
-	note := "📊 Special downloads left this month: 2 of 3"
+	note := "💎 Special downloads left this month: 2 of 3 (regular links don't count)"
 	room := TelegramCaptionLimitBytes - len(note) - len(captionNoteSeparator) - len(captionCutMark)
 	head := fmt.Sprintf("%s&amp;", strings.Repeat("a", room-2))
 	caption := fmt.Sprintf("%s%s", head, strings.Repeat("a", 1020-len(head)))
@@ -598,7 +598,7 @@ func TestStoryURLWithoutAnIDNeverReserves(t *testing.T) {
 func TestCaptionNotesSurviveTakingTheCaptionApart(t *testing.T) {
 	item := &MediaInfo{Caption: "👤 @author\n\nA long description"}
 	AppendCaptionNote(item, reelCoverNote)
-	AppendCaptionNote(item, "📊 Special downloads left this month: 2 of 3")
+	AppendCaptionNote(item, "💎 Special downloads left this month: 2 of 3 (regular links don't count)")
 
 	body := CaptionWithoutNotes(item)
 	rebuilt := CaptionWithNotes("👤 @author", item.Notes)
@@ -607,7 +607,7 @@ func TestCaptionNotesSurviveTakingTheCaptionApart(t *testing.T) {
 		t.Fatalf("expected the caption without its notes, got %q", body)
 	}
 
-	if rebuilt != fmt.Sprintf("👤 @author\n\n%s\n\n📊 Special downloads left this month: 2 of 3", reelCoverNote) {
+	if rebuilt != fmt.Sprintf("👤 @author\n\n%s\n\n💎 Special downloads left this month: 2 of 3 (regular links don't count)", reelCoverNote) {
 		t.Fatalf("expected the author line and both notes, got %q", rebuilt)
 	}
 }

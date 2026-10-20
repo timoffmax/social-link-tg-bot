@@ -70,6 +70,7 @@ Per-person (`user:<id>`, id above 0) and per-group (`chat:<id>`, id below 0) mon
       proxy_set_header X-Forwarded-Proto $scheme;
   }
   ```
+  A proxy that limits methods per location (nginx `limit_except GET HEAD`) must let the writes through on every write endpoint: `/api/blog-posts` and `/api/blog-posts/{id}…`, `/api/reports/{id}/…`, `/api/settings/requests` and `/api/limits/requests`. Its own refusal is a `403` without the dashboard's JSON body; the Limits tab tells it apart from the write guard's `{"error":"forbidden"}`.
 - Every response carries `Content-Security-Policy: default-src 'self'; ...`, `X-Content-Type-Options: nosniff` and `Referrer-Policy: no-referrer`; API answers are `Cache-Control: no-store`. The frontend bundles all its code and makes no external requests.
 
 ## Configuration

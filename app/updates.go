@@ -1194,6 +1194,10 @@ const gatedChatOffHint = "Special downloads are turned off in this chat."
 // gatedUserBlockedHint is appended when the user's allowance is 0.
 const gatedUserBlockedHint = "Special downloads are turned off for you."
 
+// regularLinksNoteText ends every refusal or pause of special downloads: they
+// never block the free ones.
+const regularLinksNoteText = "✅ Other links (most posts and videos) aren't special downloads and still download as usual."
+
 // specialDownloadDeniedLeadText opens the reply to a special download the
 // limit refused.
 const specialDownloadDeniedLeadText = "💎 This link is a special download: fetching it costs the developer, so it counts toward a monthly limit (see /info)."
@@ -1228,14 +1232,24 @@ func specialDownloadDenialText(denial services.GatedFetchDenial) string {
 }
 
 // specialDownloadDeniedText is the full limit message: the lead and the hint,
-// or the budget-paused text alone.
+// or the budget-paused text alone, then the regular links note.
 func specialDownloadDeniedText(denial services.GatedFetchDenial) string {
 	hint := specialDownloadDenialText(denial)
-	result := fmt.Sprintf("%s\n\n%s", specialDownloadDeniedLeadText, hint)
+	text := fmt.Sprintf("%s\n\n%s", specialDownloadDeniedLeadText, hint)
 
 	if denial == services.GatedFetchDeniedBudget {
-		result = paidBudgetPausedText
+		text = paidBudgetPausedText
 	}
+
+	result := withRegularLinksNote(text)
+
+	return result
+}
+
+// withRegularLinksNote ends a refusal or pause of special downloads with the
+// note that regular links still work.
+func withRegularLinksNote(text string) string {
+	result := fmt.Sprintf("%s\n\n%s", text, regularLinksNoteText)
 
 	return result
 }
@@ -1357,7 +1371,8 @@ func instagramGateReplyText(downloadErr error, gate services.InstagramGate) stri
 	}
 
 	if hint != "" {
-		result = fmt.Sprintf("%s\n\n%s", result, hint)
+		hintText := withRegularLinksNote(hint)
+		result = fmt.Sprintf("%s\n\n%s", result, hintText)
 	}
 
 	return result
@@ -1370,9 +1385,10 @@ func replyPaidBudgetPaused(downloadErr error, origMessage *response.TgMessage, o
 	isBudgetError := services.IsPaidBudgetError(downloadErr)
 
 	if isBudgetError == true {
+		pausedText := withRegularLinksNote(paidBudgetPausedText)
 		pausedMsg := payload.TgPlSendMessage{
 			ChatId:              origChat.Id,
-			Text:                paidBudgetPausedText,
+			Text:                pausedText,
 			ReplyToMessageId:    origMessage.MessageId,
 			DisableNotification: true,
 		}
