@@ -84,7 +84,6 @@ var (
 	platform9GAGEnabledSetting       = manageBool(settings.KeyPlatform9GAGEnabled, "ENABLE_9GAG", true)
 	platformThreadsEnabledSetting    = manageBool(settings.KeyPlatformThreadsEnabled, "ENABLE_THREADS", true)
 	instagramFixedLinkServiceSetting = manage(settings.KeyInstagramFixedLinkService, getInstagramServiceFromEnv)
-	proxyEnabledSetting              = manage(settings.KeyProxyEnabled, isProxyEnabledFromEnv)
 	serviceKKInstagramHostSetting    = manage(settings.KeyServiceKKInstagramHost, getKKInstagramHostFromEnv)
 	serviceKKTikTokHostSetting       = manage(settings.KeyServiceKKTikTokHost, getKKTikTokHostFromEnv)
 	serviceVxredditHostSetting       = manage(settings.KeyServiceVxredditHost, getVxredditHostFromEnv)
@@ -100,18 +99,6 @@ var (
 	starsEnabledSetting              = manage(settings.KeyStarsEnabled, isStarsSupportEnabledFromEnv)
 	defaultDailyMediaLimitSetting    = manage(settings.KeyDefaultDailyMediaLimit, getDefaultDailyMediaLimitFromEnv)
 )
-
-// proxyPlatformSettings are the platforms' proxy switches, by key (YouTube
-// off by default, the others on); IsProxyEnabledForPlatform reads them by
-// key through boolSettingValue.
-var proxyPlatformSettings = map[string]managedSetting[bool]{
-	settings.KeyProxyYouTubeEnabled:  manageBool(settings.KeyProxyYouTubeEnabled, "ENABLE_YOUTUBE_PROXY", false),
-	settings.KeyProxyTwitterEnabled:  manageBool(settings.KeyProxyTwitterEnabled, "ENABLE_TWITTER_PROXY", true),
-	settings.KeyProxyTikTokEnabled:   manageBool(settings.KeyProxyTikTokEnabled, "ENABLE_TIKTOK_PROXY", true),
-	settings.KeyProxy9GAGEnabled:     manageBool(settings.KeyProxy9GAGEnabled, "ENABLE_9GAG_PROXY", true),
-	settings.KeyProxyFacebookEnabled: manageBool(settings.KeyProxyFacebookEnabled, "ENABLE_FACEBOOK_PROXY", true),
-	settings.KeyProxyRedditEnabled:   manageBool(settings.KeyProxyRedditEnabled, "ENABLE_REDDIT_PROXY", true),
-}
 
 // boolSettingValue returns a managed on/off setting by key, on the getters'
 // path (owner-set value, else its .env reader); false for an unknown key.

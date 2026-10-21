@@ -27,7 +27,6 @@ const (
 	serviceKindFree  = "free"
 	serviceKindPaid  = "paid"
 	serviceKindRelay = "relay"
-	serviceKindProxy = "proxy"
 )
 
 // Row and signal states.
@@ -46,7 +45,6 @@ const (
 	serviceOffPlatform      = "platform_off"
 	serviceOffNotConfigured = "not_configured"
 	serviceOffNotListed     = "not_listed"
-	serviceOffProxies       = "proxies_off"
 	serviceOffSpecial       = "special_off"
 	serviceOffRelayDisabled = "relay_disabled"
 	serviceOffBudgetPaused  = "budget_paused"
@@ -60,7 +58,6 @@ var serviceOffReasonOrder = []string{
 	serviceOffPlatform,
 	serviceOffNotConfigured,
 	serviceOffNotListed,
-	serviceOffProxies,
 	serviceOffSpecial,
 	serviceOffRelayDisabled,
 	serviceOffBudgetPaused,
@@ -283,16 +280,6 @@ var serviceCatalog = []serviceCatalogEntry{
 		offRules:   []string{serviceOffPlatform},
 	},
 	{
-		Key:        redditProxyServiceName,
-		Label:      "Reddit API via proxies",
-		Kind:       serviceKindProxy,
-		Role:       "Reddit JSON through the proxy pool after vxreddit",
-		Platforms:  []string{settings.PlatformReddit},
-		IsFallback: true,
-		TrafficKey: redditProxyServiceName,
-		offRules:   []string{serviceOffPlatform, serviceOffProxies},
-	},
-	{
 		Key:        facebedServiceName,
 		Label:      "facebed",
 		Kind:       serviceKindFree,
@@ -332,15 +319,6 @@ var serviceCatalog = []serviceCatalogEntry{
 		TrafficKey: vxthreadsServiceName,
 		offRules:   []string{serviceOffPlatform},
 	},
-	{
-		Key:       proxyPoolServiceName,
-		Label:     "Proxy pool",
-		Kind:      serviceKindProxy,
-		Role:      "yt-dlp retries and the Reddit API through YTDLP_PROXIES",
-		Platforms: []string{settings.PlatformInstagram, settings.PlatformTikTok, settings.PlatformTwitter, settings.PlatformReddit, settings.PlatformFacebook, settings.Platform9GAG},
-		ProbeKey:  proxyPoolServiceName,
-		offRules:  []string{serviceOffProxies},
-	},
 }
 
 // serviceOffInputs holds the values read once per build for the off checks.
@@ -354,7 +332,6 @@ var serviceOffChecks = map[string]func(entry serviceCatalogEntry, inputs service
 	serviceOffPlatform:      isServicePlatformOff,
 	serviceOffNotConfigured: isServiceNotConfigured,
 	serviceOffNotListed:     isServiceNotListed,
-	serviceOffProxies:       areServiceProxiesOff,
 	serviceOffSpecial:       areServiceSpecialDownloadsOff,
 	serviceOffRelayDisabled: isServiceRelayDisabled,
 	serviceOffBudgetPaused:  isServiceBudgetPaused,
@@ -591,15 +568,6 @@ func isServiceNotConfigured(entry serviceCatalogEntry, inputs serviceOffInputs) 
 // isServiceNotListed reports a provider missing from INSTAGRAM_PAID_PROVIDERS.
 func isServiceNotListed(entry serviceCatalogEntry, inputs serviceOffInputs) bool {
 	result := (slices.Contains(inputs.paidProviderOrder, entry.provider) == false)
-
-	return result
-}
-
-// areServiceProxiesOff reports proxies switched off or none configured.
-func areServiceProxiesOff(entry serviceCatalogEntry, inputs serviceOffInputs) bool {
-	isEnabled := config.IsProxyEnabled()
-	proxies := config.GetYtDlpProxies()
-	result := (isEnabled == false) || (len(proxies) == 0)
 
 	return result
 }

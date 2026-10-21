@@ -111,6 +111,25 @@ var (
 	// errVxredditUnresolvedMedia marks a post with only a thumbnail and no
 	// body or link: media vxreddit did not resolve, left to the other methods.
 	errVxredditUnresolvedMedia = errors.New("vxreddit shows only a thumbnail of this post")
+
+	// redditMarkdownReplacer undoes Reddit's markdown escape backslashes.
+	redditMarkdownReplacer = strings.NewReplacer(
+		`\-`, `-`,
+		`\[`, `[`,
+		`\]`, `]`,
+		`\~`, `~`,
+		`\(`, `(`,
+		`\)`, `)`,
+		`\#`, `#`,
+		`\.`, `.`,
+		`\!`, `!`,
+		`\*`, `*`,
+		`\_`, `_`,
+		`\>`, `>`,
+	)
+
+	// redditHeadingPattern matches heading markers (# to ######) at line starts.
+	redditHeadingPattern = regexp.MustCompile(`(?m)^#{1,6}\s+`)
 )
 
 // RedditVxredditExtractor downloads Reddit posts via the vxreddit.com frontend.
@@ -762,6 +781,17 @@ func isVxredditPreviewImage(imageURL string) bool {
 	}
 
 	result := strings.EqualFold(host, vxredditPreviewHost)
+
+	return result
+}
+
+// cleanRedditMarkdown removes Reddit's bold markers, escapes and heading
+// markers from text.
+func cleanRedditMarkdown(text string) string {
+	withoutBold := strings.ReplaceAll(text, "**", "")
+	unescaped := redditMarkdownReplacer.Replace(withoutBold)
+	withoutHeadings := redditHeadingPattern.ReplaceAllString(unescaped, "")
+	result := strings.TrimSpace(withoutHeadings)
 
 	return result
 }

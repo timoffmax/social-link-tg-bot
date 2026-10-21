@@ -251,7 +251,7 @@ func TestReportServiceSuccessRecoveryNotice(t *testing.T) {
 	}{
 		{"never failed", 0, []string{}, 0},
 		{"failed below the threshold", threshold - 1, []string{}, 0},
-		{"failed past the threshold", threshold, []string{"outage:proxy-pool"}, 1},
+		{"failed past the threshold", threshold, []string{"outage:kktiktok-probe"}, 1},
 	}
 
 	for _, c := range cases {
@@ -259,13 +259,13 @@ func TestReportServiceSuccessRecoveryNotice(t *testing.T) {
 			recorder := newAlertRecorder(t)
 
 			for i := 0; i < c.failures; i++ {
-				ReportServiceFailureWithThreshold("proxy-pool", "all proxies answered 407", threshold)
+				ReportServiceFailureWithThreshold("kktiktok-probe", "probe: HTTP 503", threshold)
 			}
 
 			// Called twice on purpose: recovery is reported once per outage, so
 			// the second success must be silent.
-			ReportServiceSuccess("proxy-pool")
-			ReportServiceSuccess("proxy-pool")
+			ReportServiceSuccess("kktiktok-probe")
+			ReportServiceSuccess("kktiktok-probe")
 
 			resets := recorder.recordedResets()
 
@@ -279,19 +279,19 @@ func TestReportServiceSuccessRecoveryNotice(t *testing.T) {
 				}
 			}
 
-			recoveries := recorder.alertsWithKey("recovery:proxy-pool")
+			recoveries := recorder.alertsWithKey("recovery:kktiktok-probe")
 
 			if len(recoveries) != c.wantRecoveries {
 				t.Fatalf("got %d recovery notices, want %d: %+v", len(recoveries), c.wantRecoveries, recoveries)
 			}
 
 			if len(recoveries) > 0 {
-				if strings.Contains(recoveries[0].text, "proxy-pool") == false {
+				if strings.Contains(recoveries[0].text, "kktiktok-probe") == false {
 					t.Errorf("recovery text %q is missing the service name", recoveries[0].text)
 				}
 			}
 
-			if got := recordedFailureCount("proxy-pool"); got != 0 {
+			if got := recordedFailureCount("kktiktok-probe"); got != 0 {
 				t.Errorf("failure count after success = %d, want 0", got)
 			}
 		})
@@ -619,10 +619,8 @@ func TestAlertKeepsTheRawDetailWithACode(t *testing.T) {
 
 func TestClassifyServiceDetail(t *testing.T) {
 	cases := map[string]string{
-		"probe HTTP 530": ServiceErrorHTTP5xx,
-		"all 3 configured proxies are failing (last error: Get \"https://api.telegram.org/\": Proxy Authentication Required). Reddit extraction is DOWN": ServiceErrorHTTP4xx,
-		"proxyconnect tcp: 407 Proxy Authentication Required": ServiceErrorHTTP4xx,
-		"context deadline exceeded":                           ServiceErrorTimeout,
+		"probe HTTP 530":            ServiceErrorHTTP5xx,
+		"context deadline exceeded": ServiceErrorTimeout,
 		"probe request failed: net/http: request canceled (Client.Timeout exceeded while awaiting headers)": ServiceErrorTimeout,
 		"dial tcp: connection refused":                            ServiceErrorTransport,
 		"failed to parse fxtwitter JSON: unexpected end":          ServiceErrorParse,

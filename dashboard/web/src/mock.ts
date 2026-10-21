@@ -11,7 +11,7 @@
 // blocked the bot, so it fails.
 // Settings changes are applied by a pretend bot about 3 seconds after they are
 // queued; the first change of the bot-wide special-downloads cap is rejected as
-// "changed meanwhile, reload", and the Reddit proxy has a change queued from
+// "changed meanwhile, reload", and the Reddit switch has a change queued from
 // another tab at load, so changing it answers 409 until that one is applied.
 // Changes that need the owner's approval wait for it about 10 seconds and are
 // then approved, except a lower HikerAPI price, which the owner rejects, and a
@@ -290,14 +290,11 @@ const SERVICE_FIXTURES: ServiceFixture[] = [
   { key: 'youtube-post', label: 'Community posts', kind: 'free', platforms: ['youtube'], role: 'YouTube community posts (page data)', state: 'unknown' },
   // Fresh check OK with an aged-out traffic failure: the row is OK.
   { key: 'vxreddit', label: 'vxreddit', kind: 'free', host: 'vxreddit.com', platforms: ['reddit'], role: 'Videos, galleries, GIFs, text and link posts (first step)', has_probe: true, state: 'ok', traffic: { ok: 40, failed: 30, failures: 1, code: 'transport' }, probe: { ok: 0.3 } },
-  { key: 'reddit-proxy', label: 'Reddit API via proxies', kind: 'proxy', platforms: ['reddit'], role: 'Reddit JSON through the proxy pool after vxreddit', fallback: true, state: 'off', off_reason: 'proxies_off' },
   // Check failing, traffic OK; the probe was never OK.
   { key: 'facebed', label: 'facebed', kind: 'free', host: 'facebed.com', platforms: ['facebook'], role: 'Photos and text posts; video after yt-dlp', has_probe: true, state: 'degraded', traffic: { ok: 1 }, probe: { failed: 0.2, failures: 1, code: 'http_429' } },
   { key: '9gag-api', label: '9GAG API helper', kind: 'free', platforms: ['9gag'], role: 'Photos and articles after yt-dlp', fallback: true, state: 'off', off_reason: 'platform_off', traffic: { ok: 50, failed: 49, failures: 1, code: 'http_4xx' } },
   { key: 'threads-embed', label: 'Threads embed', kind: 'free', platforms: ['threads'], role: 'Posts from Meta’s embed page (first step)', state: 'ok', traffic: { ok: 2, failed: 9, failures: 0, code: 'parse' } },
   { key: 'vxthreads', label: 'vxthreads', kind: 'free', platforms: ['threads'], role: 'Posts from the mirror after the embed fails', fallback: true, state: 'idle' },
-  // A probe-only row, down at its own threshold of 1.
-  { key: 'proxy-pool', label: 'Proxy pool', kind: 'proxy', platforms: ['instagram', 'tiktok', 'twitter', 'reddit', 'facebook', '9gag'], role: 'yt-dlp retries and the Reddit API through YTDLP_PROXIES', has_traffic: false, has_probe: true, state: 'down', probe: { failed: 0.4, since: 1.4, failures: 2, threshold: 1, code: 'http_4xx' } },
 ];
 
 function servicesComponent(mode: Mode): PublishedComponent<ServicesStatus> | null {
@@ -961,23 +958,10 @@ function platformEntry(id: string, label: string, envVar: string, impact: string
   return { key: `platform.${id}.enabled`, group: 'platforms', type: 'bool', env_var: envVar, default: true, approval: 'never', label, impact };
 }
 
-function proxyEntry(id: string, label: string, envVar: string, defaultValue: boolean): RegistryEntry {
-  return {
-    key: `proxy.${id}.enabled`,
-    group: 'proxies_services',
-    type: 'bool',
-    env_var: envVar,
-    default: defaultValue,
-    approval: 'never',
-    label,
-    impact: 'Off: this platform never uses the proxy pool. Has an effect only while Proxies is on.',
-  };
-}
-
 function hostEntry(id: string, envVar: string, host: string, label: string): RegistryEntry {
   return {
     key: `service.${id}.host`,
-    group: 'proxies_services',
+    group: 'services',
     type: 'host',
     env_var: envVar,
     default: host,
@@ -1008,22 +992,6 @@ const REGISTRY: RegistryEntry[] = [
     label: 'Instagram fixed-link service',
     impact: 'The domain of the Instagram link the bot sends when it can not download a post.',
   },
-  {
-    key: 'proxy.enabled',
-    group: 'proxies_services',
-    type: 'bool',
-    env_var: 'ENABLE_PROXIES',
-    default: true,
-    approval: 'never',
-    label: 'Proxies',
-    impact: 'Off: no platform uses the proxy pool (the pool itself stays in .env).',
-  },
-  proxyEntry('youtube', 'YouTube proxy', 'ENABLE_YOUTUBE_PROXY', false),
-  proxyEntry('twitter', 'Twitter/X proxy', 'ENABLE_TWITTER_PROXY', true),
-  proxyEntry('tiktok', 'TikTok proxy', 'ENABLE_TIKTOK_PROXY', true),
-  proxyEntry('facebook', 'Facebook proxy', 'ENABLE_FACEBOOK_PROXY', true),
-  proxyEntry('reddit', 'Reddit proxy', 'ENABLE_REDDIT_PROXY', true),
-  proxyEntry('9gag', '9GAG proxy', 'ENABLE_9GAG_PROXY', true),
   hostEntry('kkinstagram', 'KKINSTAGRAM_HOST', 'kkinstagram.com', 'kkinstagram host'),
   hostEntry('kktiktok', 'KKTIKTOK_HOST', 'kktiktok.com', 'kktiktok host'),
   hostEntry('vxreddit', 'VXREDDIT_HOST', 'vxreddit.com', 'vxreddit host'),
@@ -1155,7 +1123,7 @@ const REGISTRY: RegistryEntry[] = [
   },
 ];
 
-const SETTINGS_GROUPS = ['platforms', 'proxies_services', 'paid', 'restricted_posts', 'stars', 'limits'];
+const SETTINGS_GROUPS = ['platforms', 'services', 'paid', 'restricted_posts', 'stars', 'limits'];
 
 // The .env values of the production inventory; the rest fall back to the default.
 const ENV_VALUES: Record<string, SettingValue> = {
@@ -1166,7 +1134,6 @@ const ENV_VALUES: Record<string, SettingValue> = {
   'platform.reddit.enabled': true,
   'platform.facebook.enabled': true,
   'platform.9gag.enabled': true,
-  'proxy.enabled': false,
   'paid.apify.monthly_budget_usd': 4.8,
   'stars.enabled': true,
 };
@@ -1254,8 +1221,8 @@ function seedSettings(): SettingsStore {
   store.stored.set('limits.default_daily_media', { value: 30, updated_at: limitAt, updated_by: 'manual' });
   addAudit(store, 'platform.9gag.enabled', null, false, 'dashboard', ninegagAt, 38);
   store.stored.set('platform.9gag.enabled', { value: false, updated_at: ninegagAt, updated_by: 'dashboard' });
-  // A change queued from another tab: changing the Reddit proxy answers 409 until it is applied.
-  newRequest(store, { key: 'proxy.reddit.enabled', value: false, expected: true }, Date.now(), OTHER_TAB_DELAY_MS);
+  // A change queued from another tab: changing the Reddit switch answers 409 until it is applied.
+  newRequest(store, { key: 'platform.reddit.enabled', value: false, expected: true }, Date.now(), OTHER_TAB_DELAY_MS);
 
   return store;
 }
@@ -1467,7 +1434,6 @@ function listSettings(): SettingsResponse {
       admin_user_id: (mode !== 'noadmin'),
       apify_token: true,
       hiker_token: false,
-      proxies: 0,
       relay_url: true,
       relay_token_file: true,
     },

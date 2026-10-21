@@ -50,14 +50,6 @@ docker stop gated-fetch-test-pg
 
 ## Anti-Blocking Configuration
 
-### Proxies (optional fallback)
-
-```bash
-# Comma-separated list; used as a fallback for non-YouTube platforms
-YTDLP_PROXIES="socks5://host:port,http://host:port"
-ENABLE_PROXIES="true"   # global kill switch
-```
-
 ### Built-in measures
 
 - Platform-specific mobile user agents, request delays, and retry logic

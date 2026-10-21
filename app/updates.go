@@ -474,8 +474,8 @@ func processMediaDownload(url string, origChat *response.TgChat, origMessage *re
 			}
 
 			// Reddit: fall back to a vxreddit fixed link instead of full
-			// silence, so the chat still gets a working preview when the
-			// extraction infrastructure (proxies) is down.
+			// silence, so the chat still gets a working preview when vxreddit
+			// and yt-dlp both fail.
 			if strings.Contains(url, "reddit.com") {
 				fixedUrl := getFixedUrl(url)
 

@@ -112,7 +112,6 @@ describe('serviceBadge', () => {
       platform_off: 'Off: platform switched off',
       not_configured: 'Off: not configured',
       not_listed: 'Off: not in the provider order',
-      proxies_off: 'Off: proxies off',
       special_off: 'Off: special downloads off',
       relay_disabled: 'Off: disabled on the relay',
       budget_paused: 'Paused: budget',

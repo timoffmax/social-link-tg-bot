@@ -20,16 +20,6 @@ import (
 	"github.com/timoffmax/social-link-bot/config"
 )
 
-// maskProxyCredentials masks sensitive parts of proxy URL for logging
-func maskProxyCredentials(proxyURL string) string {
-	if atIndex := strings.Index(proxyURL, "@"); atIndex >= 0 {
-		if protocolEnd := strings.Index(proxyURL, "://"); protocolEnd >= 0 {
-			return proxyURL[:protocolEnd+3] + "***:***@" + proxyURL[atIndex+1:]
-		}
-	}
-	return proxyURL
-}
-
 type YtDlpDownloader struct {
 	TempDir    string
 	BinaryPath string
@@ -187,6 +177,16 @@ func (yd *YtDlpDownloader) downloadOutputTemplate(prefix string) string {
 	return result
 }
 
+// youTubeConnectionErrorFragments mark a yt-dlp output as a YouTube connection error.
+var youTubeConnectionErrorFragments = []string{"Connection reset", "Connection refused", "timed out"}
+
+// isYouTubeConnectionError reports whether yt-dlp's output shows a connection error.
+func isYouTubeConnectionError(output string) bool {
+	result := containsAnyFragment(output, youTubeConnectionErrorFragments)
+
+	return result
+}
+
 // ytDlpTwitterHostPattern matches twitter.com / x.com hosts (not any URL that
 // merely contains "x.com", such as netflix.com).
 var ytDlpTwitterHostPattern = regexp.MustCompile(`^https?://([a-z0-9-]+\.)*(twitter|x)\.com(/|$)`)
@@ -194,28 +194,6 @@ var ytDlpTwitterHostPattern = regexp.MustCompile(`^https?://([a-z0-9-]+\.)*(twit
 // IsTwitterURL reports whether a URL is on a twitter.com or x.com host.
 func IsTwitterURL(url string) bool {
 	result := ytDlpTwitterHostPattern.MatchString(url)
-
-	return result
-}
-
-// ytDlpPlatform names the platform of a URL for the per-platform proxy settings ("" when unknown).
-func ytDlpPlatform(url string) string {
-	result := ""
-
-	switch {
-	case ytDlpTwitterHostPattern.MatchString(url):
-		result = "twitter"
-	case strings.Contains(url, "tiktok.com"):
-		result = "tiktok"
-	case (strings.Contains(url, "youtube.com") || strings.Contains(url, "youtu.be")):
-		result = "youtube"
-	case (strings.Contains(url, "facebook.com") || strings.Contains(url, "fb.com")):
-		result = "facebook"
-	case strings.Contains(url, "reddit.com"):
-		result = "reddit"
-	case strings.Contains(url, "9gag.com"):
-		result = "9gag"
-	}
 
 	return result
 }
@@ -240,76 +218,26 @@ func (yd *YtDlpDownloader) DownloadMedia(url string) ([]*MediaInfo, error) {
 
 	log.Printf("Using output template: %s", outputTemplate)
 
-	// Get list of proxies to try based on platform
-	var proxies []string
+	result, err := yd.attemptDownload(url, outputTemplate)
+	isDownloaded := (err == nil)
 
-	platform := ytDlpPlatform(url)
-
-	// Check if proxies are enabled for this platform
-	useProxies := platform != "" && config.IsProxyEnabledForPlatform(platform)
-
-	if useProxies {
-		proxies = config.GetYtDlpProxies()
-		log.Printf("🔄 Proxies enabled for %s", platform)
-	} else {
-		proxies = []string{}
-		if platform != "" {
-			log.Printf("🚫 Proxies disabled for %s", platform)
-		}
+	if isDownloaded == true {
+		log.Printf("✅ Download successful")
 	}
 
-	// One fixed order for every platform: direct connection first, then the proxies (if enabled)
-	proxies = append([]string{""}, proxies...)
-
-	var lastErr error
-	isYouTube := (platform == "youtube")
-
-	for i, proxy := range proxies {
-		// Proxy URLs may carry credentials: only the masked form is logged.
-		connection := "direct"
-
-		if proxy != "" {
-			connection = maskProxyCredentials(proxy)
-		}
-
-		if proxy == "" {
-			if isYouTube {
-				log.Printf("YouTube: Using direct connection (no proxy)")
-			} else {
-				log.Printf("Attempt %d/%d: Trying without proxy", i+1, len(proxies))
-			}
-		} else {
-			log.Printf("Attempt %d/%d: Trying with proxy %s", i+1, len(proxies), connection)
-		}
-
-		// Try download with current proxy
-		result, err := yd.attemptDownload(url, outputTemplate, proxy)
-		if err == nil {
-			if isYouTube {
-				log.Printf("✅ YouTube download successful")
-			} else {
-				log.Printf("✅ Download successful (%s)", connection)
-			}
-			return result, nil
-		}
-
-		lastErr = err
-		if isYouTube {
-			log.Printf("YouTube download failed: %v", err)
-		} else {
-			log.Printf("Download failed (%s): %v", connection, err)
-		}
+	if isDownloaded == false {
+		log.Printf("Download failed: %v", err)
+		err = fmt.Errorf("yt-dlp download failed: %w", err)
 	}
 
-	// Return the last error from yt-dlp attempts
-	return nil, fmt.Errorf("all yt-dlp download attempts failed: %v", lastErr)
+	return result, err
 }
 
-// attemptDownload tries to download with a specific proxy (or empty string
-// for no proxy). Whatever yt-dlp wrote under this download's name and isn't
-// returned for sending (.info.json, .description, skipped thumbnails and
-// audio, files of a failed attempt) is removed when it returns.
-func (yd *YtDlpDownloader) attemptDownload(url string, outputTemplate string, proxy string) (result []*MediaInfo, err error) {
+// attemptDownload runs one yt-dlp download. Whatever yt-dlp wrote under this
+// download's name and isn't returned for sending (.info.json, .description,
+// skipped thumbnails and audio, files of a failed attempt) is removed when it
+// returns.
+func (yd *YtDlpDownloader) attemptDownload(url string, outputTemplate string) (result []*MediaInfo, err error) {
 	defer func() {
 		yd.removeLeftoverFiles(outputTemplate, result)
 	}()
@@ -317,8 +245,7 @@ func (yd *YtDlpDownloader) attemptDownload(url string, outputTemplate string, pr
 	// This download's file name prefix, from the output template
 	prefix := ytdlpDownloadPrefix(outputTemplate)
 
-	// Build arguments with specific proxy
-	args := yd.buildDownloadArgsWithProxy(url, outputTemplate, proxy)
+	args := yd.buildDownloadArgs(url, outputTemplate)
 
 	// Use a 60-second per-attempt timeout so individual yt-dlp calls don't hang
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
@@ -330,13 +257,8 @@ func (yd *YtDlpDownloader) attemptDownload(url string, outputTemplate string, pr
 	safeArgs := make([]string, len(args))
 	copy(safeArgs, args)
 	for i := range safeArgs {
-		if i > 0 && (args[i-1] == "--password" || args[i-1] == "--username" || args[i-1] == "--proxy") {
-			if args[i-1] == "--proxy" && strings.Contains(args[i], "@") {
-				// Mask proxy credentials
-				safeArgs[i] = maskProxyCredentials(args[i])
-			} else {
-				safeArgs[i] = "***"
-			}
+		if (i > 0) && ((args[i-1] == "--password") || (args[i-1] == "--username")) {
+			safeArgs[i] = "***"
 		}
 	}
 	log.Printf("Executing command: %s %v", yd.BinaryPath, safeArgs)
@@ -349,7 +271,7 @@ func (yd *YtDlpDownloader) attemptDownload(url string, outputTemplate string, pr
 	// yt-dlp can return error codes for non-critical failures like missing ffmpeg
 	downloadSuccess := false
 	if err != nil {
-		// Check for YouTube-specific errors that indicate proxy issues
+		// Check for YouTube-specific errors
 		isYouTube := strings.Contains(url, "youtube.com") || strings.Contains(url, "youtu.be")
 		if isYouTube {
 			// Bot detection errors
@@ -358,17 +280,14 @@ func (yd *YtDlpDownloader) attemptDownload(url string, outputTemplate string, pr
 				strings.Contains(outputStr, "CAPTCHA") ||
 				strings.Contains(outputStr, "429") || // Too Many Requests
 				strings.Contains(outputStr, "403") { // Forbidden
-				log.Printf("🤖 YouTube bot detection or rate limit with proxy: %s", proxy)
+				log.Printf("🤖 YouTube bot detection or rate limit")
 				return nil, fmt.Errorf("YouTube bot detection or rate limit")
 			}
 
-			// Connection errors that might be proxy-related
-			if strings.Contains(outputStr, "Connection reset") ||
-				strings.Contains(outputStr, "Connection refused") ||
-				strings.Contains(outputStr, "timed out") ||
-				strings.Contains(outputStr, "ProxyError") {
-				log.Printf("🔌 Connection error with proxy: %s", proxy)
-				return nil, fmt.Errorf("proxy connection error")
+			// Connection errors
+			if isYouTubeConnectionError(outputStr) {
+				log.Printf("🔌 YouTube connection error")
+				return nil, fmt.Errorf("YouTube connection error")
 			}
 		}
 
@@ -850,7 +769,7 @@ func (yd *YtDlpDownloader) Download9GAGMedia(ctx context.Context, url string) ([
 	prefix := newDownloadPrefix(url)
 	outputTemplate := yd.downloadOutputTemplate(prefix)
 
-	result, err := yd.attemptDownload(url, outputTemplate, "")
+	result, err := yd.attemptDownload(url, outputTemplate)
 	if err == nil {
 		log.Printf("✅ 9GAG video downloaded via yt-dlp")
 		return result, nil
@@ -1449,28 +1368,6 @@ func (yd *YtDlpDownloader) findDownloadedFiles(prefix string) ([]string, error) 
 	return files, err
 }
 
-// buildDownloadArgsWithProxy builds download args with a specific proxy
-func (yd *YtDlpDownloader) buildDownloadArgsWithProxy(url string, outputTemplate string, proxy string) []string {
-	args := yd.buildDownloadArgs(url, outputTemplate)
-
-	// Remove any existing proxy from args (it's added at the end by buildDownloadArgs)
-	var cleanArgs []string
-	for i := 0; i < len(args); i++ {
-		if args[i] == "--proxy" {
-			i++ // Skip the proxy value
-			continue
-		}
-		cleanArgs = append(cleanArgs, args[i])
-	}
-
-	// Add specific proxy if provided
-	if proxy != "" {
-		cleanArgs = append(cleanArgs, "--proxy", proxy)
-	}
-
-	return cleanArgs
-}
-
 // buildDownloadArgs creates platform-specific arguments for yt-dlp
 func (yd *YtDlpDownloader) buildDownloadArgs(url string, outputTemplate string) []string {
 	// Create cache directory in working directory to avoid permission issues
@@ -1498,7 +1395,7 @@ func (yd *YtDlpDownloader) buildDownloadArgs(url string, outputTemplate string) 
 
 	// Platform-specific optimizations
 	if strings.Contains(url, "tiktok.com") {
-		// TikTok-specific args with enhanced anti-blocking and no proxy for better compatibility
+		// TikTok-specific args with enhanced anti-blocking
 		tiktokArgs := []string{
 			"--user-agent", "Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.0 Mobile/15E148 Safari/604.1",
 			"--referer", "https://www.tiktok.com/",
@@ -1620,8 +1517,6 @@ func (yd *YtDlpDownloader) buildDownloadArgs(url string, outputTemplate string) 
 
 		baseArgs = append(baseArgs, facebookArgs...)
 	}
-
-	// Don't add proxy here, it's handled by buildDownloadArgsWithProxy
 
 	baseArgs = append(baseArgs, url)
 	return baseArgs

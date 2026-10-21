@@ -30,19 +30,10 @@ func threadsExtractionStrategy() *ExtractionStrategy {
 	return result
 }
 
-// redditExtractionStrategy is vxreddit, the JSON API when proxies are on and
-// configured (Reddit blocks its .json without them), then yt-dlp. Disabled
-// Reddit gets no methods.
+// redditExtractionStrategy is vxreddit, then yt-dlp. Disabled Reddit gets no
+// methods.
 func redditExtractionStrategy() *ExtractionStrategy {
-	methods := []ExtractionMethod{MethodRedditVxreddit}
-	proxies := config.GetYtDlpProxies()
-	hasProxies := (config.IsProxyEnabled() == true) && (len(proxies) > 0)
-
-	if hasProxies == true {
-		methods = append(methods, MethodRedditAPI)
-	}
-
-	methods = append(methods, MethodYtDlp)
+	methods := []ExtractionMethod{MethodRedditVxreddit, MethodYtDlp}
 
 	if config.IsRedditEnabled() == false {
 		methods = []ExtractionMethod{}
@@ -101,7 +92,6 @@ const (
 	MethodYtDlp ExtractionMethod = iota
 	MethodBrowser
 	MethodFixedLink
-	MethodRedditAPI
 	MethodRedditVxreddit
 	MethodKKInstagram
 	MethodInstagramOG
@@ -254,9 +244,7 @@ func getPlatformExtractionStrategy(url string) *ExtractionStrategy {
 	}
 
 	// Reddit: vxreddit (works from the datacenter IP, resolves /s/ share links,
-	// reads every post shape), then the JSON API only with proxies (Reddit
-	// answers .json with "blocked by network security" even after its JS
-	// challenge is solved), then yt-dlp.
+	// reads every post shape), then yt-dlp.
 	if strings.Contains(url, "reddit.com") {
 		return redditExtractionStrategy()
 	}
@@ -338,8 +326,6 @@ func (es *ExtractionStrategy) LogStrategy() {
 			methodNames[i] = "browser"
 		case MethodFixedLink:
 			methodNames[i] = "fixed-link"
-		case MethodRedditAPI:
-			methodNames[i] = "reddit-api"
 		case MethodRedditVxreddit:
 			methodNames[i] = "vxreddit"
 		case MethodKKInstagram:

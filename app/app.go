@@ -132,12 +132,11 @@ func startCleanupTask() {
 	log.Println("Started cleanup task")
 }
 
-// startHealthMonitor periodically probes external dependencies (kk redirector
-// services, proxy pool) so silent degradation is surfaced in logs and via
+// startHealthMonitor periodically probes external dependencies (free mirror
+// services, the home relay) so silent degradation is surfaced in logs and via
 // admin alerts instead of going unnoticed until users complain.
 func startHealthMonitor() {
 	go func() {
-		services.CheckProxyHealth()
 		services.CheckRedirectorHealth()
 
 		ticker := time.NewTicker(1 * time.Hour)
@@ -146,7 +145,6 @@ func startHealthMonitor() {
 		for {
 			select {
 			case <-ticker.C:
-				services.CheckProxyHealth()
 				services.CheckRedirectorHealth()
 			}
 		}

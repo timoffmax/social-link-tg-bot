@@ -31,7 +31,7 @@ func assertGettersUseFallbacks(t *testing.T) {
 
 func TestLoadWithEmptyTablesChangesNoGetter(t *testing.T) {
 	clearSettingsEnv(t)
-	t.Setenv("ENABLE_PROXIES", "false")
+	t.Setenv("ENABLE_9GAG", "false")
 	t.Setenv("STARS_SUPPORT_ENABLED", "true")
 	t.Setenv("APIFY_MONTHLY_BUDGET_USD", "4.8")
 	harness := newHarness(t, newFakeStore())
@@ -43,7 +43,7 @@ func TestLoadWithEmptyTablesChangesNoGetter(t *testing.T) {
 
 	assertGettersUseFallbacks(t)
 
-	if (config.IsProxyEnabled() == true) || (config.IsStarsSupportEnabled() == false) || (config.GetApifyMonthlyBudgetUsd() != 4.8) {
+	if (config.Is9GAGEnabled() == true) || (config.IsStarsSupportEnabled() == false) || (config.GetApifyMonthlyBudgetUsd() != 4.8) {
 		t.Fatalf("the .env values must apply")
 	}
 
@@ -56,7 +56,7 @@ func TestLoadWithEmptyTablesChangesNoGetter(t *testing.T) {
 	published := map[string]config.EffectiveSetting{}
 	_ = json.Unmarshal(harness.store.status(ComponentSettings), &published)
 
-	if (published[settings.KeyProxyEnabled].Source != settings.SourceEnv) || (published[settings.KeyPlatformTikTokEnabled].Source != settings.SourceDefault) {
+	if (published[settings.KeyPlatform9GAGEnabled].Source != settings.SourceEnv) || (published[settings.KeyPlatformTikTokEnabled].Source != settings.SourceDefault) {
 		t.Fatalf("unexpected published sources: %+v", published)
 	}
 
@@ -272,15 +272,34 @@ func TestDatabaseDownAtStartUsesTheCacheFile(t *testing.T) {
 	}
 }
 
+func TestStoredRowOfARemovedKeyIsIgnoredWithoutAnAlert(t *testing.T) {
+	clearSettingsEnv(t)
+	store := newFakeStore()
+	store.rows["proxy.enabled"] = json.RawMessage(`false`)
+	store.rows[settings.KeyPlatformTikTokEnabled] = json.RawMessage(`false`)
+	harness := newHarness(t, store)
+	harness.manager.Load(context.Background())
+	harness.manager.Load(context.Background())
+	_, hasRemoved := overrides.Current().Entry("proxy.enabled")
+
+	if (hasRemoved == true) || (overrides.Current().Len() != 1) || (config.IsTikTokEnabled() == true) {
+		t.Fatalf("only the known row may apply: %v", overrides.Current().Entries())
+	}
+
+	if len(*harness.alerts) != 0 {
+		t.Fatalf("a removed key must not alert: %v", *harness.alerts)
+	}
+}
+
 func TestNoDatabaseConfiguredWithoutCacheIsInert(t *testing.T) {
 	clearSettingsEnv(t)
-	t.Setenv("ENABLE_PROXIES", "false")
+	t.Setenv("ENABLE_9GAG", "false")
 	harness := newHarness(t, nil)
 	overrides.Set(nil)
 	harness.manager.Load(context.Background())
 	assertGettersUseFallbacks(t)
 
-	if (overrides.Current() != nil) || (harness.manager.origin != originNone) || (config.IsProxyEnabled() == true) {
+	if (overrides.Current() != nil) || (harness.manager.origin != originNone) || (config.Is9GAGEnabled() == true) {
 		t.Fatalf("without a database no snapshot may be set: %v, origin %s", overrides.Current(), harness.manager.origin)
 	}
 
@@ -344,14 +363,14 @@ func TestDatabaseUnavailableAtStartUsesTheCacheFile(t *testing.T) {
 
 func TestDatabaseUnavailableAtStartWithoutCacheUsesEnvAndAlerts(t *testing.T) {
 	clearSettingsEnv(t)
-	t.Setenv("ENABLE_PROXIES", "false")
+	t.Setenv("ENABLE_9GAG", "false")
 	harness := newHarness(t, nil)
 	harness.manager.databaseErr = errors.New("failed to ping database: connection refused")
 	overrides.Set(nil)
 	harness.manager.Load(context.Background())
 	assertGettersUseFallbacks(t)
 
-	if (config.IsProxyEnabled() == true) || (harness.manager.origin != originNone) {
+	if (config.Is9GAGEnabled() == true) || (harness.manager.origin != originNone) {
 		t.Fatalf("without a cache the .env values must apply, origin %s", harness.manager.origin)
 	}
 

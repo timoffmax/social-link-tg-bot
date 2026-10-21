@@ -85,11 +85,11 @@ export interface PlatformsResponse extends ResponseMeta {
   services: PublishedComponent<ServicesStatus> | null;
 }
 
-export type ServiceKind = 'free' | 'paid' | 'relay' | 'proxy';
+export type ServiceKind = 'free' | 'paid' | 'relay';
 export type ServiceState = 'ok' | 'degraded' | 'down' | 'stale' | 'idle' | 'unknown' | 'off';
 /** `stale` is for traffic only: a probe signal is never stale. */
 export type ServiceSignalState = 'ok' | 'degraded' | 'down' | 'stale';
-export type ServiceOffReason = 'platform_off' | 'not_configured' | 'not_listed' | 'proxies_off' | 'special_off' | 'relay_disabled' | 'budget_paused';
+export type ServiceOffReason = 'platform_off' | 'not_configured' | 'not_listed' | 'special_off' | 'relay_disabled' | 'budget_paused';
 export type ServiceErrorCode = 'timeout' | 'http_4xx' | 'http_5xx' | 'http_429' | 'transport' | 'parse' | 'wrong_content' | 'not_configured' | 'other';
 
 /** One signal of a service (its traffic or its hourly probe). */
@@ -637,7 +637,6 @@ export interface SecretsStatus {
   admin_user_id: boolean;
   apify_token: boolean;
   hiker_token: boolean;
-  proxies: number;
   relay_url: boolean;
   relay_token_file: boolean;
 }

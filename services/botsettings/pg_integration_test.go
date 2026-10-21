@@ -192,7 +192,7 @@ func TestMigration011DownAndUpAgain(t *testing.T) {
 func TestEmptyDatabaseLoadChangesNoGetter(t *testing.T) {
 	fixture := openPGFixture(t)
 	clearSettingsEnv(t)
-	t.Setenv("ENABLE_PROXIES", "false")
+	t.Setenv("ENABLE_9GAG", "false")
 	t.Setenv("STARS_SUPPORT_ENABLED", "true")
 	t.Setenv("APIFY_MONTHLY_BUDGET_USD", "4.8")
 	harness := newHarness(t, NewPGStore(fixture.db))
@@ -363,10 +363,10 @@ func TestDashboardGrantsAllowOnlyQueuingARequest(t *testing.T) {
 		`SELECT * FROM settings_change_requests`,
 	}
 	refused := []string{
-		`INSERT INTO settings_change_requests (key, value, expected, status) VALUES ('proxy.enabled', 'true', 'true', 'applied')`,
-		`INSERT INTO settings_change_requests (key, value, expected, source) VALUES ('proxy.enabled', 'true', 'true', 'telegram')`,
-		`INSERT INTO settings_change_requests (key, value, expected, requested_role) VALUES ('proxy.enabled', 'true', 'true', 'bot')`,
-		`INSERT INTO settings_change_requests (key, value, expected, expires_at) VALUES ('proxy.enabled', 'true', 'true', now() + INTERVAL '1 day')`,
+		`INSERT INTO settings_change_requests (key, value, expected, status) VALUES ('stars.enabled', 'true', 'true', 'applied')`,
+		`INSERT INTO settings_change_requests (key, value, expected, source) VALUES ('stars.enabled', 'true', 'true', 'telegram')`,
+		`INSERT INTO settings_change_requests (key, value, expected, requested_role) VALUES ('stars.enabled', 'true', 'true', 'bot')`,
+		`INSERT INTO settings_change_requests (key, value, expected, expires_at) VALUES ('stars.enabled', 'true', 'true', now() + INTERVAL '1 day')`,
 		`UPDATE settings_change_requests SET status = 'applied'`,
 		`INSERT INTO bot_settings (key, value) VALUES ('stars.enabled', 'true')`,
 		`UPDATE bot_settings SET value = 'true'`,

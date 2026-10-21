@@ -93,7 +93,6 @@ func getterCases() []getterCase {
 		{settings.KeyPlatform9GAGEnabled, "ENABLE_9GAG", boolEnvValues, asAny(Is9GAGEnabled), asAny(headIs9GAGEnabled)},
 		{settings.KeyPlatformThreadsEnabled, "ENABLE_THREADS", boolEnvValues, asAny(IsThreadsEnabled), asAny(headIsThreadsEnabled)},
 		{settings.KeyInstagramFixedLinkService, "INSTAGRAM_SERVICE", serviceEnvValues, asAny(GetInstagramService), asAny(headGetInstagramService)},
-		{settings.KeyProxyEnabled, "ENABLE_PROXIES", boolEnvValues, asAny(IsProxyEnabled), asAny(headIsProxyEnabled)},
 		{settings.KeyServiceKKInstagramHost, "KKINSTAGRAM_HOST", hostEnvValues, asAny(GetKKInstagramHost), asAny(headGetKKInstagramHost)},
 		{settings.KeyServiceKKTikTokHost, "KKTIKTOK_HOST", hostEnvValues, asAny(GetKKTikTokHost), asAny(headGetKKTikTokHost)},
 		{settings.KeyServiceVxredditHost, "VXREDDIT_HOST", hostEnvValues, asAny(GetVxredditHost), asAny(headGetVxredditHost)},
@@ -137,43 +136,6 @@ func TestGettersMatchHeadWithEmptySettingsTables(t *testing.T) {
 	}
 }
 
-// TestProxyForPlatformMatchesHeadWithEmptySettingsTables covers the global
-// switch, every platform switch and platforms without a switch.
-func TestProxyForPlatformMatchesHeadWithEmptySettingsTables(t *testing.T) {
-	platformVars := map[string]string{
-		"youtube":  "ENABLE_YOUTUBE_PROXY",
-		"twitter":  "ENABLE_TWITTER_PROXY",
-		"tiktok":   "ENABLE_TIKTOK_PROXY",
-		"9gag":     "ENABLE_9GAG_PROXY",
-		"facebook": "ENABLE_FACEBOOK_PROXY",
-		"reddit":   "ENABLE_REDDIT_PROXY",
-	}
-	platforms := []string{"youtube", "twitter", "tiktok", "9gag", "facebook", "reddit", "instagram", "threads", "unknown", ""}
-
-	for snapshotName, snapshot := range emptySnapshots() {
-		for _, globalValue := range []string{unsetValue, "true", "false", "garbage"} {
-			for _, platformValue := range []string{unsetValue, "true", "false", "garbage"} {
-				name := fmt.Sprintf("%s/ENABLE_PROXIES=%q/platform=%q", snapshotName, globalValue, platformValue)
-
-				t.Run(name, func(t *testing.T) {
-					useSnapshot(t, snapshot)
-					setEnvCase(t, "ENABLE_PROXIES", globalValue)
-
-					for _, envVar := range platformVars {
-						setEnvCase(t, envVar, platformValue)
-					}
-
-					for _, platform := range platforms {
-						if IsProxyEnabledForPlatform(platform) != headIsProxyEnabledForPlatform(platform) {
-							t.Fatalf("%q: got %v, HEAD returns %v", platform, IsProxyEnabledForPlatform(platform), headIsProxyEnabledForPlatform(platform))
-						}
-					}
-				})
-			}
-		}
-	}
-}
-
 // TestEveryRegistryKeyHasAGetterCase keeps the matrix complete.
 func TestEveryRegistryKeyHasAGetterCase(t *testing.T) {
 	covered := map[string]bool{}
@@ -183,9 +145,7 @@ func TestEveryRegistryKeyHasAGetterCase(t *testing.T) {
 	}
 
 	for _, setting := range settings.All() {
-		_, isProxyPlatform := proxyPlatformSettings[setting.Key]
-
-		if (covered[setting.Key] == false) && (isProxyPlatform == false) {
+		if covered[setting.Key] == false {
 			t.Fatalf("%s has no getter case", setting.Key)
 		}
 
@@ -300,28 +260,6 @@ func TestOwnerSetValueWinsOverEnv(t *testing.T) {
 
 	if (tiktok.Source != settings.SourceDB) || (tiktok.IsEnvSet == false) || (budget.Source != settings.SourceCache) || (reddit.Source != settings.SourceDefault) || (reddit.Value != true) || (fallback != true) {
 		t.Fatalf("unexpected sources: %+v %+v %+v fallback %v", tiktok, budget, reddit, fallback)
-	}
-}
-
-// TestProxyPlatformSwitchFollowsTheOwnerValueOnlyWhileProxiesAreOn.
-func TestProxyPlatformSwitchFollowsTheOwnerValueOnlyWhileProxiesAreOn(t *testing.T) {
-	t.Setenv("ENABLE_PROXIES", "false")
-	t.Setenv("ENABLE_TIKTOK_PROXY", "true")
-	entries := map[string]overrides.Entry{
-		settings.KeyProxyYouTubeEnabled: {Value: true, Source: settings.SourceDB},
-		settings.KeyProxyTikTokEnabled:  {Value: false, Source: settings.SourceDB},
-	}
-	useSnapshot(t, overrides.NewSnapshot(entries, time.Now()))
-
-	if IsProxyEnabledForPlatform("youtube") == true {
-		t.Fatalf("proxies are off in .env")
-	}
-
-	entries[settings.KeyProxyEnabled] = overrides.Entry{Value: true, Source: settings.SourceDB}
-	useSnapshot(t, overrides.NewSnapshot(entries, time.Now()))
-
-	if (IsProxyEnabledForPlatform("youtube") == false) || (IsProxyEnabledForPlatform("tiktok") == true) || (IsProxyEnabledForPlatform("instagram") == false) {
-		t.Fatalf("got youtube %v, tiktok %v, instagram %v", IsProxyEnabledForPlatform("youtube"), IsProxyEnabledForPlatform("tiktok"), IsProxyEnabledForPlatform("instagram"))
 	}
 }
 

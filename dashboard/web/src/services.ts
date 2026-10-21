@@ -5,7 +5,7 @@ import type { Tone } from './components/Bits';
 
 /** A probe runs hourly; one with no result for 2 h is overdue. */
 export const PROBE_OVERDUE_MS = 2 * 3_600_000;
-/** The group of the rows used by several platforms (the proxy pool). */
+/** The group of the rows used by several platforms. */
 export const SHARED_GROUP = 'shared';
 export const SHARED_GROUP_LABEL = 'Shared';
 export const NO_SIGNAL_TEXT = '—';
@@ -21,14 +21,12 @@ export const SERVICE_KIND_LABELS: Record<ServiceKind, string> = {
   free: 'Free mirror',
   paid: 'Paid API',
   relay: 'Home relay',
-  proxy: 'Proxies',
 };
 
 export const OFF_REASON_TEXT: Record<ServiceOffReason, string> = {
   platform_off: 'platform switched off',
   not_configured: 'not configured',
   not_listed: 'not in the provider order',
-  proxies_off: 'proxies off',
   special_off: 'special downloads off',
   relay_disabled: 'disabled on the relay',
   budget_paused: 'budget',

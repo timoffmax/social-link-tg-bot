@@ -42,14 +42,13 @@ func isolateServicesStatus(t *testing.T, now *time.Time) *alertRecorder {
 		servicesRestoredFrom.Store(previousRestored)
 	})
 
-	for _, envVar := range []string{"ENABLE_INSTAGRAM", "ENABLE_TIKTOK", "ENABLE_TWITTER", "ENABLE_YOUTUBE", "ENABLE_REDDIT", "ENABLE_FACEBOOK", "ENABLE_9GAG", "ENABLE_THREADS", "ENABLE_PROXIES"} {
+	for _, envVar := range []string{"ENABLE_INSTAGRAM", "ENABLE_TIKTOK", "ENABLE_TWITTER", "ENABLE_YOUTUBE", "ENABLE_REDDIT", "ENABLE_FACEBOOK", "ENABLE_9GAG", "ENABLE_THREADS"} {
 		t.Setenv(envVar, "true")
 	}
 
 	t.Setenv("APIFY_TOKEN", "apify-token")
 	t.Setenv("HIKERAPI_TOKEN", "hiker-token")
 	t.Setenv("INSTAGRAM_PAID_PROVIDERS", "apify,hiker")
-	t.Setenv("YTDLP_PROXIES", "http://user:pass@127.0.0.1:3128")
 	t.Setenv("RELAY_URL", "http://127.0.0.1:8765")
 	t.Setenv("RELAY_TOKEN_FILE", "/nonexistent/relay.token")
 	t.Setenv("RELAY_PLATFORMS", "youtube,instagram")
@@ -116,7 +115,7 @@ func TestSignalStateRules(t *testing.T) {
 		{"no streak is ok", ServiceHealth{LastFailureAt: pastDay, Threshold: 3}, true, ServiceStateOK},
 		{"below the threshold is degraded", ServiceHealth{ConsecutiveFailures: 2, LastFailureAt: fresh, Threshold: 3}, true, ServiceStateDegraded},
 		{"at the threshold is down", ServiceHealth{ConsecutiveFailures: 3, LastFailureAt: fresh, Threshold: 3}, true, ServiceStateDown},
-		{"proxy threshold of one is down at once", ServiceHealth{ConsecutiveFailures: 1, LastFailureAt: fresh, Threshold: 1}, false, ServiceStateDown},
+		{"a threshold of one is down at once", ServiceHealth{ConsecutiveFailures: 1, LastFailureAt: fresh, Threshold: 1}, false, ServiceStateDown},
 		{"missing threshold uses the default", ServiceHealth{ConsecutiveFailures: 2, LastFailureAt: fresh}, false, ServiceStateDegraded},
 		{"traffic failure exactly a day old still counts", ServiceHealth{ConsecutiveFailures: 3, LastFailureAt: dayOld, Threshold: 3}, true, ServiceStateDown},
 		{"traffic failure older than a day is stale", ServiceHealth{ConsecutiveFailures: 3, LastFailureAt: pastDay, Threshold: 3}, true, ServiceStateStale},
@@ -225,22 +224,6 @@ func TestRowsWithoutEventsAreIdleOrUnknown(t *testing.T) {
 	}
 }
 
-func TestProxyPoolIsReadAsTheProbe(t *testing.T) {
-	now := serviceTestStart
-	isolateServicesStatus(t, &now)
-
-	ReportServiceFailureWithThreshold(proxyPoolServiceName, "all 2 configured proxies are failing (last error: proxyconnect tcp: 407 Proxy Authentication Required)", 1)
-	row := serviceRow(t, currentServices(t), proxyPoolServiceName)
-
-	if (row.HasTraffic == true) || (row.Traffic != nil) || (row.Probe == nil) {
-		t.Fatalf("proxy-pool has only a probe: %+v", row)
-	}
-
-	if (row.State != ServiceStateDown) || (row.Probe.Threshold != 1) || (*row.Probe.LastErrorCode != ServiceErrorHTTP4xx) {
-		t.Fatalf("got %+v %+v", row, row.Probe)
-	}
-}
-
 func TestOffRowStillPublishesItsSignals(t *testing.T) {
 	now := serviceTestStart
 	isolateServicesStatus(t, &now)
@@ -294,7 +277,7 @@ func TestOffReasonsAndTheirPrecedence(t *testing.T) {
 				t.Setenv("ENABLE_9GAG", "false")
 				t.Setenv("ENABLE_THREADS", "false")
 			},
-			want: map[string]string{kkTikTokServiceName: serviceOffPlatform, tikwmServiceName: serviceOffPlatform, fxTwitterServiceName: serviceOffPlatform, relayYouTubeKey: serviceOffPlatform, youtubeApifyServiceName: serviceOffPlatform, youtubePostServiceName: serviceOffPlatform, redditVxredditServiceName: serviceOffPlatform, redditProxyServiceName: serviceOffPlatform, facebedServiceName: serviceOffPlatform, ninegagAPIServiceName: serviceOffPlatform, threadsEmbedServiceName: serviceOffPlatform, vxthreadsServiceName: serviceOffPlatform},
+			want: map[string]string{kkTikTokServiceName: serviceOffPlatform, tikwmServiceName: serviceOffPlatform, fxTwitterServiceName: serviceOffPlatform, relayYouTubeKey: serviceOffPlatform, youtubeApifyServiceName: serviceOffPlatform, youtubePostServiceName: serviceOffPlatform, redditVxredditServiceName: serviceOffPlatform, facebedServiceName: serviceOffPlatform, ninegagAPIServiceName: serviceOffPlatform, threadsEmbedServiceName: serviceOffPlatform, vxthreadsServiceName: serviceOffPlatform},
 		},
 		{
 			name: "no Apify token wins over special downloads off",
@@ -318,20 +301,6 @@ func TestOffReasonsAndTheirPrecedence(t *testing.T) {
 				pausedApify()
 			},
 			want: map[string]string{apifyServiceName: serviceOffNotListed, storiesApifyServiceName: serviceOffNotListed, youtubeApifyServiceName: serviceOffBudgetPaused},
-		},
-		{
-			name: "proxies switched off",
-			setup: func(t *testing.T) {
-				t.Setenv("ENABLE_PROXIES", "false")
-			},
-			want: map[string]string{redditProxyServiceName: serviceOffProxies, proxyPoolServiceName: serviceOffProxies},
-		},
-		{
-			name: "no proxies configured",
-			setup: func(t *testing.T) {
-				t.Setenv("YTDLP_PROXIES", "")
-			},
-			want: map[string]string{redditProxyServiceName: serviceOffProxies, proxyPoolServiceName: serviceOffProxies},
 		},
 		{
 			name: "special downloads off wins over relay disabled and budget paused",
@@ -524,7 +493,7 @@ func TestServiceCatalogGuards(t *testing.T) {
 		redditVxredditServiceName, redditVxredditServiceName + serviceProbeSuffix,
 		facebedServiceName, facebedServiceName + serviceProbeSuffix,
 		apifyServiceName, storiesApifyServiceName, youtubeApifyServiceName, hikerServiceName,
-		youtubePostServiceName, redditProxyServiceName, proxyPoolServiceName,
+		youtubePostServiceName,
 		tikwmServiceName, fxTwitterServiceName, threadsEmbedServiceName, vxthreadsServiceName, ninegagAPIServiceName,
 	}
 
@@ -609,7 +578,7 @@ func TestSeedingRestoresThePublishedSignals(t *testing.T) {
 	now = now.Add(time.Minute)
 
 	for i := 0; i < outageAlertThreshold; i++ {
-		ReportServiceFailureWithThreshold(proxyPoolServiceName, "407 Proxy Authentication Required", 1)
+		ReportServiceFailureWithThreshold(kkTikTokProbeKey, "probe: HTTP 503", 1)
 	}
 
 	ReportServiceFailureCode(tikwmServiceName, ServiceErrorHTTP429, "limit")
@@ -665,6 +634,40 @@ func failingSignal(failures int, threshold int) *ServiceSignal {
 	}
 
 	return result
+}
+
+func TestSeedingIgnoresRowsNotInTheCatalog(t *testing.T) {
+	now := serviceTestStart
+	isolateServicesStatus(t, &now)
+	status := ServicesStatus{
+		Version:    servicesStatusVersion,
+		ComputedAt: serviceTestStart.Add(-time.Minute),
+		Services: []ServiceStatusRow{
+			{Key: "proxy-pool", Probe: failingSignal(1, 1)},
+			{Key: "reddit-proxy", Traffic: failingSignal(3, 3)},
+			{Key: tikwmServiceName, Traffic: failingSignal(3, 3)},
+		},
+	}
+	data, _ := json.Marshal(status)
+
+	if err := SeedServicesHealth(data); err != nil {
+		t.Fatal(err)
+	}
+
+	serviceHealthMu.Lock()
+	_, hasPool := serviceHealthState["proxy-pool"]
+	_, hasRedditProxy := serviceHealthState["reddit-proxy"]
+	serviceHealthMu.Unlock()
+
+	if (hasPool == true) || (hasRedditProxy == true) {
+		t.Fatalf("rows not in the catalog must seed nothing: pool %v, reddit-proxy %v", hasPool, hasRedditProxy)
+	}
+
+	row := serviceRow(t, currentServices(t), tikwmServiceName)
+
+	if (row.Traffic == nil) || (row.Traffic.ConsecutiveFailures != 3) {
+		t.Fatalf("a catalog row next to them must still be restored: %+v", row.Traffic)
+	}
 }
 
 func TestSeededOutageRecoversOnceAndDoesNotAlertOnItsOwn(t *testing.T) {

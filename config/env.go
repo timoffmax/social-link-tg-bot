@@ -11,7 +11,6 @@ import (
 	"strings"
 
 	"github.com/joho/godotenv"
-	"github.com/timoffmax/social-link-bot/model/settings"
 )
 
 const tgBotTokenKey = "TG_BOT_TOKEN"
@@ -38,36 +37,6 @@ func GetTgBotToken() string {
 	return os.Getenv(tgBotTokenKey)
 }
 
-// IsProxyEnabled reports whether the proxy pool may be used at all
-// (proxy.enabled, else ENABLE_PROXIES, on by default).
-func IsProxyEnabled() bool {
-	result := proxyEnabledSetting.value()
-
-	return result
-}
-
-func isProxyEnabledFromEnv() bool {
-	result := getBoolEnv("ENABLE_PROXIES", true)
-
-	return result
-}
-
-// IsProxyEnabledForPlatform reports whether a platform uses the proxy pool:
-// only while proxies are on, then by its proxy.<platform>.enabled switch
-// (else ENABLE_<PLATFORM>_PROXY; YouTube off, the others on by default). A
-// platform without a switch uses the pool whenever proxies are on.
-func IsProxyEnabledForPlatform(platform string) bool {
-	isProxyOn := IsProxyEnabled()
-	key, hasSwitch := settings.ProxyEnabledKey(platform)
-	result := (isProxyOn == true)
-
-	if (isProxyOn == true) && (hasSwitch == true) {
-		result = boolSettingValue(key)
-	}
-
-	return result
-}
-
 // boolFromEnv returns a reader of a boolean env variable.
 func boolFromEnv(envVar string, defaultValue bool) func() bool {
 	result := func() bool {
@@ -77,26 +46,6 @@ func boolFromEnv(envVar string, defaultValue bool) func() bool {
 	}
 
 	return result
-}
-
-// Unified proxy configuration for all platforms except YouTube
-// YouTube uses a direct connection unless ENABLE_YOUTUBE_PROXY is set
-func GetYtDlpProxies() []string {
-	proxiesStr := os.Getenv("YTDLP_PROXIES")
-	if proxiesStr == "" {
-		return []string{}
-	}
-
-	// Split by comma and trim spaces
-	var proxies []string
-	for _, proxy := range strings.Split(proxiesStr, ",") {
-		proxy = strings.TrimSpace(proxy)
-		if proxy != "" {
-			proxies = append(proxies, proxy)
-		}
-	}
-
-	return proxies
 }
 
 // Get YouTube download delay in seconds (rate limiting)

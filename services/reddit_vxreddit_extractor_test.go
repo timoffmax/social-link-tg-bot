@@ -423,26 +423,14 @@ func TestBuildVxredditURLKeepsPathAndQuery(t *testing.T) {
 	}
 }
 
-func TestRedditStrategyUsesTheJSONAPIOnlyWithProxies(t *testing.T) {
-	cases := []struct {
-		enabled string
-		proxies string
-		want    []ExtractionMethod
-	}{
-		{enabled: "true", proxies: "", want: []ExtractionMethod{MethodRedditVxreddit, MethodYtDlp}},
-		{enabled: "false", proxies: "http://proxy:1", want: []ExtractionMethod{MethodRedditVxreddit, MethodYtDlp}},
-		{enabled: "true", proxies: "http://proxy:1", want: []ExtractionMethod{MethodRedditVxreddit, MethodRedditAPI, MethodYtDlp}},
-	}
+func TestRedditStrategyIsVxredditThenYtDlpInOrder(t *testing.T) {
+	t.Setenv("ENABLE_REDDIT", "true")
+	want := []ExtractionMethod{MethodRedditVxreddit, MethodYtDlp}
 
-	for _, testCase := range cases {
-		t.Setenv("ENABLE_PROXIES", testCase.enabled)
-		t.Setenv("YTDLP_PROXIES", testCase.proxies)
+	strategy := GetExtractionStrategy(vxredditTestTextURL)
 
-		strategy := GetExtractionStrategy(vxredditTestTextURL)
-
-		if (slices.Equal(strategy.Methods, testCase.want) == false) || (strategy.Sequential == false) {
-			t.Errorf("proxies %q on=%s: methods %v, want %v", testCase.proxies, testCase.enabled, strategy.Methods, testCase.want)
-		}
+	if (slices.Equal(strategy.Methods, want) == false) || (strategy.Sequential == false) {
+		t.Fatalf("methods %v (sequential %v), want %v in order", strategy.Methods, strategy.Sequential, want)
 	}
 }
 

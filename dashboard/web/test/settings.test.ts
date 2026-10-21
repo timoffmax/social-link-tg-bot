@@ -295,7 +295,7 @@ describe('texts', () => {
   });
 
   it('warns about a missing provider token only', () => {
-    const secrets = { tg_bot_token: true, admin_user_id: true, apify_token: true, hiker_token: false, proxies: 0, relay_url: false, relay_token_file: false };
+    const secrets = { tg_bot_token: true, admin_user_id: true, apify_token: true, hiker_token: false, relay_url: false, relay_token_file: false };
     assert.equal(missingTokenText(BUDGET, secrets), null);
     assert.match(missingTokenText(setting({ key: 'paid.hiker.monthly_budget_usd' }), secrets) ?? '', /HIKERAPI_TOKEN/);
   });

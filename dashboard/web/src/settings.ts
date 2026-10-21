@@ -52,7 +52,7 @@ const SCALE_TOLERANCE = 1e-9;
 
 export const GROUP_LABELS: Record<string, string> = {
   platforms: 'Platforms',
-  proxies_services: 'Proxies & free services',
+  services: 'Free services',
   paid: 'Paid providers & budgets',
   restricted_posts: 'Special downloads limits',
   stars: 'Stars support',

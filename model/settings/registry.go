@@ -23,22 +23,6 @@ var registry = []Setting{
 		Label:    "Instagram fixed-link service",
 		Impact:   "The domain of the Instagram link the bot sends when it can not download a post.",
 	},
-	{
-		Key:      KeyProxyEnabled,
-		Group:    GroupProxies,
-		Type:     TypeBool,
-		EnvVar:   "ENABLE_PROXIES",
-		Default:  true,
-		Approval: ApprovalNever,
-		Label:    "Proxies",
-		Impact:   "Off: no platform uses the proxy pool (the pool itself stays in .env).",
-	},
-	proxySetting(KeyProxyYouTubeEnabled, "ENABLE_YOUTUBE_PROXY", false, "YouTube proxy"),
-	proxySetting(KeyProxyTwitterEnabled, "ENABLE_TWITTER_PROXY", true, "Twitter/X proxy"),
-	proxySetting(KeyProxyTikTokEnabled, "ENABLE_TIKTOK_PROXY", true, "TikTok proxy"),
-	proxySetting(KeyProxyFacebookEnabled, "ENABLE_FACEBOOK_PROXY", true, "Facebook proxy"),
-	proxySetting(KeyProxyRedditEnabled, "ENABLE_REDDIT_PROXY", true, "Reddit proxy"),
-	proxySetting(KeyProxy9GAGEnabled, "ENABLE_9GAG_PROXY", true, "9GAG proxy"),
 	hostSetting(KeyServiceKKInstagramHost, "KKINSTAGRAM_HOST", "kkinstagram.com", "kkinstagram host"),
 	hostSetting(KeyServiceKKTikTokHost, "KKTIKTOK_HOST", "kktiktok.com", "kktiktok host"),
 	hostSetting(KeyServiceVxredditHost, "VXREDDIT_HOST", "vxreddit.com", "vxreddit host"),
@@ -186,30 +170,13 @@ func platformSetting(key string, envVar string, label string, impact string) Set
 	return result
 }
 
-// proxySetting is a platform's use of the proxy pool, effective only while
-// proxies are on.
-func proxySetting(key string, envVar string, defaultValue bool, label string) Setting {
-	result := Setting{
-		Key:      key,
-		Group:    GroupProxies,
-		Type:     TypeBool,
-		EnvVar:   envVar,
-		Default:  defaultValue,
-		Approval: ApprovalNever,
-		Label:    label,
-		Impact:   "Off: this platform never uses the proxy pool. Has an effect only while Proxies is on.",
-	}
-
-	return result
-}
-
 // hostSetting is the host of a free extraction service. The bot fetches from
 // it and sends what comes back to every chat, so every change waits for the
 // owner's approval.
 func hostSetting(key string, envVar string, defaultHost string, label string) Setting {
 	result := Setting{
 		Key:      key,
-		Group:    GroupProxies,
+		Group:    GroupServices,
 		Type:     TypeHost,
 		EnvVar:   envVar,
 		Default:  defaultHost,

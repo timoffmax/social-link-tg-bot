@@ -23,35 +23,6 @@ const (
 	headGatedFetchNoGlobalCap             = -1
 )
 
-func headIsProxyEnabled() bool {
-	return headGetBoolEnv("ENABLE_PROXIES", true)
-}
-
-func headIsProxyEnabledForPlatform(platform string) bool {
-	// Check global proxy setting first
-	if headIsProxyEnabled() == false {
-		return false
-	}
-
-	// Check platform-specific proxy settings
-	switch platform {
-	case "youtube":
-		return headGetBoolEnv("ENABLE_YOUTUBE_PROXY", false) // YouTube defaults to no proxy
-	case "twitter":
-		return headGetBoolEnv("ENABLE_TWITTER_PROXY", true)
-	case "tiktok":
-		return headGetBoolEnv("ENABLE_TIKTOK_PROXY", true)
-	case "9gag":
-		return headGetBoolEnv("ENABLE_9GAG_PROXY", true)
-	case "facebook":
-		return headGetBoolEnv("ENABLE_FACEBOOK_PROXY", true)
-	case "reddit":
-		return headGetBoolEnv("ENABLE_REDDIT_PROXY", true)
-	default:
-		return true // Default to enabled for unknown platforms
-	}
-}
-
 func headIsYouTubeEnabled() bool {
 	return headGetBoolEnv("ENABLE_YOUTUBE", true)
 }

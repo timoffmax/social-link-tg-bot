@@ -50,7 +50,6 @@ type secretsStatus struct {
 	HasAdminUserID   bool `json:"admin_user_id"`
 	HasApifyToken    bool `json:"apify_token"`
 	HasHikerToken    bool `json:"hiker_token"`
-	ProxyCount       int  `json:"proxies"`
 	HasRelayURL      bool `json:"relay_url"`
 	HasRelayTokenRef bool `json:"relay_token_file"`
 }
@@ -68,7 +67,7 @@ type registryStatus struct {
 // registryGroups is the order of the Settings tab's sections.
 var registryGroups = []settings.Group{
 	settings.GroupPlatforms,
-	settings.GroupProxies,
+	settings.GroupServices,
 	settings.GroupPaid,
 	settings.GroupRestricted,
 	settings.GroupStars,
@@ -199,13 +198,11 @@ func commitFromBuildSettings(buildSettings []debug.BuildSetting) (string, bool) 
 // currentSecrets reports which secrets are set.
 func currentSecrets() secretsStatus {
 	relayURL, _ := config.GetRelayURL()
-	proxies := config.GetYtDlpProxies()
 	result := secretsStatus{
 		HasBotToken:      (config.GetTgBotToken() != ""),
 		HasAdminUserID:   (config.GetAdminUserID() != 0),
 		HasApifyToken:    (config.GetApifyToken() != ""),
 		HasHikerToken:    (config.GetHikerAPIToken() != ""),
-		ProxyCount:       len(proxies),
 		HasRelayURL:      (relayURL != ""),
 		HasRelayTokenRef: (config.GetRelayTokenFile() != ""),
 	}

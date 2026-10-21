@@ -64,13 +64,13 @@ func (s *stubStore) SettingsAudit(ctx context.Context, filter SettingsAuditFilte
 
 // testRegistryJSON is a registry as the bot publishes it.
 const testRegistryJSON = `{
-"groups": ["platforms", "paid", "proxies_services"],
+"groups": ["platforms", "paid", "services"],
 "platforms": [{"id": "tiktok", "label": "TikTok"}],
 "settings": [
  {"key": "platform.tiktok.enabled", "group": "platforms", "type": "bool", "env_var": "ENABLE_TIKTOK", "default": true, "approval": "never", "label": "TikTok", "impact": "Off: ignored."},
  {"key": "paid.apify.monthly_budget_usd", "group": "paid", "type": "decimal", "default": 4, "min": 0, "ceiling": 20, "scale": 2, "approval": "raise", "safe_value": 0, "label": "Apify", "impact": "Cap."},
  {"key": "paid.instagram.provider_order", "group": "paid", "type": "ordered_list", "default": ["apify", "hiker"], "enum": ["apify", "hiker"], "approval": "never", "label": "Order", "impact": "Order."},
- {"key": "service.facebed.host", "group": "proxies_services", "type": "host", "default": "www.facebed.com", "approval": "always", "label": "facebed", "impact": "Host."},
+ {"key": "service.facebed.host", "group": "services", "type": "host", "default": "www.facebed.com", "approval": "always", "label": "facebed", "impact": "Host."},
  {"key": "gated.global_monthly_cap", "group": "restricted_posts", "type": "int", "default": -1, "min": -1, "ceiling": 5000, "approval": "never", "label": "Cap", "impact": "Cap."},
  {"key": "platform.instagram.fixed_link_service", "group": "platforms", "type": "enum", "default": "toinstagram", "enum": ["toinstagram", "onebigram"], "approval": "never", "label": "Fixed", "impact": "Domain."},
  {"key": "paid.hiker.price_per_request_usd", "group": "paid", "type": "decimal", "default": 0.001, "min": 0, "min_exclusive": true, "max": 1, "scale": 6, "approval": "lower", "label": "Price", "impact": "Price."}

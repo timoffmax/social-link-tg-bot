@@ -1,13 +1,12 @@
 package services
 
-// Tests for the redirector media validation, health probes, and Reddit
-// short-URL resolution. Live network checks are skipped unless VERIFY_LIVE=1:
+// Tests for the redirector media validation and health probes. Live network
+// checks are skipped unless VERIFY_LIVE=1:
 //   VERIFY_LIVE=1 go test ./services -run 'TestVerify' -v
 
 import (
 	"context"
 	"errors"
-	"net/http"
 	"os"
 	"strings"
 	"testing"
@@ -102,24 +101,6 @@ func TestVerifyOriginBounceSentinel(t *testing.T) {
 	}
 }
 
-func TestVerifyRedditPostLevelError(t *testing.T) {
-	notFound := &redditHTTPError{StatusCode: http.StatusNotFound, Excerpt: "not found"}
-
-	if !isRedditPostLevelError(notFound) {
-		t.Error("404 must be post-level")
-	}
-
-	blocked := &redditHTTPError{StatusCode: http.StatusForbidden, Excerpt: "blocked"}
-
-	if isRedditPostLevelError(blocked) {
-		t.Error("403 (proxy blocked) must NOT be post-level")
-	}
-
-	if isRedditPostLevelError(errors.New("proxy request failed: connect timeout")) {
-		t.Error("transport errors must NOT be post-level")
-	}
-}
-
 func TestVerifyTruncateAtRuneBoundary(t *testing.T) {
 	long := strings.Repeat("є", 3000) // 2-byte runes, 6000 bytes
 
@@ -169,32 +150,6 @@ func TestVerifyLiveKKExtraction(t *testing.T) {
 	t.Logf("kktiktok: %d item(s), type=%s file=%s caption=%q", len(items), items[0].Type, items[0].Filename, items[0].Caption)
 }
 
-func TestVerifyLiveRedditDirectExtraction(t *testing.T) {
-	if os.Getenv("VERIFY_LIVE") == "" {
-		t.Skip("set VERIFY_LIVE=1 for live network checks")
-	}
-
-	t.Setenv("ENABLE_PROXIES", "false")
-
-	re := NewRedditExtractor(t.TempDir())
-
-	items, err := re.ExtractRedditPost("https://www.reddit.com/r/ukraine_dev/s/YPgdlPVkgi")
-
-	if err != nil {
-		t.Fatalf("direct Reddit extraction failed: %v", err)
-	}
-
-	if (len(items) != 1) || (items[0].Type != "text") {
-		t.Fatalf("expected 1 text item, got %+v", items)
-	}
-
-	if strings.Contains(items[0].Caption, "r/ukraine_dev") == false {
-		t.Errorf("caption missing subreddit: %.120s", items[0].Caption)
-	}
-
-	t.Logf("extracted text post (%d chars): %.200s", len(items[0].Caption), items[0].Caption)
-}
-
 func TestVerifyLiveVxreddit(t *testing.T) {
 	if os.Getenv("VERIFY_LIVE") == "" {
 		t.Skip("set VERIFY_LIVE=1 for live network checks")
@@ -220,20 +175,4 @@ func TestVerifyLiveVxreddit(t *testing.T) {
 	}
 
 	t.Logf("vxreddit video: %d bytes, caption=%.80s", info.Size(), items[0].Caption)
-}
-
-func TestVerifyLiveRedditShortURL(t *testing.T) {
-	if os.Getenv("VERIFY_LIVE") == "" {
-		t.Skip("set VERIFY_LIVE=1 for live network checks")
-	}
-
-	re := NewRedditExtractor(t.TempDir())
-
-	resolved, err := re.resolveShortURLDirect("https://www.reddit.com/r/ukraine_dev/s/YPgdlPVkgi")
-
-	if err != nil {
-		t.Fatalf("direct short URL resolution failed: %v", err)
-	}
-
-	t.Logf("resolved: %s", resolved)
 }

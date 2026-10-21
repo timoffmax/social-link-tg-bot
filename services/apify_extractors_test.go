@@ -239,12 +239,12 @@ func TestApifyBudgetFailsClosedOnAMalformedAnswer(t *testing.T) {
 	}
 }
 
-func TestYtDlpPlatformMatchesTwitterByHostOnly(t *testing.T) {
-	if (ytDlpPlatform("https://x.com/user/status/1") != "twitter") || (ytDlpPlatform("https://mobile.twitter.com/u/status/1") != "twitter") {
+func TestIsTwitterURLMatchesByHostOnly(t *testing.T) {
+	if (IsTwitterURL("https://x.com/user/status/1") == false) || (IsTwitterURL("https://mobile.twitter.com/u/status/1") == false) {
 		t.Fatalf("twitter hosts must match")
 	}
 
-	if ytDlpPlatform("https://www.netflix.com/watch/1") == "twitter" {
+	if IsTwitterURL("https://www.netflix.com/watch/1") == true {
 		t.Fatalf("a URL containing x.com must not count as Twitter")
 	}
 }

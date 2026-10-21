@@ -26,7 +26,7 @@ type Group string
 // Groups, in the order the Settings tab shows them.
 const (
 	GroupPlatforms  Group = "platforms"
-	GroupProxies    Group = "proxies_services"
+	GroupServices   Group = "services"
 	GroupPaid       Group = "paid"
 	GroupRestricted Group = "restricted_posts"
 	GroupStars      Group = "stars"
@@ -121,13 +121,6 @@ const (
 	KeyPlatform9GAGEnabled       = "platform.9gag.enabled"
 	KeyPlatformThreadsEnabled    = "platform.threads.enabled"
 	KeyInstagramFixedLinkService = "platform.instagram.fixed_link_service"
-	KeyProxyEnabled              = "proxy.enabled"
-	KeyProxyYouTubeEnabled       = "proxy.youtube.enabled"
-	KeyProxyTwitterEnabled       = "proxy.twitter.enabled"
-	KeyProxyTikTokEnabled        = "proxy.tiktok.enabled"
-	KeyProxyFacebookEnabled      = "proxy.facebook.enabled"
-	KeyProxyRedditEnabled        = "proxy.reddit.enabled"
-	KeyProxy9GAGEnabled          = "proxy.9gag.enabled"
 	KeyServiceKKInstagramHost    = "service.kkinstagram.host"
 	KeyServiceKKTikTokHost       = "service.kktiktok.host"
 	KeyServiceVxredditHost       = "service.vxreddit.host"
@@ -208,17 +201,6 @@ var platformEnabledKeys = map[string]string{
 	PlatformThreads:   KeyPlatformThreadsEnabled,
 }
 
-// proxyEnabledKeys maps a platform id to its proxy key; platforms without one
-// use the proxy pool whenever proxies are on.
-var proxyEnabledKeys = map[string]string{
-	PlatformYouTube:  KeyProxyYouTubeEnabled,
-	PlatformTwitter:  KeyProxyTwitterEnabled,
-	PlatformTikTok:   KeyProxyTikTokEnabled,
-	PlatformFacebook: KeyProxyFacebookEnabled,
-	PlatformReddit:   KeyProxyRedditEnabled,
-	Platform9GAG:     KeyProxy9GAGEnabled,
-}
-
 // Platforms returns the supported platforms in the order the bot lists them.
 func Platforms() []Platform {
 	result := make([]Platform, len(platforms))
@@ -241,13 +223,6 @@ func PlatformIDs() []string {
 // PlatformEnabledKey returns the on/off key of a platform.
 func PlatformEnabledKey(platformID string) (string, bool) {
 	result, isKnown := platformEnabledKeys[platformID]
-
-	return result, isKnown
-}
-
-// ProxyEnabledKey returns the proxy key of a platform.
-func ProxyEnabledKey(platformID string) (string, bool) {
-	result, isKnown := proxyEnabledKeys[platformID]
 
 	return result, isKnown
 }

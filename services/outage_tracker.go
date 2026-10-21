@@ -60,15 +60,14 @@ var serviceErrorCodes = []string{
 var (
 	serviceTimeoutFragments       = []string{"deadline exceeded", "timeout", "timed out"}
 	serviceTooManyFragments       = []string{"too many requests"}
-	serviceClientErrorFragments   = []string{"proxy authentication required"}
 	serviceNotConfiguredFragments = []string{"not configured", "not found at", "no python"}
-	serviceTransportFragments     = []string{"connection refused", "connection reset", "no such host", "eof", "tls", "proxyconnect", "dial tcp", "network is unreachable", "broken pipe", "failed to perform"}
+	serviceTransportFragments     = []string{"connection refused", "connection reset", "no such host", "eof", "tls", "dial tcp", "network is unreachable", "broken pipe", "failed to perform"}
 	serviceParseFragments         = []string{"unmarshal", "invalid character", "decode", "parse", "json"}
 	serviceWrongContentFragments  = []string{"content-type", "content type", "og:", "no media", "not media", "html", "wrong post"}
 )
 
 // URLs stripped from a detail, and its HTTP status: right after "http",
-// "status" or "code", or in Go's resp.Status form ("407 Proxy Authentication Required").
+// "status" or "code", or in Go's resp.Status form ("504 Gateway Timeout").
 var (
 	serviceDetailURLPattern   = regexp.MustCompile(`(?i)\b[a-z][a-z0-9+.-]*://\S+`)
 	serviceNamedStatusPattern = regexp.MustCompile(`\b(?:status code|http|status|code)(?::\s*|\s+)([1-5]\d\d)\b`)
@@ -324,10 +323,6 @@ func classifyServiceDetail(detail string) string {
 
 	if (result == "") && (containsAnyFragment(lowered, serviceTooManyFragments) == true) {
 		result = ServiceErrorHTTP429
-	}
-
-	if (result == "") && (containsAnyFragment(lowered, serviceClientErrorFragments) == true) {
-		result = ServiceErrorHTTP4xx
 	}
 
 	result = firstFragmentCode(result, lowered)

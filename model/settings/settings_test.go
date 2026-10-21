@@ -12,9 +12,7 @@ import (
 var mvpKeys = []string{
 	KeyPlatformInstagramEnabled, KeyPlatformTikTokEnabled, KeyPlatformTwitterEnabled, KeyPlatformYouTubeEnabled,
 	KeyPlatformRedditEnabled, KeyPlatformFacebookEnabled, KeyPlatform9GAGEnabled, KeyPlatformThreadsEnabled,
-	KeyInstagramFixedLinkService, KeyProxyEnabled, KeyProxyYouTubeEnabled, KeyProxyTwitterEnabled,
-	KeyProxyTikTokEnabled, KeyProxyFacebookEnabled, KeyProxyRedditEnabled, KeyProxy9GAGEnabled,
-	KeyApifyMonthlyBudgetUsd, KeyHikerMonthlyBudgetUsd, KeyHikerPricePerRequestUsd, KeyInstagramProviderOrder,
+	KeyInstagramFixedLinkService, KeyApifyMonthlyBudgetUsd, KeyHikerMonthlyBudgetUsd, KeyHikerPricePerRequestUsd, KeyInstagramProviderOrder,
 	KeyHikerLowBalanceRequests, KeyGatedGlobalMonthlyCap, KeyGatedUserMonthlyAllowance, KeyGatedChatMonthlyCap,
 	KeyStarsEnabled, KeyDefaultDailyMediaLimit, KeyServiceKKInstagramHost, KeyServiceKKTikTokHost,
 	KeyServiceVxredditHost, KeyServiceFacebedHost,
@@ -292,9 +290,5 @@ func TestPlatformKeysCoverEveryPlatform(t *testing.T) {
 		if (isKnown == false) || (mustLookup(t, key).Group != GroupPlatforms) {
 			t.Fatalf("%s has no platform switch", platform.ID)
 		}
-	}
-
-	if _, hasProxy := ProxyEnabledKey(PlatformInstagram); hasProxy == true {
-		t.Fatalf("Instagram has no proxy switch at HEAD")
 	}
 }
