@@ -87,6 +87,23 @@ func isPaidSkip(err error) bool {
 // logged and skipped, and a list without any known name keeps the default.
 func instagramPaidProviderOrder() []string {
 	names := config.GetInstagramPaidProviders()
+	logUnknownPaidProviders(names)
+	result := paidProviderOrderOf(names)
+
+	return result
+}
+
+// quietInstagramPaidProviderOrder is instagramPaidProviderOrder without the
+// warning, for readers that run every heartbeat.
+func quietInstagramPaidProviderOrder() []string {
+	names := config.GetInstagramPaidProviders()
+	result := paidProviderOrderOf(names)
+
+	return result
+}
+
+// paidProviderOrderOf keeps the known names, else the default order.
+func paidProviderOrderOf(names []string) []string {
 	result := knownPaidProviders(names)
 
 	if len(result) == 0 {
@@ -96,6 +113,17 @@ func instagramPaidProviderOrder() []string {
 	return result
 }
 
+// logUnknownPaidProviders logs every unknown provider name.
+func logUnknownPaidProviders(names []string) {
+	for _, name := range names {
+		_, isKnown := paidProviders[name]
+
+		if isKnown == false {
+			log.Printf("⚠️ [paid] unknown provider %q in INSTAGRAM_PAID_PROVIDERS ignored", name)
+		}
+	}
+}
+
 // knownPaidProviders keeps the known provider names, first occurrence only.
 func knownPaidProviders(names []string) []string {
 	result := make([]string, 0, len(names))
@@ -103,10 +131,6 @@ func knownPaidProviders(names []string) []string {
 
 	for _, name := range names {
 		_, isKnown := paidProviders[name]
-
-		if isKnown == false {
-			log.Printf("⚠️ [paid] unknown provider %q in INSTAGRAM_PAID_PROVIDERS ignored", name)
-		}
 
 		if (isKnown == true) && (seen[name] == false) {
 			result = append(result, name)

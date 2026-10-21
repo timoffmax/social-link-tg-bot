@@ -8,6 +8,19 @@ import (
 	"time"
 )
 
+// httpStatusError is a non-200 answer of a page fetch.
+type httpStatusError struct {
+	URL        string
+	StatusCode int
+}
+
+// Error keeps the text the page fetch has always returned.
+func (e *httpStatusError) Error() string {
+	result := fmt.Sprintf("page %s status %d", e.URL, e.StatusCode)
+
+	return result
+}
+
 // fetchCappedPage GETs a page with the given headers, reading at most
 // maxBytes, and fails on a non-200 answer. Shared by the page-reading
 // extractors (YouTube posts, Threads).
@@ -37,7 +50,7 @@ func fetchCappedPage(ctx context.Context, pageURL string, headers map[string]str
 	}
 
 	if (err == nil) && (resp.StatusCode != http.StatusOK) {
-		err = fmt.Errorf("page %s status %d", pageURL, resp.StatusCode)
+		err = &httpStatusError{URL: pageURL, StatusCode: resp.StatusCode}
 	}
 
 	if err == nil {

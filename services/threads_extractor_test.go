@@ -2,9 +2,11 @@ package services
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 )
@@ -250,5 +252,132 @@ func TestThreadsRedirectPostPathReadsOnlyThePath(t *testing.T) {
 		if threadsRedirectPostPath(location) != expected {
 			t.Fatalf("%s: expected %q, got %q", location, expected, threadsRedirectPostPath(location))
 		}
+	}
+}
+
+func TestClassifyThreadsCall(t *testing.T) {
+	cases := []struct {
+		name        string
+		call        threadsCall
+		wantOutcome serviceOutcome
+		wantCode    string
+	}{
+		{"429", threadsCall{fetchErr: &httpStatusError{StatusCode: http.StatusTooManyRequests}, parseCode: ServiceErrorParse}, serviceOutcomeFailure, ServiceErrorHTTP429},
+		{"5xx", threadsCall{fetchErr: &httpStatusError{StatusCode: http.StatusServiceUnavailable}, parseCode: ServiceErrorParse}, serviceOutcomeFailure, ServiceErrorHTTP5xx},
+		{"404 missing post", threadsCall{fetchErr: &httpStatusError{StatusCode: http.StatusNotFound}, parseCode: ServiceErrorParse}, serviceOutcomeNone, ""},
+		{"410 gone post", threadsCall{fetchErr: &httpStatusError{StatusCode: http.StatusGone}, parseCode: ServiceErrorParse}, serviceOutcomeNone, ""},
+		{"403", threadsCall{fetchErr: &httpStatusError{StatusCode: http.StatusForbidden}, parseCode: ServiceErrorParse}, serviceOutcomeNone, ""},
+		{"own timeout", threadsCall{fetchErr: fmt.Errorf("get: %w", context.DeadlineExceeded), parseCode: ServiceErrorParse}, serviceOutcomeFailure, ServiceErrorTimeout},
+		{"transport", threadsCall{fetchErr: &url.Error{Op: "Get", URL: "https://x", Err: errors.New("refused")}, parseCode: ServiceErrorParse}, serviceOutcomeFailure, ServiceErrorTransport},
+		{"caller deadline", threadsCall{ctxErr: context.DeadlineExceeded, fetchErr: fmt.Errorf("get: %w", context.DeadlineExceeded), parseCode: ServiceErrorParse}, serviceOutcomeNone, ""},
+		{"caller cancel on a 5xx", threadsCall{ctxErr: context.Canceled, fetchErr: &httpStatusError{StatusCode: http.StatusBadGateway}, parseCode: ServiceErrorParse}, serviceOutcomeNone, ""},
+		{"embed changed", threadsCall{parseErr: errors.New("no Threads post in the embed"), parseCode: ServiceErrorParse}, serviceOutcomeFailure, ServiceErrorParse},
+		{"mirror tags gone", threadsCall{parseErr: errors.New("no Threads post on the vxthreads page"), parseCode: ServiceErrorWrongContent}, serviceOutcomeFailure, ServiceErrorWrongContent},
+		{"post not available", threadsCall{parseErr: errThreadsPostUnavailable, parseCode: ServiceErrorParse}, serviceOutcomeNone, ""},
+		{"embed without text or media", threadsCall{parseErr: errThreadsPostEmpty, parseCode: ServiceErrorParse}, serviceOutcomeFailure, ServiceErrorParse},
+		{"quote-only post", threadsCall{parseErr: errThreadsPostQuoteOnly, parseCode: ServiceErrorParse}, serviceOutcomeNone, ""},
+		{"mirror login page", threadsCall{parseErr: errThreadsVxLoginPage, parseCode: ServiceErrorWrongContent}, serviceOutcomeFailure, ServiceErrorWrongContent},
+		{"post", threadsCall{parseCode: ServiceErrorParse}, serviceOutcomeSuccess, ""},
+	}
+
+	for _, c := range cases {
+		outcome, code := classifyThreadsCall(c.call)
+
+		if (outcome != c.wantOutcome) || (code != c.wantCode) {
+			t.Errorf("%s: got %d %q, want %d %q", c.name, outcome, code, c.wantOutcome, c.wantCode)
+		}
+	}
+}
+
+// threadsEmptyEmbedFixture is an embed with an author but no text or media.
+const threadsEmptyEmbedFixture = `<div class="OuterContainer OuterContainerFull"><a class="HeaderLink"><span>writer</span></a>
+<div class="PostDateContainer"></div></div>`
+
+// threadsQuoteOnlyEmbedFixture is an embed of a post that only quotes another.
+const threadsQuoteOnlyEmbedFixture = `<div class="OuterContainer OuterContainerFull"><a class="HeaderLink"><span>writer</span></a>
+<div class="QuotePostContainer"><span>quoted text</span></div>
+<div class="PostDateContainer"></div></div>`
+
+// threadsTextVxFixture is a vxthreads page of a text-only post.
+const threadsTextVxFixture = `<meta name="twitter:creator" content="@zuck"><meta property="og:description" content="Hi">`
+
+func TestThreadsCallsReachTheTracker(t *testing.T) {
+	unavailableEmbed := vxredditFixture(t, "threads_embed_unavailable.html")
+	loginMirror := vxredditFixture(t, "threads_vx_login.html")
+	cases := []struct {
+		name        string
+		service     string
+		status      int
+		body        string
+		wantOutcome serviceOutcome
+		wantCode    string
+	}{
+		{"embed 5xx is a failure", threadsEmbedServiceName, http.StatusServiceUnavailable, "", serviceOutcomeFailure, ServiceErrorHTTP5xx},
+		{"embed 404 is not counted", threadsEmbedServiceName, http.StatusNotFound, "", serviceOutcomeNone, ""},
+		{"changed embed is a parse failure", threadsEmbedServiceName, http.StatusOK, "<html>Log in</html>", serviceOutcomeFailure, ServiceErrorParse},
+		{"embed without text or media is a parse failure", threadsEmbedServiceName, http.StatusOK, threadsEmptyEmbedFixture, serviceOutcomeFailure, ServiceErrorParse},
+		{"quote-only embed is not counted", threadsEmbedServiceName, http.StatusOK, threadsQuoteOnlyEmbedFixture, serviceOutcomeNone, ""},
+		{"embed post is a success", threadsEmbedServiceName, http.StatusOK, threadsTextFixture, serviceOutcomeSuccess, ""},
+		{"unavailable post embed is not counted", threadsEmbedServiceName, http.StatusOK, unavailableEmbed, serviceOutcomeNone, ""},
+		{"mirror 5xx is a failure", vxthreadsServiceName, http.StatusBadGateway, "", serviceOutcomeFailure, ServiceErrorHTTP5xx},
+		{"mirror 404 is not counted", vxthreadsServiceName, http.StatusNotFound, "", serviceOutcomeNone, ""},
+		{"mirror without tags is wrong content", vxthreadsServiceName, http.StatusOK, "<html></html>", serviceOutcomeFailure, ServiceErrorWrongContent},
+		{"mirror post is a success", vxthreadsServiceName, http.StatusOK, threadsTextVxFixture, serviceOutcomeSuccess, ""},
+		{"mirror login page is wrong content", vxthreadsServiceName, http.StatusOK, loginMirror, serviceOutcomeFailure, ServiceErrorWrongContent},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			newAlertRecorder(t)
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(c.status)
+				fmt.Fprint(w, c.body)
+			}))
+			t.Cleanup(server.Close)
+			extractor := newTestThreadsExtractor(t, server)
+			postURL := "https://www.threads.com/@a/post/ABCDEF1"
+
+			if c.service == threadsEmbedServiceName {
+				_, _ = extractor.ExtractEmbed(context.Background(), postURL)
+			}
+
+			if c.service == vxthreadsServiceName {
+				_, _ = extractor.ExtractVxthreads(context.Background(), postURL)
+			}
+
+			assertTracked(t, c.service, c.wantOutcome, c.wantCode)
+		})
+	}
+}
+
+func TestThreadsUnresolvedLinkIsNotCounted(t *testing.T) {
+	newAlertRecorder(t)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	t.Cleanup(server.Close)
+
+	_, _ = newTestThreadsExtractor(t, server).ExtractEmbed(context.Background(), "https://www.threads.com/t/CODE123")
+
+	assertTracked(t, threadsEmbedServiceName, serviceOutcomeNone, "")
+}
+
+func TestThreadsEmbedOfAnUnavailablePostFails(t *testing.T) {
+	page := vxredditFixture(t, "threads_embed_unavailable.html")
+
+	_, err := parseThreadsEmbed(page)
+
+	if errors.Is(err, errThreadsPostUnavailable) == false {
+		t.Fatalf("got %v", err)
+	}
+}
+
+func TestThreadsVxthreadsLoginPageIsNotAPost(t *testing.T) {
+	page := vxredditFixture(t, "threads_vx_login.html")
+
+	_, err := parseThreadsVxPage(page)
+
+	if errors.Is(err, errThreadsVxLoginPage) == false {
+		t.Fatalf("got %v", err)
 	}
 }

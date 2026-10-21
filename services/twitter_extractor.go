@@ -14,12 +14,74 @@ import (
 	"time"
 )
 
+// fxTwitterServiceName is the outage-tracker key of the FxTwitter API.
+const fxTwitterServiceName = "fxtwitter"
+
+// fxTwitterCall is what one FxTwitter API call got, up to the step that
+// failed.
+type fxTwitterCall struct {
+	fetchErr   error
+	statusCode int
+	readErr    error
+	parseErr   error
+	hasTweet   bool
+}
+
+// classifyFxTwitterCall tells the tracker about one call; a 4xx other than 429
+// (a missing tweet) and an answer without a tweet are not counted.
+func classifyFxTwitterCall(call fxTwitterCall) (serviceOutcome, string) {
+	outcome := serviceOutcomeSuccess
+	code := ""
+	isAnswered := (call.fetchErr == nil)
+	isOK := (isAnswered == true) && (call.statusCode == http.StatusOK)
+	isRead := (isOK == true) && (call.readErr == nil)
+	isParsed := (isRead == true) && (call.parseErr == nil)
+
+	if isAnswered == false {
+		outcome = serviceOutcomeFailure
+		code = classifyServiceErr(call.fetchErr)
+	}
+
+	if (isAnswered == true) && (isOK == false) {
+		outcome, code = classifyServiceAnswerStatus(call.statusCode)
+	}
+
+	if (isOK == true) && (isRead == false) {
+		outcome = serviceOutcomeFailure
+		code = ServiceErrorTransport
+	}
+
+	if (isRead == true) && (isParsed == false) {
+		outcome = serviceOutcomeFailure
+		code = ServiceErrorParse
+	}
+
+	if (isParsed == true) && (call.hasTweet == false) {
+		outcome = serviceOutcomeNone
+	}
+
+	return outcome, code
+}
+
+// reportFxTwitterCall feeds one FxTwitter call into the outage tracker when
+// this extractor reports (one per link); err is the alert's detail.
+func (te *TwitterExtractor) reportFxTwitterCall(call fxTwitterCall, err error) {
+	if te.reportsFxTwitter == true {
+		outcome, code := classifyFxTwitterCall(call)
+		detail := fmt.Sprintf("%v", err)
+		reportServiceOutcome(fxTwitterServiceName, outcome, code, detail)
+	}
+}
+
 type TwitterExtractor struct {
 	client     *http.Client
 	tempDir    string
 	workingDir string
 	// Cache extracted tweet text from successful methods to use in fallbacks
 	cachedTweetText string
+	// reportsFxTwitter makes FxTwitter calls reach the outage tracker; set only
+	// on the yt-dlp step's extractor so a link counts once.
+	reportsFxTwitter bool
 }
 
 func NewTwitterExtractor(workingDir, tempDir string) *TwitterExtractor {
@@ -421,26 +483,41 @@ func (te *TwitterExtractor) extractViaFxTwitterAPI(tweetID string, username stri
 
 	resp, err := te.client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("failed to fetch fxtwitter: %v", err)
+		fetchErr := fmt.Errorf("failed to fetch fxtwitter: %v", err)
+		te.reportFxTwitterCall(fxTwitterCall{fetchErr: err}, fetchErr)
+
+		return nil, fetchErr
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("fxtwitter API HTTP %d", resp.StatusCode)
+		statusErr := fmt.Errorf("fxtwitter API HTTP %d", resp.StatusCode)
+		te.reportFxTwitterCall(fxTwitterCall{statusCode: resp.StatusCode}, statusErr)
+
+		return nil, statusErr
 	}
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read fxtwitter response: %v", err)
+		readErr := fmt.Errorf("failed to read fxtwitter response: %v", err)
+		te.reportFxTwitterCall(fxTwitterCall{statusCode: resp.StatusCode, readErr: err}, readErr)
+
+		return nil, readErr
 	}
 
 	// Parse JSON response
 	var fxData map[string]interface{}
 	if err := json.Unmarshal(body, &fxData); err != nil {
-		return nil, fmt.Errorf("failed to parse fxtwitter JSON: %v", err)
+		parseErr := fmt.Errorf("failed to parse fxtwitter JSON: %v", err)
+		te.reportFxTwitterCall(fxTwitterCall{statusCode: resp.StatusCode, parseErr: err}, parseErr)
+
+		return nil, parseErr
 	}
 
 	tweet, ok := fxData["tweet"].(map[string]interface{})
+	// Reported before any media download: a twimg failure is not FxTwitter's.
+	te.reportFxTwitterCall(fxTwitterCall{statusCode: resp.StatusCode, hasTweet: ok}, nil)
+
 	if !ok {
 		return nil, fmt.Errorf("no tweet data in fxtwitter response")
 	}

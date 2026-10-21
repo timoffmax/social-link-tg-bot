@@ -26,6 +26,8 @@
 // change queued from another tab at load. Apify runs with Shorts paused and
 // HikerAPI is paused on an empty balance; the home relay has Instagram's
 // breaker open. ?mock=oldbot shows a bot that does not take limit changes yet.
+// External services: a row per state, off reason and signal case; ?mock=stale
+// shows them 2 hours old, ?mock=empty never published.
 
 import type {
   Report,
@@ -43,7 +45,11 @@ import type {
   MoneyResponse,
   OverviewResponse,
   PlatformsResponse,
+  PublishedComponent,
   ReportsResponse,
+  ServiceRow,
+  ServiceSignal,
+  ServicesStatus,
   AuditEntry,
   AuditResponse,
   SettingChangeDraft,
@@ -216,7 +222,99 @@ function overview(days: number, empty: boolean): OverviewResponse {
   };
 }
 
-function platforms(days: number, empty: boolean): PlatformsResponse {
+interface SignalFixture {
+  ok?: number;
+  failed?: number;
+  since?: number;
+  failures?: number;
+  threshold?: number;
+  code?: ServiceSignal['last_error_code'];
+}
+
+/** A signal from hours ago; its state follows the bot's rules (24 h age-out for traffic). */
+function signal(fixture: SignalFixture, isTraffic: boolean): ServiceSignal {
+  const failures = fixture.failures ?? 0;
+  const threshold = fixture.threshold ?? 3;
+  const failedAt = (fixture.failed === undefined) ? null : hoursAgo(fixture.failed);
+  const isAgedOut = isTraffic && ((fixture.failed ?? 0) > 24);
+  const states: [boolean, ServiceSignal['state']][] = [
+    [(failures === 0), 'ok'],
+    [isAgedOut, 'stale'],
+    [(failures >= threshold), 'down'],
+  ];
+  const found = states.find(([isFound]) => isFound);
+
+  return {
+    state: (found === undefined) ? 'degraded' : found[1],
+    last_success_at: (fixture.ok === undefined) ? null : hoursAgo(fixture.ok),
+    last_failure_at: failedAt,
+    failing_since: (failures === 0) ? null : hoursAgo(fixture.since ?? fixture.failed ?? 0),
+    consecutive_failures: failures,
+    threshold,
+    last_error_code: fixture.code ?? null,
+  };
+}
+
+type ServiceFixture = Pick<ServiceRow, 'key' | 'label' | 'kind' | 'platforms' | 'role' | 'state'> & Partial<Omit<ServiceRow, 'traffic' | 'probe'>> & {
+  traffic?: SignalFixture;
+  probe?: SignalFixture;
+};
+
+function serviceRow(fixture: ServiceFixture): ServiceRow {
+  return {
+    host: null,
+    fallback: false,
+    has_traffic: true,
+    has_probe: false,
+    off_reason: null,
+    ...fixture,
+    traffic: (fixture.traffic === undefined) ? null : signal(fixture.traffic, true),
+    probe: (fixture.probe === undefined) ? null : signal(fixture.probe, false),
+  };
+}
+
+const SERVICE_FIXTURES: ServiceFixture[] = [
+  // Check OK, traffic failing.
+  { key: 'kkinstagram', label: 'kkinstagram', kind: 'free', host: 'kkinstagram.com', platforms: ['instagram'], role: 'Posts and reels (first step)', has_probe: true, state: 'degraded', traffic: { ok: 0.2, failed: 0.05, failures: 1, code: 'wrong_content' }, probe: { ok: 0.4 } },
+  { key: 'apify', label: 'Apify gated posts', kind: 'paid', platforms: ['instagram'], role: 'Author-gated posts and login-only reel videos (special download)', fallback: true, state: 'off', off_reason: 'budget_paused', traffic: { ok: 120, failed: 70, since: 71, failures: 3, code: 'http_5xx' } },
+  { key: 'apify-stories', label: 'Apify Stories', kind: 'paid', platforms: ['instagram'], role: 'Stories (special download)', state: 'off', off_reason: 'not_listed' },
+  { key: 'hiker', label: 'HikerAPI', kind: 'paid', platforms: ['instagram'], role: 'Backup for gated posts and Stories', fallback: true, state: 'off', off_reason: 'not_configured' },
+  { key: 'instagram-relay', label: 'Home relay (Instagram)', kind: 'relay', platforms: ['instagram'], role: 'Login-only reel videos from a home IP (details on the Limits tab)', fallback: true, has_probe: true, state: 'off', off_reason: 'special_off', probe: { ok: 0.5 } },
+  // Probe overdue: the last check is 3 hours old.
+  { key: 'kktiktok', label: 'kktiktok', kind: 'free', host: 'kktiktok.com', platforms: ['tiktok'], role: 'Videos after tikwm fails', fallback: true, has_probe: true, state: 'ok', traffic: { ok: 5 }, probe: { ok: 3 } },
+  { key: 'tikwm', label: 'tikwm', kind: 'free', platforms: ['tiktok'], role: 'Videos and slideshows after yt-dlp and TikTok’s own pages fail', fallback: true, state: 'idle' },
+  { key: 'fxtwitter', label: 'FxTwitter', kind: 'free', platforms: ['twitter'], role: 'Tweet text, author and media (first step)', state: 'down', traffic: { ok: 6, failed: 0.1, since: 2.5, failures: 7, code: 'http_5xx' } },
+  { key: 'youtube-relay', label: 'Home relay (YouTube)', kind: 'relay', platforms: ['youtube'], role: 'Shorts from a home IP (details on the Limits tab)', has_probe: true, state: 'off', off_reason: 'relay_disabled', traffic: { ok: 30 }, probe: { ok: 0.6 } },
+  // Aged out: the last failure is 3 days old and nothing ran since.
+  { key: 'apify-youtube', label: 'Apify Shorts', kind: 'paid', platforms: ['youtube'], role: 'Shorts after the home relay or yt-dlp (special download)', fallback: true, state: 'stale', traffic: { failed: 72, failures: 2, code: 'timeout' } },
+  { key: 'youtube-post', label: 'Community posts', kind: 'free', platforms: ['youtube'], role: 'YouTube community posts (page data)', state: 'unknown' },
+  // Fresh check OK with an aged-out traffic failure: the row is OK.
+  { key: 'vxreddit', label: 'vxreddit', kind: 'free', host: 'vxreddit.com', platforms: ['reddit'], role: 'Videos, galleries, GIFs, text and link posts (first step)', has_probe: true, state: 'ok', traffic: { ok: 40, failed: 30, failures: 1, code: 'transport' }, probe: { ok: 0.3 } },
+  { key: 'reddit-proxy', label: 'Reddit API via proxies', kind: 'proxy', platforms: ['reddit'], role: 'Reddit JSON through the proxy pool after vxreddit', fallback: true, state: 'off', off_reason: 'proxies_off' },
+  // Check failing, traffic OK; the probe was never OK.
+  { key: 'facebed', label: 'facebed', kind: 'free', host: 'facebed.com', platforms: ['facebook'], role: 'Photos and text posts; video after yt-dlp', has_probe: true, state: 'degraded', traffic: { ok: 1 }, probe: { failed: 0.2, failures: 1, code: 'http_429' } },
+  { key: '9gag-api', label: '9GAG API helper', kind: 'free', platforms: ['9gag'], role: 'Photos and articles after yt-dlp', fallback: true, state: 'off', off_reason: 'platform_off', traffic: { ok: 50, failed: 49, failures: 1, code: 'http_4xx' } },
+  { key: 'threads-embed', label: 'Threads embed', kind: 'free', platforms: ['threads'], role: 'Posts from Meta’s embed page (first step)', state: 'ok', traffic: { ok: 2, failed: 9, failures: 0, code: 'parse' } },
+  { key: 'vxthreads', label: 'vxthreads', kind: 'free', platforms: ['threads'], role: 'Posts from the mirror after the embed fails', fallback: true, state: 'idle' },
+  // A probe-only row, down at its own threshold of 1.
+  { key: 'proxy-pool', label: 'Proxy pool', kind: 'proxy', platforms: ['instagram', 'tiktok', 'twitter', 'reddit', 'facebook', '9gag'], role: 'yt-dlp retries and the Reddit API through YTDLP_PROXIES', has_traffic: false, has_probe: true, state: 'down', probe: { failed: 0.4, since: 1.4, failures: 2, threshold: 1, code: 'http_4xx' } },
+];
+
+function servicesComponent(mode: Mode): PublishedComponent<ServicesStatus> | null {
+  const isStale = (mode === 'stale');
+  const data: ServicesStatus = {
+    version: 1,
+    started_at: hoursAgo(26),
+    computed_at: isStale ? hoursAgo(2) : new Date().toISOString(),
+    restored_from: hoursAgo(26.1),
+    services: SERVICE_FIXTURES.map(serviceRow),
+  };
+  const result = (mode === 'empty') ? null : { data, updated_at: data.computed_at, is_stale: isStale };
+
+  return result;
+}
+
+function platforms(days: number, empty: boolean, mode: Mode): PlatformsResponse {
   const random = seeded(11);
   const dayList = daysBack(days);
   const daily = dayList.map((day, index) => {
@@ -255,6 +353,7 @@ function platforms(days: number, empty: boolean): PlatformsResponse {
       { platform: '9gag', last_download_at: hoursAgo(130), downloads_24h: 0, downloads_7d: 1, avg_daily_prev_28d: 0.4, avg_daily_7d: 0.1, change_pct: -75, status: 'ok' },
       { platform: 'unknown', last_download_at: hoursAgo(300), downloads_24h: 0, downloads_7d: 0, avg_daily_prev_28d: 0, avg_daily_7d: 0, change_pct: null, status: 'ok' },
     ],
+    services: servicesComponent(mode),
   };
 }
 
@@ -378,7 +477,7 @@ export async function mockResponse(endpoint: string, query: Record<string, numbe
   const days = query.days ?? 90;
   const result = ({
     overview: () => overview(days, empty),
-    platforms: () => platforms(days, empty),
+    platforms: () => platforms(days, empty, mode),
     chats: () => chats(days, query.limit ?? 20, empty),
     money: () => money(query.months ?? 12, empty),
   } as Record<string, () => unknown>)[endpoint];

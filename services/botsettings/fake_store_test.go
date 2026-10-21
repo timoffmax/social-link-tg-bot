@@ -40,6 +40,11 @@ type fakeStore struct {
 	// context is done, like a database that accepts the connection but
 	// never answers.
 	isHanging bool
+	// isStatusHanging makes LoadStatus block until its context is done;
+	// statusErr fails it; statusLoads records the components read.
+	isStatusHanging bool
+	statusErr       error
+	statusLoads     []string
 }
 
 func newFakeStore() *fakeStore {
@@ -283,6 +288,32 @@ func (s *fakeStore) PublishStatus(ctx context.Context, component string, data js
 	}
 
 	return err
+}
+
+func (s *fakeStore) LoadStatus(ctx context.Context, component string) (json.RawMessage, bool, error) {
+	s.mu.Lock()
+	s.statusLoads = append(s.statusLoads, component)
+	isHanging := s.isStatusHanging
+	err := s.statusErr
+	data, isFound := s.statuses[component]
+	s.mu.Unlock()
+
+	if isHanging == true {
+		<-ctx.Done()
+		err = ctx.Err()
+	}
+
+	return data, isFound, err
+}
+
+// loadedStatuses returns the components LoadStatus was asked for.
+func (s *fakeStore) loadedStatuses() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	result := append([]string{}, s.statusLoads...)
+
+	return result
 }
 
 // queue adds a request: value "" is a reset.

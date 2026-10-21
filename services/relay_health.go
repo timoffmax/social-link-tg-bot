@@ -28,7 +28,7 @@ const (
 	relayHealthBodyLimit = 16 * 1024
 
 	relayBreakerOpen   = "open"
-	relayProbeSuffix   = "-probe"
+	relayProbeSuffix   = serviceProbeSuffix
 	relayHealthLogName = "relay-probe"
 )
 

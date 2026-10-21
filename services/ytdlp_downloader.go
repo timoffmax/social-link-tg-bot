@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/md5"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -727,6 +728,7 @@ func (yd *YtDlpDownloader) DownloadTwitterMedia(url string) ([]*MediaInfo, error
 
 	// Step 1: Get full text from FxTwitter API (via TwitterExtractor)
 	twitterExtractor := NewTwitterExtractor(yd.WorkingDir, yd.TempDir)
+	twitterExtractor.reportsFxTwitter = true
 	var fullCaption string
 
 	textResult, textErr := twitterExtractor.ExtractTweet(url)
@@ -877,12 +879,18 @@ func (yd *YtDlpDownloader) fetch9GAGPostViaAPI(ctx context.Context, postID, orig
 	// Find the Python interpreter that has curl_cffi (from yt-dlp's pipx venv)
 	pythonPath := yd.find9GAGPython()
 	if pythonPath == "" {
-		return nil, fmt.Errorf("no Python with curl_cffi found")
+		setupErr := fmt.Errorf("no Python with curl_cffi found")
+		reportNinegagHelper(ninegagHelperCall{setupErr: setupErr})
+
+		return nil, setupErr
 	}
 
 	scriptPath := yd.getFilePath("scripts/9gag_fetch.py")
 	if _, err := os.Stat(scriptPath); err != nil {
-		return nil, fmt.Errorf("9gag_fetch.py not found at %s", scriptPath)
+		setupErr := fmt.Errorf("9gag_fetch.py not found at %s", scriptPath)
+		reportNinegagHelper(ninegagHelperCall{setupErr: setupErr})
+
+		return nil, setupErr
 	}
 
 	helperCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
@@ -890,22 +898,163 @@ func (yd *YtDlpDownloader) fetch9GAGPostViaAPI(ctx context.Context, postID, orig
 
 	cmd := exec.CommandContext(helperCtx, pythonPath, scriptPath, postID)
 	output, err := cmd.Output()
+	helperCtxErr := helperCtx.Err()
+	callerErr := ctx.Err()
+	isHelperTimeout := errors.Is(helperCtxErr, context.DeadlineExceeded)
+	post, parseErr := parseNinegagPost(output)
+	call := ninegagHelperCall{
+		callerErr:       callerErr,
+		isHelperTimeout: isHelperTimeout,
+		execErr:         err,
+		post:            post,
+		parseErr:        parseErr,
+	}
+	// Classified before build9GAGPost downloads: a 9cache failure is not
+	// the helper's.
+	reportNinegagHelper(call)
+
+	var result []*MediaInfo
+	resultErr := parseErr
+
 	if err != nil {
-		return nil, fmt.Errorf("9gag_fetch.py failed: %v", err)
+		resultErr = fmt.Errorf(ninegagHelperFailedDetail, err)
 	}
 
-	result, err := yd.build9GAGPost(ctx, output, originalURL, prefix)
+	if resultErr == nil {
+		result, resultErr = yd.build9GAGPost(ctx, post, originalURL, prefix)
+	}
 
-	return result, err
+	return result, resultErr
+}
+
+// ninegagAPIServiceName is the outage-tracker key of the 9GAG API helper.
+const ninegagAPIServiceName = "9gag-api"
+
+// Helper error texts: a missing post and a missing curl_cffi (the helper can
+// not run); neither is counted.
+const (
+	ninegagHelperPostNotFound = "Post not found in response"
+	ninegagHelperHTTPNotFound = "HTTP 404"
+	ninegagHelperNoCurlCffi   = "curl_cffi not installed"
+)
+
+// ninegagHelperFailedDetail is the error text of a helper that did not exit
+// cleanly.
+const ninegagHelperFailedDetail = "9gag_fetch.py failed: %v"
+
+// ninegagHelperCall is one run of the 9GAG API helper, from its setup check
+// to its parsed output.
+type ninegagHelperCall struct {
+	setupErr        error
+	callerErr       error
+	isHelperTimeout bool
+	execErr         error
+	post            ninegagPost
+	parseErr        error
+}
+
+// classifyNinegagHelper tells the tracker about one helper run; a local setup
+// problem or the caller's deadline records nothing.
+func classifyNinegagHelper(call ninegagHelperCall) (serviceOutcome, string) {
+	outcome := serviceOutcomeSuccess
+	code := ""
+	hasHelperError := (call.parseErr != nil) && (call.post.Error != "")
+	isNotJSON := (call.parseErr != nil) && (call.post.Error == "")
+
+	if isNotJSON == true {
+		outcome = serviceOutcomeFailure
+		code = ServiceErrorParse
+	}
+
+	if call.execErr != nil {
+		outcome = serviceOutcomeFailure
+		code = ServiceErrorOther
+	}
+
+	if hasHelperError == true {
+		outcome, code = classifyNinegagHelperError(call.post.Error)
+	}
+
+	if call.isHelperTimeout == true {
+		outcome = serviceOutcomeFailure
+		code = ServiceErrorTimeout
+	}
+
+	isNotCounted := (call.callerErr != nil) || (isNinegagSetupProblem(call) == true)
+
+	if isNotCounted == true {
+		outcome = serviceOutcomeNone
+		code = ""
+	}
+
+	return outcome, code
+}
+
+// isNinegagSetupProblem reports a helper that can not run on this server:
+// no Python with curl_cffi, no script, or the helper's own curl_cffi error.
+func isNinegagSetupProblem(call ninegagHelperCall) bool {
+	isNoCurlCffi := strings.Contains(call.post.Error, ninegagHelperNoCurlCffi)
+	result := (call.setupErr != nil) || (isNoCurlCffi == true)
+
+	return result
+}
+
+// classifyNinegagHelperError classifies the helper's own error text: a
+// missing post is not counted, any other text goes by classifyServiceDetail.
+func classifyNinegagHelperError(text string) (serviceOutcome, string) {
+	outcome := serviceOutcomeFailure
+	code := classifyServiceDetail(text)
+	isMissingPost := (text == ninegagHelperPostNotFound) || (text == ninegagHelperHTTPNotFound)
+
+	if isMissingPost == true {
+		outcome = serviceOutcomeNone
+		code = ""
+	}
+
+	return outcome, code
+}
+
+// ninegagHelperDetail is the alert's detail of a helper run: the setup
+// error, else the helper's error text, else the exec or JSON error.
+func ninegagHelperDetail(call ninegagHelperCall) string {
+	result := fmt.Sprintf("%v", call.parseErr)
+	isExecShown := (call.execErr != nil) && (call.post.Error == "")
+
+	if isExecShown == true {
+		result = fmt.Sprintf(ninegagHelperFailedDetail, call.execErr)
+	}
+
+	if call.setupErr != nil {
+		result = fmt.Sprintf("%v", call.setupErr)
+	}
+
+	return result
+}
+
+// ninegagSetupLogged logs the helper's local setup problem once per process.
+var ninegagSetupLogged sync.Once
+
+// reportNinegagHelper feeds one helper run into the outage tracker; a local
+// setup problem is only logged (once), it is not the 9GAG API's outage.
+func reportNinegagHelper(call ninegagHelperCall) {
+	outcome, code := classifyNinegagHelper(call)
+	detail := ninegagHelperDetail(call)
+	reportServiceOutcome(ninegagAPIServiceName, outcome, code, detail)
+
+	if isNinegagSetupProblem(call) == true {
+		ninegagSetupLogged.Do(func() {
+			log.Printf("⚠️ 9GAG API helper can not run on this server (not tracked as an outage): %s", detail)
+		})
+	}
 }
 
 // build9GAGPost downloads what the API post holds: an article's text and
 // files, an Animated post's MP4, or the photo, with the "😂 <title>" caption;
 // the files are named with the download's prefix.
-func (yd *YtDlpDownloader) build9GAGPost(ctx context.Context, output []byte, originalURL string, prefix string) ([]*MediaInfo, error) {
+func (yd *YtDlpDownloader) build9GAGPost(ctx context.Context, post ninegagPost, originalURL string, prefix string) ([]*MediaInfo, error) {
 	var result []*MediaInfo
-	post, err := parseNinegagPost(output)
-	isArticle := (err == nil) && (isNinegagArticle(post) == true)
+	var err error
+	isArticle := isNinegagArticle(post)
 
 	if isArticle == true {
 		result, err = yd.download9GAGArticle(ctx, post, originalURL, prefix)

@@ -400,14 +400,6 @@ export function usageAge(at: string | null, now: number): string {
   return (found === undefined) ? `read ${Math.round(elapsed / DAY_MS)} days ago` : found[1];
 }
 
-/** Minutes since a timestamp, rounded. */
-export function minutesSince(at: string, now: number): number {
-  const elapsed = now - Date.parse(at);
-  const minutes = Math.round(elapsed / MINUTE_MS);
-
-  return Math.max(0, minutes);
-}
-
 export type RelayCardKind = 'waiting' | 'not_configured' | 'stale' | 'reachable' | 'unreachable';
 
 export interface RelayCardState {

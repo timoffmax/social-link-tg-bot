@@ -23,6 +23,76 @@ import (
 // kkTikTokServiceName is the outage-tracker key for the kktiktok redirector.
 const kkTikTokServiceName = "kktiktok"
 
+// tikwmServiceName is the outage-tracker key of the tikwm.com API.
+const tikwmServiceName = "tikwm"
+
+// tikwmAPIURL is the tikwm.com endpoint that resolves a TikTok link.
+const tikwmAPIURL = "https://www.tikwm.com/api/"
+
+// tikwm error fragments (lower case): its rate limit, and the free per-second
+// limit the bot's own concurrent links hit while tikwm is fine.
+const (
+	tikwmLimitFragment     = "limit"
+	tikwmPerSecondFragment = "/second"
+)
+
+// tikwmCall is what one tikwm API call got, up to the step that failed.
+type tikwmCall struct {
+	requestErr error
+	statusCode int
+	decodeErr  error
+	apiCode    int
+	message    string
+}
+
+// classifyTikwmCall tells the tracker about one call; the per-second limit
+// and other API errors (a deleted or private video) are not counted.
+func classifyTikwmCall(call tikwmCall) (serviceOutcome, string) {
+	outcome := serviceOutcomeSuccess
+	code := ""
+	isAnswered := (call.requestErr == nil)
+	isOK := (isAnswered == true) && (call.statusCode == http.StatusOK)
+	isDecoded := (isOK == true) && (call.decodeErr == nil)
+	isAPIError := (isDecoded == true) && (call.apiCode != 0)
+	lowered := strings.ToLower(call.message)
+	isPerSecond := strings.Contains(lowered, tikwmPerSecondFragment)
+	isLimited := (isAPIError == true) && (strings.Contains(lowered, tikwmLimitFragment) == true) && (isPerSecond == false)
+
+	if isAnswered == false {
+		outcome = serviceOutcomeFailure
+		code = classifyServiceErr(call.requestErr)
+	}
+
+	if (isAnswered == true) && (isOK == false) {
+		outcome = serviceOutcomeFailure
+		code = classifyServiceStatus(call.statusCode)
+	}
+
+	if (isOK == true) && (isDecoded == false) {
+		outcome = serviceOutcomeFailure
+		code = ServiceErrorParse
+	}
+
+	if isAPIError == true {
+		outcome = serviceOutcomeNone
+	}
+
+	if isLimited == true {
+		outcome = serviceOutcomeFailure
+		code = ServiceErrorHTTP429
+	}
+
+	return outcome, code
+}
+
+// reportTikwmCall feeds one tikwm call into the outage tracker; err is the
+// alert's detail.
+func reportTikwmCall(call tikwmCall, err error) {
+	outcome, code := classifyTikwmCall(call)
+	detail := fmt.Sprintf("%v", err)
+	reportServiceOutcome(tikwmServiceName, outcome, code, detail)
+}
+
 // tikwmResponse represents the tikwm.com API response
 type tikwmResponse struct {
 	Code int    `json:"code"`
@@ -285,26 +355,39 @@ func (te *TikTokExtractor) extractViaSlideshowAPI(tiktokURL string, postID strin
 func (te *TikTokExtractor) extractViaTikWMAPI(tiktokURL string, postID string, username string) ([]*MediaInfo, error) {
 	log.Printf("🔄 Trying tikwm.com API extraction for post %s by @%s", postID, username)
 
-	resp, err := te.client.PostForm("https://www.tikwm.com/api/", url.Values{
+	resp, err := te.client.PostForm(tikwmAPIURL, url.Values{
 		"url": {tiktokURL},
 	})
 	if err != nil {
-		return nil, fmt.Errorf("tikwm API request failed: %v", err)
+		requestErr := fmt.Errorf("tikwm API request failed: %v", err)
+		reportTikwmCall(tikwmCall{requestErr: err}, requestErr)
+
+		return nil, requestErr
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("tikwm API HTTP %d", resp.StatusCode)
+		statusErr := fmt.Errorf("tikwm API HTTP %d", resp.StatusCode)
+		reportTikwmCall(tikwmCall{statusCode: resp.StatusCode}, statusErr)
+
+		return nil, statusErr
 	}
 
 	var apiResp tikwmResponse
 
 	if err := json.NewDecoder(resp.Body).Decode(&apiResp); err != nil {
-		return nil, fmt.Errorf("failed to decode tikwm response: %v", err)
+		decodeErr := fmt.Errorf("failed to decode tikwm response: %v", err)
+		reportTikwmCall(tikwmCall{statusCode: resp.StatusCode, decodeErr: err}, decodeErr)
+
+		return nil, decodeErr
 	}
 
+	apiErr := fmt.Errorf("tikwm API error: %s", apiResp.Msg)
+	// Reported before any media download: a CDN failure is not tikwm's.
+	reportTikwmCall(tikwmCall{statusCode: resp.StatusCode, apiCode: apiResp.Code, message: apiResp.Msg}, apiErr)
+
 	if apiResp.Code != 0 {
-		return nil, fmt.Errorf("tikwm API error: %s", apiResp.Msg)
+		return nil, apiErr
 	}
 
 	// Build caption

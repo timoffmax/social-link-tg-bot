@@ -22,6 +22,9 @@ const monthFormat = new Intl.DateTimeFormat(LOCALE, { month: 'short', timeZone: 
 const fullMonthFormat = new Intl.DateTimeFormat(LOCALE, { month: 'long', year: 'numeric', timeZone: 'UTC' });
 const relativeFormat = new Intl.RelativeTimeFormat(LOCALE, { numeric: 'auto', style: 'short' });
 
+/** The platforms in the bot's own order (its settings and /start list). */
+export const PLATFORM_ORDER = ['instagram', 'tiktok', 'twitter', 'youtube', 'reddit', 'facebook', '9gag', 'threads'];
+
 const PLATFORM_LABELS: Record<string, string> = {
   tiktok: 'TikTok',
   instagram: 'Instagram',
@@ -186,6 +189,14 @@ export function formatCount(value: number, one: string, many: string): string {
   const word = (pluralRules.select(value) === 'one') ? one : many;
 
   return `${integerFormat.format(value)} ${word}`;
+}
+
+/** Minutes since a timestamp, rounded. */
+export function minutesSince(at: string, now: number): number {
+  const elapsed = now - Date.parse(at);
+  const minutes = Math.round(elapsed / MINUTE_MS);
+
+  return Math.max(0, minutes);
 }
 
 export function platformLabel(platform: string): string {

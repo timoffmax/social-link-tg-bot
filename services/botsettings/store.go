@@ -114,6 +114,9 @@ type Store interface {
 	DecideApproval(ctx context.Context, requestID int64, isApprove bool, decide func(ChangeRequest) Decision) (ApprovalOutcome, error)
 	// PublishStatus upserts one bot_runtime_status component.
 	PublishStatus(ctx context.Context, component string, data json.RawMessage) error
+	// LoadStatus reads one bot_runtime_status component; false when it has
+	// no row.
+	LoadStatus(ctx context.Context, component string) (json.RawMessage, bool, error)
 }
 
 // pgStore is the PostgreSQL Store.
@@ -715,4 +718,27 @@ func (s pgStore) PublishStatus(ctx context.Context, component string, data json.
 	_, err := s.db.ExecContext(ctx, publishStatusQuery, component, value)
 
 	return err
+}
+
+const loadStatusQuery = `SELECT data FROM bot_runtime_status WHERE component = $1`
+
+// LoadStatus reads one bot_runtime_status component; false when it has no
+// row.
+func (s pgStore) LoadStatus(ctx context.Context, component string) (json.RawMessage, bool, error) {
+	var data []byte
+	isFound := false
+	row := s.db.QueryRowContext(ctx, loadStatusQuery, component)
+	err := row.Scan(&data)
+
+	if err == nil {
+		isFound = true
+	}
+
+	if errors.Is(err, sql.ErrNoRows) == true {
+		err = nil
+	}
+
+	result := json.RawMessage(data)
+
+	return result, isFound, err
 }

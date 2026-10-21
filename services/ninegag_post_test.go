@@ -207,9 +207,9 @@ func serveNinegagCDN(t *testing.T) (*YtDlpDownloader, *[]string) {
 
 func TestBuild9GAGPostSendsTheArticleTextThenItsFiles(t *testing.T) {
 	downloader, paths := serveNinegagCDN(t)
-	raw := readNinegagFixture(t, "ninegag_article_video.json")
+	post := parseNinegagFixture(t, "ninegag_article_video.json")
 
-	media, err := downloader.build9GAGPost(context.Background(), raw, ninegagTestVideoArticleURL, ninegagTestPrefix)
+	media, err := downloader.build9GAGPost(context.Background(), post, ninegagTestVideoArticleURL, ninegagTestPrefix)
 
 	if (err != nil) || (len(media) != 7) {
 		t.Fatalf("want text + 6 files, got %d %v", len(media), err)
@@ -231,8 +231,9 @@ func TestBuild9GAGPostSendsTheArticleTextThenItsFiles(t *testing.T) {
 func TestBuild9GAGPostSendsAPhotoPostWithItsTitle(t *testing.T) {
 	downloader, _ := serveNinegagCDN(t)
 	raw := []byte(`{"id":"aryPZ7d","title":"I am the pillow now","type":"Photo","images":{"image700":{"url":"` + ninegagTestCDN + `/photo/aryPZ7d_700b.jpg"},"image460":{"url":"` + ninegagTestCDN + `/photo/aryPZ7d_460s.jpg"}}}`)
+	post, _ := parseNinegagPost(raw)
 
-	media, err := downloader.build9GAGPost(context.Background(), raw, "https://9gag.com/gag/aryPZ7d", ninegagTestPrefix)
+	media, err := downloader.build9GAGPost(context.Background(), post, "https://9gag.com/gag/aryPZ7d", ninegagTestPrefix)
 
 	if (err != nil) || (len(media) != 1) || (media[0].Type != MediaTypePhoto) || (media[0].Caption != "😂 I am the pillow now") {
 		t.Fatalf("want 1 photo with the title, got %+v %v", media, err)
@@ -244,16 +245,6 @@ func TestBuild9GAGPostSendsAPhotoPostWithItsTitle(t *testing.T) {
 
 	if filepath.Base(media[0].Filename) != (ninegagTestPrefix + "9gag.jpg") {
 		t.Errorf("want the download's prefix, got %s", media[0].Filename)
-	}
-}
-
-func TestBuild9GAGPostReportsTheHelperError(t *testing.T) {
-	downloader := &YtDlpDownloader{TempDir: t.TempDir()}
-
-	_, err := downloader.build9GAGPost(context.Background(), []byte(`{"error":"HTTP 403"}`), "https://9gag.com/gag/x", ninegagTestPrefix)
-
-	if (err == nil) || (strings.Contains(err.Error(), "HTTP 403") == false) {
-		t.Fatalf("got %v", err)
 	}
 }
 
@@ -305,12 +296,12 @@ func TestBuild9GAGPostStopsTheArticleDownloadsAtTheDeadline(t *testing.T) {
 		case <-time.After(10 * time.Second):
 		}
 	}))
-	raw := readNinegagFixture(t, "ninegag_article_video.json")
+	post := parseNinegagFixture(t, "ninegag_article_video.json")
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 	defer cancel()
 	start := time.Now()
 
-	media, err := downloader.build9GAGPost(ctx, raw, ninegagTestVideoArticleURL, ninegagTestPrefix)
+	media, err := downloader.build9GAGPost(ctx, post, ninegagTestVideoArticleURL, ninegagTestPrefix)
 
 	if elapsed := time.Since(start); elapsed > (2 * time.Second) {
 		t.Errorf("took %v, want the deadline to stop it", elapsed)

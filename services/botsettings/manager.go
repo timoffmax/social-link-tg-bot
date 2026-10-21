@@ -2,6 +2,7 @@ package botsettings
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"sort"
@@ -21,6 +22,9 @@ const (
 	// startupTimeout bounds the start's settings read and its first publish;
 	// a read that takes longer counts as the database being unavailable.
 	startupTimeout = 5 * time.Second
+	// servicesSeedTimeout bounds the start's read of the last published
+	// services health.
+	servicesSeedTimeout = 2 * time.Second
 )
 
 // Owner alerts of the settings goroutine.
@@ -73,6 +77,12 @@ type Options struct {
 	// RelayStatus returns the home relay's last computed state; it must not
 	// block (no I/O). nil, or a nil state, publishes none.
 	RelayStatus func() any
+	// ServicesStatus returns the external services' health; it must not
+	// block (no I/O). nil, or a nil state, publishes none.
+	ServicesStatus func() any
+	// SeedServices restores the services' health from the last published
+	// 'services' row at start, before the first publish; nil restores none.
+	SeedServices func(data json.RawMessage) error
 }
 
 // Manager is the settings goroutine. Load runs once at start; Run is the
@@ -107,10 +117,18 @@ type Manager struct {
 	// paidStatus and relayStatus read the states other goroutines compute.
 	paidStatus  func() any
 	relayStatus func() any
+	// servicesStatus reads the services' health; seedServicesHealth restores
+	// it at start.
+	servicesStatus     func() any
+	seedServicesHealth func(data json.RawMessage) error
+	// isServicesRowRead is set once the stored services row was read (or
+	// found missing); until then the services component is not published.
+	isServicesRowRead bool
 
 	requestEvery   time.Duration
 	reloadEvery    time.Duration
 	startupTimeout time.Duration
+	seedTimeout    time.Duration
 	// afterReloadRead runs between a reload's read and its swap (tests).
 	afterReloadRead func()
 }
@@ -150,6 +168,7 @@ func New(options Options) *Manager {
 		reloadEvery:  reloadInterval,
 
 		startupTimeout: startupTimeout,
+		seedTimeout:    servicesSeedTimeout,
 
 		applyRequests: options.ApplyRequests,
 		digest:        newChangeDigest(),
@@ -158,6 +177,9 @@ func New(options Options) *Manager {
 		tapWait:       tapWait,
 		paidStatus:    options.PaidStatus,
 		relayStatus:   options.RelayStatus,
+
+		servicesStatus:     options.ServicesStatus,
+		seedServicesHealth: options.SeedServices,
 	}
 
 	return result
@@ -200,6 +222,7 @@ func (m *Manager) loadFromStore(ctx context.Context) {
 		m.swap(values, originDB)
 		m.saveCache(values)
 		log.Printf("⚙️ Settings loaded: %d owner-set value(s) from the database", len(values))
+		m.seedServicesIfDue(ctx)
 	}
 
 	if err != nil {
@@ -209,6 +232,49 @@ func (m *Manager) loadFromStore(ctx context.Context) {
 	publishCtx, cancelPublish := context.WithTimeout(ctx, m.startupTimeout)
 	m.publishAll(publishCtx)
 	cancelPublish()
+}
+
+// seedServicesIfDue restores the services' health from its last published
+// row until a read of that row succeeded; reload retries a failed one.
+func (m *Manager) seedServicesIfDue(ctx context.Context) {
+	isDue := (m.seedServicesHealth != nil) && (m.isServicesRowRead == false)
+
+	if isDue == true {
+		m.seedServices(ctx)
+	}
+}
+
+// seedServices reads the stored services row within seedTimeout and seeds
+// it; a failed read or a malformed row is logged, never alerted.
+func (m *Manager) seedServices(ctx context.Context) {
+	seedCtx, cancel := context.WithTimeout(ctx, m.seedTimeout)
+	data, isFound, err := m.store.LoadStatus(seedCtx, ComponentServices)
+	cancel()
+	m.isServicesRowRead = (err == nil)
+
+	if (err == nil) && (isFound == true) {
+		err = m.seedServicesHealth(data)
+	}
+
+	if (err != nil) && (m.isServicesRowRead == false) {
+		log.Printf("⚠️ Could not read the services' health, retrying at the next reload: %v", err)
+	}
+
+	if (err != nil) && (m.isServicesRowRead == true) {
+		log.Printf("⚠️ Could not restore the services' health, starting empty: %v", err)
+	}
+
+	if (err == nil) && (isFound == true) {
+		log.Println("⚙️ Services' health restored from the last published status")
+	}
+}
+
+// isServicesPublishable reports whether the services component may be
+// published: no seeding configured, or the stored row was read.
+func (m *Manager) isServicesPublishable() bool {
+	result := (m.seedServicesHealth == nil) || (m.isServicesRowRead == true)
+
+	return result
 }
 
 // loadFromCache uses the cache file after the database failed at start;
@@ -423,9 +489,8 @@ func withoutKey(values []StoredValue, key string) []StoredValue {
 	return result
 }
 
-// reload re-reads bot_settings (picking up manual psql edits) and publishes
-// the heartbeat. A failed read keeps the current snapshot. The cache file is
-// written only when the values changed.
+// reload re-reads bot_settings (manual psql edits too), retries a services
+// seed still due and publishes the heartbeat; a failed read keeps the snapshot.
 func (m *Manager) reload(ctx context.Context) {
 	values, err := m.store.LoadSettings(ctx)
 	m.recordDBResult(err, "reload settings")
@@ -441,6 +506,8 @@ func (m *Manager) reload(ctx context.Context) {
 		if isChanged == true {
 			m.saveCache(values)
 		}
+
+		m.seedServicesIfDue(ctx)
 	}
 
 	m.publishHeartbeat(ctx)

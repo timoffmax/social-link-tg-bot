@@ -14,6 +14,7 @@ const (
 	limitAuditPrefix  = "special_limit:"
 	componentPaid     = "paid"
 	componentRelay    = "relay"
+	componentServices = "services"
 	limitNearRatio    = 0.8
 	defaultLimitRows  = 300
 	maxLimitRows      = 1000

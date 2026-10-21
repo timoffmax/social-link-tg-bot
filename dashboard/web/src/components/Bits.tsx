@@ -1,6 +1,6 @@
 import { useId, useState, type ReactNode } from 'react';
-import type { HealthStatus } from '../api';
-import { formatCompact, isLongText } from '../format';
+import type { HealthStatus, Timestamp } from '../api';
+import { formatCompact, isLongText, minutesSince } from '../format';
 
 interface StatTileProps {
   label: string;
@@ -53,6 +53,23 @@ export function StatusBadge({ status }: { status: HealthStatus }) {
       <span aria-hidden="true" className="badge__icon">{text.icon}</span>
       {text.label}
     </span>
+  );
+}
+
+export type Tone = 'ok' | 'warning' | 'danger' | 'muted';
+
+export function StateBadge({ tone, text }: { tone: Tone; text: string }) {
+  return <span className={`state-badge state-badge--${tone}`}>{text}</span>;
+}
+
+/** The "hasn't reported" notice of a stale bot_runtime_status component. */
+export function StaleNotice({ updatedAt, now }: { updatedAt: Timestamp; now: number }) {
+  const minutes = minutesSince(updatedAt, now);
+
+  return (
+    <div className="notice notice--warning" role="status">
+      <p>The bot hasn’t reported for {minutes} min: these figures may be old.</p>
+    </div>
   );
 }
 

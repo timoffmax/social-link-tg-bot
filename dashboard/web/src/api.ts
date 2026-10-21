@@ -81,6 +81,59 @@ export interface PlatformsResponse extends ResponseMeta {
   daily: PlatformDaily[];
   media_types: MediaTypeRow[];
   health: PlatformHealth[];
+  /** The bot's external services health; null until the bot published it. */
+  services: PublishedComponent<ServicesStatus> | null;
+}
+
+export type ServiceKind = 'free' | 'paid' | 'relay' | 'proxy';
+export type ServiceState = 'ok' | 'degraded' | 'down' | 'stale' | 'idle' | 'unknown' | 'off';
+/** `stale` is for traffic only: a probe signal is never stale. */
+export type ServiceSignalState = 'ok' | 'degraded' | 'down' | 'stale';
+export type ServiceOffReason = 'platform_off' | 'not_configured' | 'not_listed' | 'proxies_off' | 'special_off' | 'relay_disabled' | 'budget_paused';
+export type ServiceErrorCode = 'timeout' | 'http_4xx' | 'http_5xx' | 'http_429' | 'transport' | 'parse' | 'wrong_content' | 'not_configured' | 'other';
+
+/** One signal of a service (its traffic or its hourly probe). */
+export interface ServiceSignal {
+  state: ServiceSignalState;
+  last_success_at: Timestamp | null;
+  last_failure_at: Timestamp | null;
+  /** First failure of the current streak; null while consecutive_failures is 0. */
+  failing_since: Timestamp | null;
+  consecutive_failures: number;
+  threshold: number;
+  /** The code of the last failure, kept after a success. */
+  last_error_code: ServiceErrorCode | null;
+}
+
+/** One external service as the bot sees it; the bot computes every state. */
+export interface ServiceRow {
+  key: string;
+  label: string;
+  kind: ServiceKind;
+  /** Only for the configurable free mirrors. */
+  host: string | null;
+  platforms: string[];
+  role: string;
+  /** Runs only after an earlier step fails, or only for a rare kind of link. */
+  fallback: boolean;
+  has_traffic: boolean;
+  has_probe: boolean;
+  state: ServiceState;
+  /** Set exactly when state is off. */
+  off_reason: ServiceOffReason | null;
+  traffic: ServiceSignal | null;
+  probe: ServiceSignal | null;
+}
+
+/** The bot's `services` component. */
+export interface ServicesStatus {
+  version: number;
+  started_at: Timestamp;
+  computed_at: Timestamp;
+  /** computed_at of the row seeded at startup; null when nothing was seeded. */
+  restored_from: Timestamp | null;
+  /** In the bot's catalog order. */
+  services: ServiceRow[];
 }
 
 export interface TopGroup {

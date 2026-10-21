@@ -122,11 +122,12 @@ type PlatformHealth struct {
 // Platforms is the /api/platforms answer.
 type Platforms struct {
 	Meta
-	Days       int              `json:"days"`
-	Platforms  []string         `json:"platforms"`
-	Daily      []PlatformDay    `json:"daily"`
-	MediaTypes []MediaTypeSplit `json:"media_types"`
-	Health     []PlatformHealth `json:"health"`
+	Days       int                 `json:"days"`
+	Platforms  []string            `json:"platforms"`
+	Daily      []PlatformDay       `json:"daily"`
+	MediaTypes []MediaTypeSplit    `json:"media_types"`
+	Health     []PlatformHealth    `json:"health"`
+	Services   *PublishedComponent `json:"services"`
 }
 
 // TopGroup is a group chat ranked by downloads.

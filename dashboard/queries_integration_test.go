@@ -376,6 +376,50 @@ func TestIntegrationPlatforms(t *testing.T) {
 	})
 }
 
+func TestIntegrationPlatformsServices(t *testing.T) {
+	d := openIntegrationDB(t)
+	d.insertMedia(t, media{userID: 1, chatID: 1, platform: "tiktok", at: ago(time.Hour)})
+	store := d.store(kyiv)
+	ctx := context.Background()
+	without, err := store.Platforms(ctx, 7)
+
+	if (err != nil) || (without.Services != nil) {
+		t.Fatalf("without the row: services = %+v, %v", without.Services, err)
+	}
+
+	data := `{"version": 1, "services": [{"key": "tikwm", "state": "idle"}]}`
+	d.exec(t, `INSERT INTO bot_runtime_status (component, data, updated_at) VALUES ('services', $1, $2)`, data, integrationNow.Add(-heartbeatStaleAfter))
+	fresh, err := store.Platforms(ctx, 7)
+
+	if (err != nil) || (fresh.Services == nil) || (fresh.Services.IsStale == true) || (string(fresh.Services.Data) != data) {
+		t.Fatalf("fresh: services = %+v, %v", fresh.Services, err)
+	}
+
+	assertEqual(t, "updated at", fresh.Services.UpdatedAt, "2026-10-15T11:57:00Z")
+	fresh.Services = nil
+	assertEqual(t, "rest unchanged", fresh, without)
+	d.exec(t, `UPDATE bot_runtime_status SET updated_at = $1 WHERE component = 'services'`, integrationNow.Add(-heartbeatStaleAfter-time.Second))
+	old, err := store.Platforms(ctx, 7)
+
+	if (err != nil) || (old.Services == nil) || (old.Services.IsStale == false) {
+		t.Errorf("old: services = %+v, %v", old.Services, err)
+	}
+}
+
+func TestIntegrationPlatformsLoadWithoutTheStatusTable(t *testing.T) {
+	d := openIntegrationDB(t)
+	d.insertMedia(t, media{userID: 1, chatID: 1, platform: "tiktok", at: ago(time.Hour)})
+	d.exec(t, `DROP TABLE bot_runtime_status CASCADE`)
+
+	got, err := d.store(kyiv).Platforms(context.Background(), 7)
+
+	if (err != nil) || (got.Services != nil) {
+		t.Fatalf("services = %+v, %v", got.Services, err)
+	}
+
+	assertEqual(t, "platforms", got.Platforms, []string{"tiktok"})
+}
+
 func TestIntegrationChats(t *testing.T) {
 	d := openIntegrationDB(t)
 	d.insertMedia(t,

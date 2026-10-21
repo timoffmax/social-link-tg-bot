@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"html"
 	"net/http"
@@ -58,6 +59,10 @@ const (
 	threadsBodyMarker  = `class="BodyTextContainer">`
 	threadsQuoteMarker = `class="QuotePostContainer"`
 	threadsDateMarker  = `class="PostDateContainer"`
+
+	// threadsEmbedErrorMarker is Meta's "Thread not available" block, shown
+	// for a deleted, private or mistyped post.
+	threadsEmbedErrorMarker = `class="EmbedError"`
 )
 
 var (
@@ -87,15 +92,90 @@ var (
 
 	// threadsMetaPattern captures og:/twitter: meta tags of the vxthreads page.
 	threadsMetaPattern = regexp.MustCompile(`<meta (?:property|name)="((?:og|twitter):[a-z:_]+)" content="([^"]*)"`)
+
+	// threadsLoginURLPattern matches the login page vxthreads shows in place
+	// of a post Threads won't give it.
+	threadsLoginURLPattern = regexp.MustCompile(`^https?://(www\.)?threads\.(com|net)/login`)
 )
 
-// threadsPost is a parsed Threads post. Poster is the vxthreads
-// twitter:image, which is the video's poster when the post has a video.
+// Parse errors of a Threads page: an unavailable or quote-only post is not
+// counted as an outage; an empty embed or a login wall on the mirror is.
+var (
+	errThreadsPostUnavailable = errors.New("the Threads post is not available (deleted, private or mistyped)")
+	errThreadsPostEmpty       = errors.New("no text or media in the Threads embed")
+	errThreadsPostQuoteOnly   = errors.New("the Threads post only quotes another post")
+	errThreadsVxLoginPage     = errors.New("vxthreads answered with the Threads login page")
+)
+
+// Outage-tracker keys of the two Threads sources.
+const (
+	threadsEmbedServiceName = "threads-embed"
+	vxthreadsServiceName    = "vxthreads"
+)
+
+// threadsCall is one page read of a Threads source and the code its parse
+// failures carry.
+type threadsCall struct {
+	ctxErr    error
+	fetchErr  error
+	parseErr  error
+	parseCode string
+}
+
+// classifyThreadsCall tells the tracker about one page read; an unavailable
+// post, a 4xx other than 429 and the caller's deadline are not counted.
+func classifyThreadsCall(call threadsCall) (serviceOutcome, string) {
+	outcome := serviceOutcomeSuccess
+	code := ""
+	var statusErr *httpStatusError
+	isFetchFailed := (call.fetchErr != nil)
+	isCallerDone := (isFetchFailed == true) && (call.ctxErr != nil)
+	isStatus := (isFetchFailed == true) && (errors.As(call.fetchErr, &statusErr) == true)
+	isFetchCounted := (isFetchFailed == true) && (isCallerDone == false)
+	isPostMissing := errors.Is(call.parseErr, errThreadsPostUnavailable) || errors.Is(call.parseErr, errThreadsPostQuoteOnly)
+	isParseCounted := (isFetchFailed == false) && (call.parseErr != nil) && (isPostMissing == false)
+
+	if (isFetchCounted == true) && (isStatus == true) {
+		outcome, code = classifyServiceAnswerStatus(statusErr.StatusCode)
+	}
+
+	if (isFetchCounted == true) && (isStatus == false) {
+		outcome = serviceOutcomeFailure
+		code = classifyServiceErr(call.fetchErr)
+	}
+
+	if isCallerDone == true {
+		outcome = serviceOutcomeNone
+	}
+
+	if isParseCounted == true {
+		outcome = serviceOutcomeFailure
+		code = call.parseCode
+	}
+
+	if (isFetchFailed == false) && (isPostMissing == true) {
+		outcome = serviceOutcomeNone
+	}
+
+	return outcome, code
+}
+
+// reportThreadsCall feeds one page read into the outage tracker under
+// service; err is the alert's detail.
+func reportThreadsCall(service string, call threadsCall, err error) {
+	outcome, code := classifyThreadsCall(call)
+	detail := fmt.Sprintf("%v", err)
+	reportServiceOutcome(service, outcome, code, detail)
+}
+
+// threadsPost is a parsed Threads post; Poster is the vxthreads twitter:image
+// (a video's poster).
 type threadsPost struct {
-	Author string
-	Text   string
-	Media  []threadsMedia
-	Poster string
+	Author  string
+	Text    string
+	Media   []threadsMedia
+	Poster  string
+	PageURL string
 }
 
 // threadsMedia is one photo or video of a post.
@@ -147,15 +227,24 @@ func (e *ThreadsExtractor) ExtractEmbed(ctx context.Context, postURL string) ([]
 	var result []*MediaInfo
 	var post threadsPost
 	var page string
+	call := threadsCall{parseCode: ServiceErrorParse}
 	postPath, err := e.resolvePostPath(ctx, postURL)
+	isResolved := (err == nil)
 
 	if err == nil {
 		embedURL := fmt.Sprintf("%s/%s/embed", e.pageBase, postPath)
-		page, err = e.fetch(ctx, embedURL, threadsEmbedUserAgent)
+		page, call.fetchErr = e.fetch(ctx, embedURL, threadsEmbedUserAgent)
+		err = call.fetchErr
 	}
 
 	if err == nil {
-		post, err = parseThreadsEmbed(page)
+		post, call.parseErr = parseThreadsEmbed(page)
+		err = call.parseErr
+	}
+
+	if isResolved == true {
+		call.ctxErr = ctx.Err()
+		reportThreadsCall(threadsEmbedServiceName, call, err)
 	}
 
 	if err == nil {
@@ -182,13 +271,23 @@ func (e *ThreadsExtractor) ExtractVxthreads(ctx context.Context, postURL string)
 		err = nil
 	}
 
+	call := threadsCall{parseCode: ServiceErrorWrongContent}
+	isResolved := (err == nil)
+
 	if err == nil {
 		vxURL := fmt.Sprintf("%s/%s", e.vxBase, postPath)
-		page, err = e.fetch(ctx, vxURL, threadsVxUserAgent)
+		page, call.fetchErr = e.fetch(ctx, vxURL, threadsVxUserAgent)
+		err = call.fetchErr
 	}
 
 	if err == nil {
-		post, err = parseThreadsVxPage(page)
+		post, call.parseErr = parseThreadsVxPage(page)
+		err = call.parseErr
+	}
+
+	if isResolved == true {
+		call.ctxErr = ctx.Err()
+		reportThreadsCall(vxthreadsServiceName, call, err)
 	}
 
 	if err == nil {
@@ -291,6 +390,11 @@ func parseThreadsEmbed(page string) (threadsPost, error) {
 	result := threadsPost{}
 	err := fmt.Errorf("no Threads post in the embed (login wall or changed format)")
 	location := threadsMainPostPattern.FindStringIndex(page)
+	isUnavailable := (location == nil) && (strings.Contains(page, threadsEmbedErrorMarker) == true)
+
+	if isUnavailable == true {
+		err = errThreadsPostUnavailable
+	}
 
 	if location != nil {
 		section := page[location[0]:]
@@ -302,13 +406,28 @@ func parseThreadsEmbed(page string) (threadsPost, error) {
 		err = fmt.Errorf("no author in the Threads embed")
 	}
 
-	// A post with neither text nor media means the format changed: let the
-	// next method try instead of sending only the author.
-	if (err == nil) && (result.Text == "") && (len(result.Media) == 0) {
-		err = fmt.Errorf("no text or media in the Threads embed")
+	// Neither text nor media: the next method tries instead of sending only
+	// the author.
+	isEmpty := (err == nil) && (result.Text == "") && (len(result.Media) == 0)
+
+	if isEmpty == true {
+		err = threadsEmptyPostError(page)
 	}
 
 	return result, err
+}
+
+// threadsEmptyPostError tells a quote-only post from an embed whose markup
+// changed.
+func threadsEmptyPostError(page string) error {
+	result := errThreadsPostEmpty
+	isQuoteOnly := strings.Contains(page, threadsQuoteMarker)
+
+	if isQuoteOnly == true {
+		result = errThreadsPostQuoteOnly
+	}
+
+	return result
 }
 
 // parseThreadsSection reads the post block: author, body text, then media up
@@ -389,8 +508,8 @@ func threadsEmbedMedia(region string) []threadsMedia {
 	return result
 }
 
-// parseThreadsVxPage reads the vxthreads meta tags: twitter:creator as the
-// author, og:description as text, og:video/og:image as media.
+// parseThreadsVxPage reads author, text and media from the vxthreads meta
+// tags, refusing a login page in place of the post.
 func parseThreadsVxPage(page string) (threadsPost, error) {
 	result := threadsPost{}
 	var err error
@@ -404,6 +523,10 @@ func parseThreadsVxPage(page string) (threadsPost, error) {
 
 	if result.Author == "" {
 		err = fmt.Errorf("no Threads post on the vxthreads page")
+	}
+
+	if threadsLoginURLPattern.MatchString(result.PageURL) == true {
+		err = errThreadsVxLoginPage
 	}
 
 	result.Media = dropThreadsPoster(result.Media, result.Poster)
@@ -450,6 +573,10 @@ func applyThreadsVxTag(post threadsPost, name, value string) threadsPost {
 
 	if name == "twitter:image" {
 		result.Poster = value
+	}
+
+	if name == "og:url" {
+		result.PageURL = value
 	}
 
 	if isNewVideo == true {

@@ -14,7 +14,7 @@ import {
   type RelayStatus,
   type SpecialLimitRules,
 } from '../api';
-import { Meter, Segmented, StatTile, TileGroup, type SegmentOption } from '../components/Bits';
+import { Meter, Segmented, StaleNotice, StateBadge, StatTile, TileGroup, type SegmentOption } from '../components/Bits';
 import { DataTable, type Column } from '../components/DataTable';
 import { Panel } from '../components/Panel';
 import { RequestStatus, useRequestFollow } from '../components/RequestFollow';
@@ -41,7 +41,6 @@ import {
   LIMITS_REFRESH_MS,
   limitText,
   matchesFilter,
-  minutesSince,
   NOT_SUPPORTED_TEXT,
   paidStateText,
   paidTone,
@@ -146,23 +145,6 @@ function LimitsBanners({ data }: { data: LimitsResponse }) {
   );
 }
 
-type Tone = 'ok' | 'warning' | 'danger' | 'muted';
-
-function StateBadge({ tone, text }: { tone: Tone; text: string }) {
-  return <span className={`state-badge state-badge--${tone}`}>{text}</span>;
-}
-
-/** The "hasn't reported" notice of a stale component. */
-function StaleNotice({ component, offset }: { component: PublishedComponent<unknown>; offset: number }) {
-  const minutes = minutesSince(component.updated_at, serverNow(offset));
-
-  return (
-    <div className="notice notice--warning" role="status">
-      <p>The bot hasn’t reported for {minutes} min: these figures may be old.</p>
-    </div>
-  );
-}
-
 function PaidServicesPanel({ query, offset }: { query: Query<LimitsResponse>; offset: number }) {
   const paid = query.data?.paid ?? null;
   const data = paid?.data ?? null;
@@ -181,7 +163,7 @@ function PaidServicesPanel({ query, offset }: { query: Query<LimitsResponse>; of
       isEmpty={paid === null}
       emptyText="Waiting for the bot to report its paid services (every minute once updated)."
     >
-      {(paid !== null) && paid.is_stale && <StaleNotice component={paid} offset={offset} />}
+      {(paid !== null) && paid.is_stale && <StaleNotice updatedAt={paid.updated_at} now={now} />}
       {(data !== null) && (
         <>
           {(orderText !== '') && <p className="paid-order">Tried in order: {orderText}</p>}

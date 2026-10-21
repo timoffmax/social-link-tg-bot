@@ -36,6 +36,9 @@ func initSettings(dbErr error) {
 		Approver:      newSettingsApprover(),
 		PaidStatus:    services.CurrentPaidServicesStatus,
 		RelayStatus:   services.CurrentRelayStatus,
+
+		ServicesStatus: services.CurrentServicesStatus,
+		SeedServices:   services.SeedServicesHealth,
 	}
 	settingsManager = botsettings.New(options)
 	ctx := context.Background()

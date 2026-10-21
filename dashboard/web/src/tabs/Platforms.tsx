@@ -1,5 +1,5 @@
-import { getPlatforms, type MediaTypeRow, type PlatformHealth, type PlatformsResponse } from '../api';
-import { StatusBadge } from '../components/Bits';
+import { getPlatforms, type MediaTypeRow, type PlatformHealth, type PlatformsResponse, type ServiceRow } from '../api';
+import { StaleNotice, StateBadge, StatusBadge } from '../components/Bits';
 import { SERIES_1, SERIES_2, SparkArea, StackedBarList, type Series } from '../components/Charts';
 import { DataTable, type Column } from '../components/DataTable';
 import { Panel } from '../components/Panel';
@@ -13,11 +13,28 @@ import {
   formatTimestamp,
   isAllZero,
   platformLabel,
+  PLATFORM_ORDER,
   platformSeries,
   type PlatformSeries,
 } from '../format';
 import { useApi, type Query } from '../hooks';
+import {
+  errorText,
+  groupServices,
+  NO_SIGNAL_TEXT,
+  probeText,
+  serviceBadge,
+  serviceKindLabel,
+  SERVICES_EMPTY_TEXT,
+  servicesSubtitle,
+  SHARED_GROUP,
+  SHARED_GROUP_LABEL,
+  trafficText,
+} from '../services';
 import type { TabProps } from './types';
+
+/** Used only before the first answer, when no rows are shown. */
+const FALLBACK_TIMEZONE = 'UTC';
 
 const MEDIA_SERIES: Series[] = [
   { key: 'video', label: 'Videos', color: SERIES_1 },
@@ -59,12 +76,51 @@ function changeClass(row: PlatformHealth): string {
   return isFlagged ? 'delta delta--down' : 'delta';
 }
 
+function ServiceName({ row }: { row: ServiceRow }) {
+  return (
+    <div>
+      <strong>{row.label}</strong> <span className="chip">{serviceKindLabel(row.kind)}</span>
+      {(row.host !== null) && <div className="paid-card__details">{row.host}</div>}
+    </div>
+  );
+}
+
+function serviceColumns(now: number, timeZone: string): Column<ServiceRow>[] {
+  return [
+    { header: 'Service', cell: (row) => <ServiceName row={row} />, fill: true },
+    { header: 'Used for', cell: (row) => <span className="paid-card__details">{row.role}</span>, detail: true },
+    { header: 'Status', cell: (row) => <ServiceStatus row={row} now={now} /> },
+    { header: 'Traffic', cell: (row) => trafficText(row, now, timeZone), detail: true },
+    { header: 'Hourly check', cell: (row) => probeText(row, now), detail: true },
+    { header: 'Last error', cell: (row) => <ServiceError row={row} />, detail: true },
+  ];
+}
+
+function ServiceStatus({ row, now }: { row: ServiceRow; now: number }) {
+  const badge = serviceBadge(row, now);
+
+  return <StateBadge tone={badge.tone} text={badge.text} />;
+}
+
+function ServiceError({ row }: { row: ServiceRow }) {
+  const text = errorText(row);
+
+  return (text === null) ? NO_SIGNAL_TEXT : <span className="relay__error">{text}</span>;
+}
+
+function groupTitle(key: string): string {
+  const result = (key === SHARED_GROUP) ? SHARED_GROUP_LABEL : platformLabel(key);
+
+  return result;
+}
+
 export function PlatformsTab({ days, tick, onLoaded }: TabProps) {
   const query = useApi((signal) => getPlatforms(days, signal).then(onLoaded), [days, tick]);
 
   return (
     <div className="grid">
       <Health query={query} />
+      <Services query={query} />
       <Daily query={query} days={days} />
       <MediaTypes query={query} />
     </div>
@@ -90,6 +146,40 @@ function Health({ query }: { query: Query<PlatformsResponse> }) {
       wide
     >
       {(data !== null) && <DataTable columns={healthColumns(data)} rows={rows} rowKey={(row) => row.platform} caption="Platform health" />}
+    </Panel>
+  );
+}
+
+function Services({ query }: { query: Query<PlatformsResponse> }) {
+  const data = query.data;
+  const services = data?.services ?? null;
+  const rows = services?.data.services ?? [];
+  const groups = groupServices(rows, PLATFORM_ORDER);
+  const now = (data === null) ? 0 : Date.parse(data.generated_at);
+  const columns = serviceColumns(now, data?.timezone ?? FALLBACK_TIMEZONE);
+
+  return (
+    <Panel
+      title="External services"
+      subtitle={(rows.length === 0) ? undefined : servicesSubtitle(rows)}
+      loading={query.loading}
+      error={query.error}
+      hasData={data !== null}
+      isEmpty={rows.length === 0}
+      emptyText={SERVICES_EMPTY_TEXT}
+      wide
+    >
+      {(services !== null) && services.is_stale && <StaleNotice updatedAt={services.updated_at} now={now} />}
+      {(rows.length > 0) && (
+        <div className="relay">
+          {groups.map((group) => (
+            <section key={group.key} className="relay-history" aria-label={groupTitle(group.key)}>
+              <h3 className="relay-history__title">{groupTitle(group.key)}</h3>
+              <DataTable columns={columns} rows={group.rows} rowKey={(row) => row.key} caption={`${groupTitle(group.key)} services`} />
+            </section>
+          ))}
+        </div>
+      )}
     </Panel>
   );
 }

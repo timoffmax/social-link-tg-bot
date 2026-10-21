@@ -3,6 +3,7 @@ package dashboard
 import (
 	"context"
 	"database/sql"
+	"log"
 	"math"
 	"time"
 
@@ -293,8 +294,8 @@ func (s *PGStore) loadNewChatsWeekly(q readTx, now time.Time, days int) ([]Weekl
 	return result, err
 }
 
-// Platforms loads the platform list, the daily counts per platform, the
-// media type split and the platform health.
+// Platforms loads the platform stats, then in its own transaction the bot's
+// services health, passed through undecoded.
 func (s *PGStore) Platforms(ctx context.Context, days int) (Platforms, error) {
 	result := Platforms{Days: days, Platforms: []string{}, Daily: []PlatformDay{}, MediaTypes: []MediaTypeSplit{}, Health: []PlatformHealth{}}
 	now := s.currentTime()
@@ -316,6 +317,46 @@ func (s *PGStore) Platforms(ctx context.Context, days int) (Platforms, error) {
 
 		return loadErr
 	})
+
+	if err == nil {
+		result.Services = s.loadServicesOrNil(ctx, now)
+	}
+
+	return result, err
+}
+
+// loadServicesOrNil reads the services component in its own transaction; a
+// failed read is logged and gives nil, so the rest of the tab still loads.
+func (s *PGStore) loadServicesOrNil(ctx context.Context, now time.Time) *PublishedComponent {
+	var services *PublishedComponent
+	err := s.readOnly(ctx, func(q readTx) error {
+		var loadErr error
+		services, loadErr = loadServicesComponent(q, now)
+
+		return loadErr
+	})
+	result := servicesOrNil(services, err)
+
+	return result
+}
+
+// servicesOrNil returns services, or nil (logged) after a failed read.
+func servicesOrNil(services *PublishedComponent, err error) *PublishedComponent {
+	result := services
+
+	if err != nil {
+		log.Printf("dashboard: services health not loaded: %v", err)
+		result = nil
+	}
+
+	return result
+}
+
+// loadServicesComponent reads the bot's services component; nil when it was
+// never published.
+func loadServicesComponent(q readTx, now time.Time) (*PublishedComponent, error) {
+	components, err := loadStatusComponents(q, []string{componentServices})
+	result := publishedComponent(components, componentServices, now)
 
 	return result, err
 }

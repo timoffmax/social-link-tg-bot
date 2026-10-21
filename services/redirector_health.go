@@ -35,14 +35,14 @@ const (
 // HikerAPI balance (low-balance alert, skip while empty) when HikerAPI is on.
 func CheckRedirectorHealth() {
 	probeRedirector(
-		kkInstagramServiceName+"-probe",
+		kkInstagramProbeKey,
 		fmt.Sprintf("https://%s/reel/%s/", config.GetKKInstagramHost(), kkInstagramProbeShortcode),
 		config.GetKKInstagramHost(),
 		"instagram.com",
 	)
 
 	probeRedirector(
-		kkTikTokServiceName+"-probe",
+		kkTikTokProbeKey,
 		fmt.Sprintf("https://www.%s/@i/video/%s", config.GetKKTikTokHost(), kkTikTokProbeVideoID),
 		config.GetKKTikTokHost(),
 		"tiktok.com",
@@ -67,7 +67,7 @@ const facebedProbePostURL = "https://www.facebook.com/photo/?fbid=" + facebedPro
 // a user's link is read (HTTP 200, facebed's site name, the requested post,
 // an og:image) and that the photo downloads as an image from the CDN.
 func probeFacebed() {
-	service := fmt.Sprintf("%s-probe", facebedServiceName)
+	service := facebedProbeKey
 	ctx := context.Background()
 	extractor := NewFacebookFacebedExtractor("")
 	// Probes share SharedHTTPClient (its timeout, and the tests' transport).
@@ -93,7 +93,7 @@ const vxredditProbePath = "/r/Damnthatsinteresting/comments/1upqcgf/"
 // probeVxreddit checks that vxreddit still advertises a proxied video for a
 // known post, feeding the shared outage tracker under its own probe key.
 func probeVxreddit() {
-	service := redditVxredditServiceName + "-probe"
+	service := vxredditProbeKey
 	probeURL := "https://" + config.GetVxredditHost() + vxredditProbePath
 
 	req, err := http.NewRequest("GET", probeURL, nil)

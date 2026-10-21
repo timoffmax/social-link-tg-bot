@@ -25,6 +25,7 @@ type stubStore struct {
 	report   reportStub
 	settings settingsStub
 	limits   limitsStub
+	services *PublishedComponent
 }
 
 func (s *stubStore) Ping(ctx context.Context) error {
@@ -44,7 +45,7 @@ func (s *stubStore) Platforms(ctx context.Context, days int) (Platforms, error) 
 	s.calls++
 	s.days = days
 
-	return Platforms{Days: days}, s.err
+	return Platforms{Days: days, Services: s.services}, s.err
 }
 
 func (s *stubStore) Chats(ctx context.Context, days int, limit int) (Chats, error) {

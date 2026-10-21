@@ -2023,7 +2023,7 @@ a.tg-link:hover {
   font-size: 12px;
   font-weight: 650;
   line-height: 1.4;
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
 }
 
 .state-badge--ok {

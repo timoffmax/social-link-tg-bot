@@ -21,6 +21,7 @@ const (
 	ComponentProfile  = "profile"
 	ComponentPaid     = "paid"
 	ComponentRelay    = "relay"
+	ComponentServices = "services"
 )
 
 // Build settings go build stamps into the binary (debug.ReadBuildInfo).
@@ -87,8 +88,8 @@ func (m *Manager) publishAll(ctx context.Context) {
 	m.publishProfile(ctx)
 }
 
-// publishHeartbeat publishes the heartbeat, the secrets, the settings and
-// the last computed paid-services and relay states (every 60 s).
+// publishHeartbeat publishes every 60 s the bot, secrets, settings, paid and
+// relay components, and the services one once its stored row was read.
 func (m *Manager) publishHeartbeat(ctx context.Context) {
 	bot := m.botStatus()
 	m.publish(ctx, ComponentBot, bot)
@@ -97,6 +98,10 @@ func (m *Manager) publishHeartbeat(ctx context.Context) {
 	m.publishSettings(ctx)
 	m.publishComputed(ctx, ComponentPaid, m.paidStatus)
 	m.publishComputed(ctx, ComponentRelay, m.relayStatus)
+
+	if m.isServicesPublishable() == true {
+		m.publishComputed(ctx, ComponentServices, m.servicesStatus)
+	}
 }
 
 // publishComputed publishes a state another goroutine computed; a nil

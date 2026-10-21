@@ -7,10 +7,19 @@ package services
 // parallel with each other.
 
 import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // adminAlert is one recorded call to the stubbed notifyAdmin hook.
@@ -461,4 +470,270 @@ func alertTextFailureCount(t *testing.T, text string) int {
 	}
 
 	return result
+}
+
+// serviceTestStart is the fake clock's start in the tracker tests.
+var serviceTestStart = time.Date(2026, 10, 20, 9, 0, 0, 0, time.UTC)
+
+// useServiceClock pins the tracker's clock to *now for the test.
+func useServiceClock(t *testing.T, now *time.Time) {
+	t.Helper()
+
+	previous := serviceHealthNow
+	serviceHealthNow = func() time.Time {
+		return *now
+	}
+
+	t.Cleanup(func() {
+		serviceHealthNow = previous
+	})
+}
+
+// serviceHealthOf returns the snapshot entry of service.
+func serviceHealthOf(t *testing.T, service string) ServiceHealth {
+	t.Helper()
+
+	result, isFound := ServiceHealthSnapshot()[service]
+
+	if isFound == false {
+		t.Fatalf("no tracker entry for %s", service)
+	}
+
+	return result
+}
+
+func TestFailureRecordsTimesStreakStartThresholdAndCode(t *testing.T) {
+	newAlertRecorder(t)
+	now := serviceTestStart
+	useServiceClock(t, &now)
+
+	ReportServiceFailureWithThreshold("vxreddit", "probe HTTP 530", 2)
+	first := now
+	now = now.Add(time.Minute)
+	ReportServiceFailureCode("vxreddit", ServiceErrorParse, "bad page")
+
+	health := serviceHealthOf(t, "vxreddit")
+
+	if (health.FailingSince.Equal(first) == false) || (health.LastFailureAt.Equal(now) == false) {
+		t.Fatalf("failing since must be the first failure, last failure the latest: %+v", health)
+	}
+
+	if (health.ConsecutiveFailures != 2) || (health.Threshold != outageAlertThreshold) || (health.LastErrorCode != ServiceErrorParse) {
+		t.Fatalf("got %+v", health)
+	}
+
+	if health.LastSuccessAt.IsZero() == false {
+		t.Fatalf("no success yet: %+v", health)
+	}
+}
+
+func TestFailureDetailIsClassifiedAndUnknownCodesAreOther(t *testing.T) {
+	newAlertRecorder(t)
+
+	ReportServiceFailure("kkinstagram", "probe HTTP 530")
+	ReportServiceFailureCode("kktiktok", "made-up", "x")
+
+	if code := serviceHealthOf(t, "kkinstagram").LastErrorCode; code != ServiceErrorHTTP5xx {
+		t.Fatalf("detail code: got %s", code)
+	}
+
+	if code := serviceHealthOf(t, "kktiktok").LastErrorCode; code != ServiceErrorOther {
+		t.Fatalf("unknown code: got %s", code)
+	}
+}
+
+func TestSuccessClearsTheStreakAndKeepsTheLastFailure(t *testing.T) {
+	newAlertRecorder(t)
+	now := serviceTestStart
+	useServiceClock(t, &now)
+
+	ReportServiceFailureCode("tikwm", ServiceErrorHTTP429, "limit")
+	failedAt := now
+	now = now.Add(time.Minute)
+	ReportServiceSuccess("tikwm")
+
+	health := serviceHealthOf(t, "tikwm")
+
+	if (health.ConsecutiveFailures != 0) || (health.FailingSince.IsZero() == false) || (health.LastSuccessAt.Equal(now) == false) {
+		t.Fatalf("got %+v", health)
+	}
+
+	if (health.LastFailureAt.Equal(failedAt) == false) || (health.LastErrorCode != ServiceErrorHTTP429) {
+		t.Fatalf("the last failure must be kept: %+v", health)
+	}
+
+	now = now.Add(time.Minute)
+	ReportServiceFailureCode("tikwm", ServiceErrorTimeout, "slow")
+
+	if since := serviceHealthOf(t, "tikwm").FailingSince; since.Equal(now) == false {
+		t.Fatalf("a new streak starts at its first failure: %v", since)
+	}
+}
+
+func TestSuccessOfAnUnknownServiceCreatesItsEntryQuietly(t *testing.T) {
+	recorder := newAlertRecorder(t)
+	now := serviceTestStart
+	useServiceClock(t, &now)
+
+	ReportServiceSuccess("fxtwitter")
+
+	health := serviceHealthOf(t, "fxtwitter")
+
+	if (health.LastSuccessAt.Equal(now) == false) || (health.Threshold != outageAlertThreshold) || (health.LastErrorCode != "") {
+		t.Fatalf("got %+v", health)
+	}
+
+	if (len(recorder.recordedAlerts()) != 0) || (len(recorder.recordedResets()) != 0) {
+		t.Fatalf("a first success must not notify: %+v %v", recorder.recordedAlerts(), recorder.recordedResets())
+	}
+}
+
+func TestServiceHealthSnapshotIsACopy(t *testing.T) {
+	newAlertRecorder(t)
+
+	ReportServiceFailure("facebed", "HTTP 503")
+	snapshot := ServiceHealthSnapshot()
+	entry := snapshot["facebed"]
+	entry.ConsecutiveFailures = 99
+	snapshot["facebed"] = entry
+	delete(snapshot, "facebed")
+
+	if got := recordedFailureCount("facebed"); got != 1 {
+		t.Fatalf("changing the snapshot changed the tracker: %d", got)
+	}
+}
+
+func TestAlertKeepsTheRawDetailWithACode(t *testing.T) {
+	recorder := newAlertRecorder(t)
+
+	for i := 0; i < outageAlertThreshold; i++ {
+		ReportServiceFailureCode("vxthreads", ServiceErrorWrongContent, "no Threads post on the vxthreads page")
+	}
+
+	alerts := recorder.alertsWithKey("outage:vxthreads")
+
+	if (len(alerts) != 1) || (strings.Contains(alerts[0].text, "no Threads post on the vxthreads page") == false) {
+		t.Fatalf("got %+v", alerts)
+	}
+}
+
+func TestClassifyServiceDetail(t *testing.T) {
+	cases := map[string]string{
+		"probe HTTP 530": ServiceErrorHTTP5xx,
+		"all 3 configured proxies are failing (last error: Get \"https://api.telegram.org/\": Proxy Authentication Required). Reddit extraction is DOWN": ServiceErrorHTTP4xx,
+		"proxyconnect tcp: 407 Proxy Authentication Required": ServiceErrorHTTP4xx,
+		"context deadline exceeded":                           ServiceErrorTimeout,
+		"probe request failed: net/http: request canceled (Client.Timeout exceeded while awaiting headers)": ServiceErrorTimeout,
+		"dial tcp: connection refused":                            ServiceErrorTransport,
+		"failed to parse fxtwitter JSON: unexpected end":          ServiceErrorParse,
+		"no og:video in probe response":                           ServiceErrorWrongContent,
+		"fxtwitter API HTTP 429":                                  ServiceErrorHTTP429,
+		"Too Many Requests":                                       ServiceErrorHTTP429,
+		"apify status 502: bad gateway":                           ServiceErrorHTTP5xx,
+		"page https://www.threads.com/@a/post/X/embed status 403": ServiceErrorHTTP4xx,
+		"hikerapi status code: 404":                               ServiceErrorHTTP4xx,
+		"9gag_fetch.py not found at /srv/scripts/9gag_fetch.py":   ServiceErrorNotConfigured,
+		"no Python with curl_cffi found":                          ServiceErrorNotConfigured,
+		"kktiktok returned non-video content-type \"text/html\"":  ServiceErrorWrongContent,
+		"unexpected EOF":                                          ServiceErrorTransport,
+		"something odd happened":                                  ServiceErrorOther,
+		"tweet 1234567 has 404 likes":                             ServiceErrorOther,
+		"probe HTTP 504 Gateway Timeout":                          ServiceErrorHTTP5xx,
+		"GET https://t.co/404 failed: connection reset":           ServiceErrorTransport,
+		"decode error at 502":                                     ServiceErrorParse,
+		"facebed probe status 530":                                ServiceErrorHTTP5xx,
+		"bad status code: 404":                                    ServiceErrorHTTP4xx,
+		"upstream status code: 504 after timeout":                 ServiceErrorHTTP5xx,
+		"Get \"https://x/\": 503 Service Unavailable (timeout)":   ServiceErrorHTTP5xx,
+		"Reply 404 Likes":                                         ServiceErrorOther,
+		"unicode 5040 chars":                                      ServiceErrorOther,
+		"status 5040":                                             ServiceErrorOther,
+		"https://status.example/http/503 timed out":               ServiceErrorTimeout,
+		"": ServiceErrorOther,
+	}
+
+	for detail, want := range cases {
+		if got := classifyServiceDetail(detail); got != want {
+			t.Errorf("%q: got %s, want %s", detail, got, want)
+		}
+	}
+}
+
+// timeoutNetErr is a net.Error that timed out.
+type timeoutNetErr struct{}
+
+func (timeoutNetErr) Error() string {
+	return "i/o wait"
+}
+
+func (timeoutNetErr) Timeout() bool {
+	return true
+}
+
+func (timeoutNetErr) Temporary() bool {
+	return true
+}
+
+func TestClassifyServiceErr(t *testing.T) {
+	var syntaxErr *json.SyntaxError
+	syntaxErr = json.Unmarshal([]byte("{"), &struct{}{}).(*json.SyntaxError)
+	typeErr := json.Unmarshal([]byte(`{"a":"x"}`), &struct{ A int }{})
+	cases := []struct {
+		name string
+		err  error
+		want string
+	}{
+		{"deadline", context.DeadlineExceeded, ServiceErrorTimeout},
+		{"wrapped deadline", fmt.Errorf("fetch: %w", context.DeadlineExceeded), ServiceErrorTimeout},
+		{"net timeout", &url.Error{Op: "Get", URL: "https://x", Err: timeoutNetErr{}}, ServiceErrorTimeout},
+		{"status 503", &httpStatusError{URL: "https://x", StatusCode: 503}, ServiceErrorHTTP5xx},
+		{"status 429", &httpStatusError{URL: "https://x", StatusCode: 429}, ServiceErrorHTTP429},
+		{"status 404", fmt.Errorf("embed: %w", &httpStatusError{URL: "https://x", StatusCode: 404}), ServiceErrorHTTP4xx},
+		{"url error", &url.Error{Op: "Get", URL: "https://x", Err: errors.New("boom")}, ServiceErrorTransport},
+		{"op error", &net.OpError{Op: "dial", Err: errors.New("refused")}, ServiceErrorTransport},
+		{"json syntax", syntaxErr, ServiceErrorParse},
+		{"json type", typeErr, ServiceErrorParse},
+		{"text", errors.New("no media in the answer"), ServiceErrorWrongContent},
+		{"nil", nil, ServiceErrorOther},
+	}
+
+	for _, c := range cases {
+		if got := classifyServiceErr(c.err); got != c.want {
+			t.Errorf("%s: got %s, want %s", c.name, got, c.want)
+		}
+	}
+}
+
+func TestFetchCappedPageStatusErrorKeepsItsText(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusGone)
+	}))
+	t.Cleanup(server.Close)
+	pageURL := server.URL + "/post"
+
+	_, err := fetchCappedPage(context.Background(), pageURL, nil, 1024, time.Second)
+	var statusErr *httpStatusError
+
+	if (errors.As(err, &statusErr) == false) || (statusErr.StatusCode != http.StatusGone) {
+		t.Fatalf("got %v", err)
+	}
+
+	if err.Error() != fmt.Sprintf("page %s status %d", pageURL, http.StatusGone) {
+		t.Fatalf("the error text changed: %q", err.Error())
+	}
+}
+
+// assertTracked checks what one call left in the tracker: no entry when
+// nothing was recorded, a success, or one failure with wantCode.
+func assertTracked(t *testing.T, service string, want serviceOutcome, wantCode string) {
+	t.Helper()
+
+	health, isFound := ServiceHealthSnapshot()[service]
+	isNone := (want == serviceOutcomeNone) && (isFound == false)
+	isSuccess := (want == serviceOutcomeSuccess) && (isFound == true) && (health.ConsecutiveFailures == 0) && (health.LastSuccessAt.IsZero() == false)
+	isFailure := (want == serviceOutcomeFailure) && (isFound == true) && (health.ConsecutiveFailures == 1) && (health.LastErrorCode == wantCode)
+
+	if (isNone == false) && (isSuccess == false) && (isFailure == false) {
+		t.Fatalf("%s: want outcome %d %q, got entry %v %+v", service, want, wantCode, isFound, health)
+	}
 }
