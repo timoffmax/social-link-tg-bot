@@ -175,7 +175,7 @@ func getPlatformExtractionStrategy(url string) *ExtractionStrategy {
 			}
 		}
 		// Photo slideshows: browser extraction often works better than yt-dlp for individual images
-		if strings.Contains(url, "/photo/") {
+		if isTikTokPhotoURL(url) == true {
 			return &ExtractionStrategy{
 				Platform: "tiktok",
 				Methods: []ExtractionMethod{

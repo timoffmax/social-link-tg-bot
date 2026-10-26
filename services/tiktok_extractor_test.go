@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"reflect"
 	"testing"
 )
 
@@ -73,6 +74,7 @@ func TestTikwmCallsReachTheTracker(t *testing.T) {
 		{"5xx is a failure", http.StatusBadGateway, "", serviceOutcomeFailure, ServiceErrorHTTP5xx},
 		{"a deleted video is not counted", http.StatusOK, `{"code":-1,"msg":"Url parsing is failed! Please check url."}`, serviceOutcomeNone, ""},
 		{"an answer is a success", http.StatusOK, `{"code":0,"msg":"success","data":{"id":"1"}}`, serviceOutcomeSuccess, ""},
+		{"a photo post is a success", http.StatusOK, `{"code":0,"msg":"success","data":{"id":"1","images":["https://p16-common-sign.tiktokcdn-us.com/1.jpeg"]}}`, serviceOutcomeSuccess, ""},
 	}
 
 	for _, c := range cases {
@@ -88,5 +90,29 @@ func TestTikwmCallsReachTheTracker(t *testing.T) {
 
 			assertTracked(t, tikwmServiceName, c.wantOutcome, c.wantCode)
 		})
+	}
+}
+
+func TestPhotoPostsSkipKKTikTok(t *testing.T) {
+	te := NewTikTokExtractor(t.TempDir(), t.TempDir())
+	kkTikTok := reflect.ValueOf(te.extractViaKKTikTok).Pointer()
+	cases := []struct {
+		url     string
+		wantsKK bool
+	}{
+		{"https://www.tiktok.com/@a/video/7700110706498112790", true},
+		{"https://www.tiktok.com/@a/photo/7700110706498112790?_r=1", false},
+	}
+
+	for _, c := range cases {
+		hasKK := false
+
+		for _, method := range te.extractionMethods(c.url) {
+			hasKK = hasKK || (reflect.ValueOf(method).Pointer() == kkTikTok)
+		}
+
+		if hasKK != c.wantsKK {
+			t.Errorf("%s: kktiktok in the chain = %v, want %v", c.url, hasKK, c.wantsKK)
+		}
 	}
 }

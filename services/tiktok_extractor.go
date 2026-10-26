@@ -26,6 +26,9 @@ const kkTikTokServiceName = "kktiktok"
 // tikwmServiceName is the outage-tracker key of the tikwm.com API.
 const tikwmServiceName = "tikwm"
 
+// tiktokPhotoPath marks the full link of a TikTok photo post.
+const tiktokPhotoPath = "/photo/"
+
 // tikwmAPIURL is the tikwm.com endpoint that resolves a TikTok link.
 const tikwmAPIURL = "https://www.tikwm.com/api/"
 
@@ -98,14 +101,12 @@ type tikwmResponse struct {
 	Code int    `json:"code"`
 	Msg  string `json:"msg"`
 	Data struct {
-		ID       string `json:"id"`
-		Title    string `json:"title"`
-		Duration int    `json:"duration"`
-		Play     string `json:"play"`
-		Images   []struct {
-			URL string `json:"url"`
-		} `json:"images"`
-		Author struct {
+		ID       string   `json:"id"`
+		Title    string   `json:"title"`
+		Duration int      `json:"duration"`
+		Play     string   `json:"play"`
+		Images   []string `json:"images"`
+		Author   struct {
 			UniqueID string `json:"unique_id"`
 			Nickname string `json:"nickname"`
 		} `json:"author"`
@@ -138,14 +139,7 @@ func (te *TikTokExtractor) ExtractTikTokPost(tiktokURL string) ([]*MediaInfo, er
 	log.Printf("🔍 Extracted TikTok post ID: %s, username: %s", postID, username)
 
 	// Try multiple extraction methods
-	methods := []func(string, string, string) ([]*MediaInfo, error){
-		te.extractViaDirectScraping,
-		te.extractViaSlideshowAPI,
-		te.extractViaTikWMAPI,
-		te.extractViaKKTikTok,
-		te.extractViaHeadlessBrowser,
-		te.extractViaSimpleTextFallback,
-	}
+	methods := te.extractionMethods(tiktokURL)
 
 	for i, method := range methods {
 		log.Printf("📡 Trying TikTok extraction method %d/%d", i+1, len(methods))
@@ -158,6 +152,32 @@ func (te *TikTokExtractor) ExtractTikTokPost(tiktokURL string) ([]*MediaInfo, er
 	}
 
 	return nil, fmt.Errorf("all TikTok extraction methods failed")
+}
+
+// tikTokMethod is one step of the TikTok extraction chain.
+type tikTokMethod func(string, string, string) ([]*MediaInfo, error)
+
+// extractionMethods returns the chain for tiktokURL; kktiktok serves videos
+// only (it redirects a photo post to its soundtrack), so photo links skip it.
+func (te *TikTokExtractor) extractionMethods(tiktokURL string) []tikTokMethod {
+	result := []tikTokMethod{
+		te.extractViaDirectScraping,
+		te.extractViaSlideshowAPI,
+		te.extractViaTikWMAPI,
+	}
+
+	if isTikTokPhotoURL(tiktokURL) == false {
+		result = append(result, te.extractViaKKTikTok)
+	}
+
+	result = append(result, te.extractViaHeadlessBrowser, te.extractViaSimpleTextFallback)
+
+	return result
+}
+
+// isTikTokPhotoURL reports whether a full TikTok link points to a photo post.
+func isTikTokPhotoURL(tiktokURL string) bool {
+	return strings.Contains(tiktokURL, tiktokPhotoPath)
 }
 
 func (te *TikTokExtractor) extractTikTokDetails(tiktokURL string) (string, string, error) {
@@ -406,8 +426,8 @@ func (te *TikTokExtractor) extractViaTikWMAPI(tiktokURL string, postID string, u
 	if len(apiResp.Data.Images) > 0 {
 		log.Printf("📸 tikwm: Found %d slideshow images", len(apiResp.Data.Images))
 
-		for i, img := range apiResp.Data.Images {
-			mediaInfo, err := te.downloadMedia(img.URL, postID, i)
+		for i, imageURL := range apiResp.Data.Images {
+			mediaInfo, err := te.downloadMedia(imageURL, postID, i)
 			if err != nil {
 				log.Printf("⚠️ Failed to download tikwm image %d: %v", i, err)
 				continue
