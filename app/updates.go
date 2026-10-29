@@ -5084,6 +5084,7 @@ const (
 	replyInvalidIDText = "Invalid report ID."
 	replyNotFoundText  = "Report #%d not found."
 	replySentText      = "✅ Reply sent to user %d (report #%d resolved)."
+	replyInGroupText   = "✅ User %d never started the bot, so the reply went to the report's group with a mention (report #%d resolved)."
 	replyFailedText    = "❌ Reply to user %d was not sent, report #%d stays open.\n\nReason: %s"
 	replyUnknownText   = "⚠️ Reply to user %d may have been delivered, report #%d stays open. Check before sending it again.\n\n%s"
 )
@@ -5165,12 +5166,19 @@ func deliverOwnerReply(report *services.Report, replyText string) string {
 		log.Printf("❌ Failed to record the reply to report #%d: %v", report.ID, recordErr)
 	}
 
-	messageID, sendErr := sendReplyToReporter(report.UserID, replyText)
+	target := reportTargetOf(report)
+	delivery, sendErr := sendReplyToReporter(target, replyText)
 	isRecorded := (recordErr == nil)
-	result := fmt.Sprintf(replySentText, report.UserID, report.ID)
+	sentText := replySentText
+
+	if delivery.IsInGroup == true {
+		sentText = replyInGroupText
+	}
+
+	result := fmt.Sprintf(sentText, report.UserID, report.ID)
 
 	if (sendErr == nil) && (isRecorded == true) {
-		recordReplySent(reply.ID, messageID)
+		recordReplySent(reply.ID, delivery)
 	}
 
 	if sendErr == nil {

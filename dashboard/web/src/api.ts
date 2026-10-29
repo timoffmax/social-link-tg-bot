@@ -253,6 +253,8 @@ export interface ReportReply {
   error: string | null;
   created_at: Timestamp | null;
   sent_at: Timestamp | null;
+  /** The reporter never started the bot, so the reply went to the report's group. */
+  sent_in_group: boolean;
 }
 
 export interface Report {

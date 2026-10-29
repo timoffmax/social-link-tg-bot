@@ -433,7 +433,7 @@ WHERE id = $1::int`
 
 // replyColumns are the columns every report reply query returns, after its
 // report_id.
-const replyColumns = `id, text, source, status, resolve_on_send, attempts, next_attempt_at, error, created_at, sent_at`
+const replyColumns = `id, text, source, status, resolve_on_send, attempts, next_attempt_at, error, created_at, sent_at, sent_in_group`
 
 // reportRepliesSQL lists the replies of the given reports, oldest first:
 // $1 report ids.

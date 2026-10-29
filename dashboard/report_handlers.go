@@ -30,8 +30,9 @@ const (
 const ReplyMessagePrefix = reportreply.Prefix
 
 // ReplyTextLimit is the longest reply text, in Telegram length, whose
-// message with ReplyMessagePrefix still fits Telegram's limit.
-var ReplyTextLimit = TelegramMessageLimit - telegramLength(ReplyMessagePrefix)
+// message with ReplyMessagePrefix still fits Telegram's limit, also with the
+// reporter's mention of a reply the bot posts in the report's group.
+var ReplyTextLimit = TelegramMessageLimit - telegramLength(ReplyMessagePrefix) - reportreply.MentionReserve
 
 // Report status filter of GET /api/reports.
 const (
@@ -48,7 +49,7 @@ const (
 	errReplyRequired    = "text is required"
 	errReplyNUL         = "text must not contain NUL characters"
 	errReplyHTML        = "text: %s"
-	errReplyTooLong     = "text is too long: %d characters after formatting, at most %d (Telegram allows %d, the reply's heading takes %d)"
+	errReplyTooLong     = "text is too long: %d characters after formatting, at most %d (Telegram allows %d, the reply's heading and room for the reporter's mention in a group take %d)"
 	errResolveRequired  = "resolve is required: true or false"
 	errResolvedRequired = "resolved is required: true or false"
 )
@@ -221,8 +222,8 @@ func validateReplyText(text string) (string, error) {
 		htmlMessage := htmlErr.Error()
 		err = badRequest(errReplyHTML, htmlMessage)
 	case length > ReplyTextLimit:
-		prefixLength := TelegramMessageLimit - ReplyTextLimit
-		err = badRequest(errReplyTooLong, length, ReplyTextLimit, TelegramMessageLimit, prefixLength)
+		reservedLength := TelegramMessageLimit - ReplyTextLimit
+		err = badRequest(errReplyTooLong, length, ReplyTextLimit, TelegramMessageLimit, reservedLength)
 	}
 
 	return result, err

@@ -26,6 +26,21 @@ const outboxBlockedUserID = 666
 // outboxBlockedError is the fake Bot API's answer for outboxBlockedUserID.
 const outboxBlockedError = "Forbidden: bot was blocked by the user"
 
+// outboxNotStartedUserID never started the bot in the fake Bot API.
+const outboxNotStartedUserID = 667
+
+// outboxNotStartedError is the fake Bot API's answer for outboxNotStartedUserID.
+const outboxNotStartedError = "Forbidden: bot can't initiate conversation with a user"
+
+// outboxGroupID is the group a report was filed in.
+const outboxGroupID = -5509608115
+
+// outboxKickedGroupID is a group the bot was removed from.
+const outboxKickedGroupID = -668
+
+// outboxKickedError is the fake Bot API's answer for outboxKickedGroupID.
+const outboxKickedError = "Forbidden: bot was kicked from the group chat"
+
 // outboxRateLimitedUserID gets 429 Too Many Requests with outboxRetryAfter.
 const outboxRateLimitedUserID = 429
 
@@ -48,6 +63,7 @@ type fakeReplyStore struct {
 	interrupted []services.ReportReply
 	created     []services.ReportReply
 	sent        map[int]int64
+	inGroup     map[int]bool
 	failed      map[int]string
 	unknown     map[int]string
 	requeued    map[int]requeuedReply
@@ -71,10 +87,11 @@ func (s *fakeReplyStore) claim() (services.ClaimedReportReply, bool, error) {
 	return result, isClaimed, nil
 }
 
-func (s *fakeReplyStore) markSent(id int, messageID int64) error {
+func (s *fakeReplyStore) markSent(id int, messageID int64, isInGroup bool) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.sent[id] = messageID
+	s.inGroup[id] = isInGroup
 
 	return nil
 }
@@ -155,6 +172,7 @@ func (s *fakeReplyStore) notify(text string) bool {
 func startOutboxTest(t *testing.T) (*fakeReplyStore, *botAPIRecorder) {
 	store := &fakeReplyStore{
 		sent:     map[int]int64{},
+		inGroup:  map[int]bool{},
 		failed:   map[int]string{},
 		unknown:  map[int]string{},
 		requeued: map[int]requeuedReply{},
@@ -178,6 +196,12 @@ func startOutboxTest(t *testing.T) (*fakeReplyStore, *botAPIRecorder) {
 		case float64(outboxBlockedUserID):
 			w.WriteHeader(http.StatusForbidden)
 			answer = fmt.Sprintf(`{"ok":false,"error_code":403,"description":%q}`, outboxBlockedError)
+		case float64(outboxNotStartedUserID):
+			w.WriteHeader(http.StatusForbidden)
+			answer = fmt.Sprintf(`{"ok":false,"error_code":403,"description":%q}`, outboxNotStartedError)
+		case float64(outboxKickedGroupID):
+			w.WriteHeader(http.StatusForbidden)
+			answer = fmt.Sprintf(`{"ok":false,"error_code":403,"description":%q}`, outboxKickedError)
 		case float64(outboxRateLimitedUserID):
 			w.WriteHeader(http.StatusTooManyRequests)
 			answer = fmt.Sprintf(`{"ok":false,"error_code":429,"description":"Too Many Requests: retry after %d","parameters":{"retry_after":%d}}`, outboxRetryAfter, outboxRetryAfter)
@@ -604,7 +628,7 @@ func TestOutboxLoopEndsWhenStopped(t *testing.T) {
 func TestRecordReplySentRetriesAFailedWrite(t *testing.T) {
 	store, _ := startOutboxTest(t)
 	attempts := 0
-	markReportReplySent = func(id int, messageID int64) error {
+	markReportReplySent = func(id int, messageID int64, isInGroup bool) error {
 		var err error
 		attempts++
 
@@ -613,15 +637,119 @@ func TestRecordReplySentRetriesAFailedWrite(t *testing.T) {
 		}
 
 		if attempts > 1 {
-			err = store.markSent(id, messageID)
+			err = store.markSent(id, messageID, isInGroup)
 		}
 
 		return err
 	}
 
-	recordReplySent(8, outboxMessageID)
+	recordReplySent(8, reportReplyDelivery{MessageID: outboxMessageID})
 
 	if (attempts != 2) || (store.sent[8] != outboxMessageID) {
 		t.Fatalf("expected the sent write retried once, got attempts=%d sent=%+v", attempts, store.sent)
+	}
+}
+
+// groupReply is a claimed dashboard reply to a report filed in chatID by userID.
+func groupReply(id, reportID int, userID int64, chatID int64, username string) services.ClaimedReportReply {
+	result := queuedReply(id, reportID, userID, "hello")
+	result.Username = username
+	result.FirstName = "Oleh <3"
+	result.ChatID = chatID
+	result.ReplyToMessageID = 77629
+
+	return result
+}
+
+func TestOutboxRepliesInTheGroupWhenTheReporterNeverStartedTheBot(t *testing.T) {
+	store, recorder := startOutboxTest(t)
+	store.queued = []services.ClaimedReportReply{groupReply(1, 5, outboxNotStartedUserID, outboxGroupID, "oleh")}
+
+	sendQueuedReportReplies(context.Background())
+	groupCalls := callsTo(recorder.all(), outboxGroupID)
+
+	if (store.sent[1] != outboxMessageID) || (store.inGroup[1] == false) || (len(store.failed) != 0) || (len(store.alerts) != 0) || (len(groupCalls) != 1) {
+		t.Fatalf("expected one reply sent in the group, got calls=%+v store=%+v", recorder.all(), store)
+	}
+
+	body := groupCalls[0].body
+	isAnswer := (body["reply_to_message_id"] == float64(77629)) && (body["allow_sending_without_reply"] == true)
+
+	if (isAnswer == false) || (body["text"] != fmt.Sprintf("<a href=\"tg://user?id=%d\">@oleh</a>: 💬 <b>Reply from the developer:</b>\n\nhello", outboxNotStartedUserID)) {
+		t.Fatalf("unexpected group reply: %+v", body)
+	}
+}
+
+func TestGroupReplyMentionsAReporterWithoutAUsernameByLink(t *testing.T) {
+	store, recorder := startOutboxTest(t)
+	store.queued = []services.ClaimedReportReply{groupReply(1, 5, outboxNotStartedUserID, outboxGroupID, "")}
+
+	sendQueuedReportReplies(context.Background())
+	groupCalls := callsTo(recorder.all(), outboxGroupID)
+	expected := fmt.Sprintf("<a href=\"tg://user?id=%d\">Oleh &lt;3</a>: 💬", outboxNotStartedUserID)
+
+	if (len(groupCalls) != 1) || (strings.HasPrefix(groupCalls[0].body["text"].(string), expected) == false) {
+		t.Fatalf("expected a link mention, got %+v", recorder.all())
+	}
+}
+
+func TestOutboxDoesNotReplyInTheGroupToAUserWhoBlockedTheBot(t *testing.T) {
+	store, recorder := startOutboxTest(t)
+	store.queued = []services.ClaimedReportReply{groupReply(1, 5, outboxBlockedUserID, outboxGroupID, "oleh")}
+
+	sendQueuedReportReplies(context.Background())
+
+	if (store.failed[1] != outboxBlockedError) || (len(callsTo(recorder.all(), outboxGroupID)) != 0) {
+		t.Fatalf("expected a failed reply and nothing in the group, got calls=%+v store=%+v", recorder.all(), store)
+	}
+}
+
+func TestOutboxDoesNotReplyInTheGroupForAPrivateReport(t *testing.T) {
+	store, recorder := startOutboxTest(t)
+	store.queued = []services.ClaimedReportReply{groupReply(1, 5, outboxNotStartedUserID, outboxNotStartedUserID, "oleh")}
+
+	sendQueuedReportReplies(context.Background())
+
+	if (store.failed[1] != outboxNotStartedError) || (len(recorder.all()) != 1) {
+		t.Fatalf("expected one refused send and a failed reply, got calls=%+v store=%+v", recorder.all(), store)
+	}
+}
+
+func TestOutboxMarksAReplyRefusedInTheGroupFailedWithBothReasons(t *testing.T) {
+	store, _ := startOutboxTest(t)
+	store.queued = []services.ClaimedReportReply{groupReply(1, 5, outboxNotStartedUserID, outboxKickedGroupID, "oleh")}
+
+	sendQueuedReportReplies(context.Background())
+	reason := store.failed[1]
+
+	if (strings.Contains(reason, outboxNotStartedError) == false) || (strings.Contains(reason, outboxKickedError) == false) || (len(store.sent) != 0) || (len(store.alerts) != 1) {
+		t.Fatalf("expected a failed reply with both reasons, got %+v", store)
+	}
+}
+
+func TestReplyCommandRepliesInTheGroupWhenTheReporterNeverStartedTheBot(t *testing.T) {
+	store, recorder := startOutboxTest(t)
+	store.reports[5] = &services.Report{ID: 5, UserID: outboxNotStartedUserID, Username: "oleh", ChatID: outboxGroupID, ReplyToMessageID: 77629}
+
+	answer := ownerReply(t, recorder, "/reply 5 hello")
+
+	if (store.sent[101] != outboxMessageID) || (store.inGroup[101] == false) || (len(store.resolved) != 1) || (strings.Contains(answer, "went to the report's group") == false) {
+		t.Fatalf("expected a reply sent in the group and the report resolved, got %+v %q", store, answer)
+	}
+}
+
+func TestGroupReplyMentionCutsALongNameButNotAUsername(t *testing.T) {
+	longName := reportReplyTarget{UserID: 7, FirstName: strings.Repeat("я", 40)}
+	longUsername := reportReplyTarget{UserID: 7, Username: strings.Repeat("a", 32), FirstName: "Ann"}
+
+	nameMention := reporterMention(longName)
+	usernameMention := reporterMention(longUsername)
+
+	if nameMention != fmt.Sprintf("<a href=\"tg://user?id=7\">%s…</a>: ", strings.Repeat("я", 31)) {
+		t.Fatalf("expected the name cut to 32 runes, got %q", nameMention)
+	}
+
+	if usernameMention != fmt.Sprintf("<a href=\"tg://user?id=7\">@%s</a>: ", strings.Repeat("a", 32)) {
+		t.Fatalf("expected the whole username, got %q", usernameMention)
 	}
 }

@@ -17,11 +17,11 @@ const reportFixtures = `INSERT INTO reports (id, user_id, username, first_name, 
 (2, 43, NULL, NULL, 43, NULL, 'resolved one', true, '2026-10-14T09:00:00Z', '2026-10-13T12:00:00Z'),
 (3, 44, 'x', 'X', 44, NULL, 'resolved before resolved_at', true, NULL, '2026-10-10T12:00:00Z')`
 
-const replyFixtures = `INSERT INTO report_replies (id, report_id, text, source, status, resolve_on_send, attempts, next_attempt_at, error, telegram_message_id, created_at, sent_at) VALUES
-(10, 2, 'second', 'dashboard', 'failed', false, 0, NULL, 'Forbidden: bot was blocked by the user', NULL, '2026-10-14T08:00:00Z', NULL),
-(11, 2, 'first', 'telegram', 'sent', false, 0, NULL, NULL, 555, '2026-10-14T07:00:00Z', '2026-10-14T07:00:01Z'),
-(12, 1, 'queued', 'dashboard', 'queued', true, 1, '2026-10-15T11:31:00Z', 'Too Many Requests: retry after 30', NULL, '2026-10-15T11:30:00Z', NULL),
-(13, 1, 'unknown', 'dashboard', 'unknown', false, 0, NULL, 'interrupted, delivery unknown, not resent', NULL, '2026-10-15T11:40:00Z', NULL)`
+const replyFixtures = `INSERT INTO report_replies (id, report_id, text, source, status, resolve_on_send, attempts, next_attempt_at, error, telegram_message_id, created_at, sent_at, sent_in_group) VALUES
+(10, 2, 'second', 'dashboard', 'failed', false, 0, NULL, 'Forbidden: bot was blocked by the user', NULL, '2026-10-14T08:00:00Z', NULL, false),
+(11, 2, 'first', 'telegram', 'sent', false, 0, NULL, NULL, 555, '2026-10-14T07:00:00Z', '2026-10-14T07:00:01Z', true),
+(12, 1, 'queued', 'dashboard', 'queued', true, 1, '2026-10-15T11:31:00Z', 'Too Many Requests: retry after 30', NULL, '2026-10-15T11:30:00Z', NULL, false),
+(13, 1, 'unknown', 'dashboard', 'unknown', false, 0, NULL, 'interrupted, delivery unknown, not resent', NULL, '2026-10-15T11:40:00Z', NULL, false)`
 
 // dashboardRoleStore connects as a role with the production dashboard's
 // grants on the report tables and default_transaction_read_only on;
@@ -114,7 +114,7 @@ func TestIntegrationReportsWithRepliesAndStatusFilter(t *testing.T) {
 			{ID: 13, Text: "unknown", Source: "dashboard", Status: "unknown", Error: text("interrupted, delivery unknown, not resent"), CreatedAt: text("2026-10-15T11:40:00Z")},
 		}},
 		{ID: 2, CreatedAt: text("2026-10-13T12:00:00Z"), UserID: 43, ChatID: 43, Message: "resolved one", Resolved: true, ResolvedAt: text("2026-10-14T09:00:00Z"), Replies: []ReportReply{
-			{ID: 11, Text: "first", Source: "telegram", Status: "sent", CreatedAt: text("2026-10-14T07:00:00Z"), SentAt: text("2026-10-14T07:00:01Z")},
+			{ID: 11, Text: "first", Source: "telegram", Status: "sent", CreatedAt: text("2026-10-14T07:00:00Z"), SentAt: text("2026-10-14T07:00:01Z"), SentInGroup: true},
 			{ID: 10, Text: "second", Source: "dashboard", Status: "failed", Error: text("Forbidden: bot was blocked by the user"), CreatedAt: text("2026-10-14T08:00:00Z")},
 		}},
 		{ID: 3, CreatedAt: text("2026-10-10T12:00:00Z"), UserID: 44, Username: "x", FirstName: "X", ChatID: 44, Message: "resolved before resolved_at", Resolved: true, Replies: []ReportReply{}},
@@ -280,7 +280,7 @@ func TestIntegrationReportHTTPEndToEnd(t *testing.T) {
 
 	openList := doRequest(server, http.MethodGet, "/api/reports?status=open")
 
-	if (openList.Code != http.StatusOK) || (strings.Contains(openList.Body.String(), `"replies":[{`) == false) || (strings.Contains(openList.Body.String(), `"reply_text_limit":4066`) == false) {
+	if (openList.Code != http.StatusOK) || (strings.Contains(openList.Body.String(), `"replies":[{`) == false) || (strings.Contains(openList.Body.String(), `"reply_text_limit":4000`) == false) {
 		t.Errorf("open list: %d %s", openList.Code, openList.Body.String())
 	}
 

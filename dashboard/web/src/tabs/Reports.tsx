@@ -422,6 +422,7 @@ function ReplyOutcome({ reply }: { reply: ReportReply }) {
       {(reply.status === 'failed') && (reply.error !== null) && <p className="reply__error">Not sent: {reply.error}</p>}
       {isRetrying && <p className="reply__note">Telegram asked to wait, the bot tries again{reason}</p>}
       {isResolving && <p className="reply__note">Resolves the report once delivered</p>}
+      {reply.sent_in_group && <p className="reply__note">Sent in the report's group: the reporter never started the bot</p>}
     </>
   );
 }
@@ -446,6 +447,7 @@ function ReplyComposer({ report, timezone, replyPrefix, replyTextLimit, onQueued
   const textarea = useRef<HTMLTextAreaElement>(null);
   const textId = useId();
   const resolveId = useId();
+  const isGroupReport = (chatKind(report.chat_id) === 'group');
   const parsed = useMemo(() => parseTelegramHtml(text), [text]);
   const message = useMemo(() => parseTelegramHtml(`${replyPrefix}${text.trim()}`), [replyPrefix, text]);
   const lastGood = useRef<TgNode[]>(message.nodes);
@@ -559,6 +561,11 @@ function ReplyComposer({ report, timezone, replyPrefix, replyTextLimit, onQueued
       </div>
 
       {(formError !== null) && <div className="state state--error" role="alert">{formError}</div>}
+      {isGroupReport && (
+        <p className="reply__note">
+          If the reporter never started the bot, the bot posts this reply in {chatLabel(report.chat_title, report.chat_id)}, where every member can read it.
+        </p>
+      )}
 
       <div className="composer__actions">
         <label className="checkbox" htmlFor={resolveId}>

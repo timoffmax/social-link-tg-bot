@@ -127,7 +127,7 @@ func handleReportCommand(origMessage *response.TgMessage, origChat *response.TgC
 	if isPrompt == false {
 		reportContext := botMessageContext(botMessage)
 		reportText := joinReportParts(description, reportContext)
-		outcome := submitReport(origChat, origUser, reportText)
+		outcome := submitReport(origChat, origUser, reportText, origMessage.MessageId)
 		answer := reportAnswerText(outcome)
 		sendReportReply(origChat.Id, origMessage.MessageId, answer)
 	}
@@ -210,7 +210,7 @@ func sendReportPrompt(chat *response.TgChat, user *response.TgUser, replyToMessa
 	}
 
 	sent := message.NewSendMessage(prompt)
-	awaitReport(chat, user, sent.ResponsePayload, "", "")
+	awaitReport(chat, user, sent.ResponsePayload, "", "", 0)
 }
 
 // reportUserMention @mentions the user in a group (a link mention without a
@@ -224,9 +224,17 @@ func reportUserMention(chat *response.TgChat, user *response.TgUser) string {
 	}
 
 	if (isGroup == true) && (user.Username == "") {
-		name := html.EscapeString(user.FirstName)
-		result = fmt.Sprintf("<a href=\"tg://user?id=%d\">%s</a>: ", user.Id, name)
+		result = userLinkMention(int64(user.Id), user.FirstName)
 	}
+
+	return result
+}
+
+// userLinkMention mentions a user by id, showing the given name (HTML parse
+// mode).
+func userLinkMention(userID int64, shown string) string {
+	name := html.EscapeString(shown)
+	result := fmt.Sprintf("<a href=\"tg://user?id=%d\">%s</a>: ", userID, name)
 
 	return result
 }
@@ -237,11 +245,14 @@ const reportReplyTTL = 48 * time.Hour
 
 // pendingReport is a report prompt awaiting its user's answer; Context is
 // what the report is about (a post), joined with the answer into one report.
+// ReplyToID is the message a reply to the report posted in the group answers
+// (0: the user's answer).
 type pendingReport struct {
-	UserID   int
-	Context  string
-	PromptID int
-	ClaimKey string
+	UserID    int
+	Context   string
+	PromptID  int
+	ClaimKey  string
+	ReplyToID int
 }
 
 // reportReplies are the pending reports by prompt ("chat:message"). The
@@ -260,11 +271,11 @@ var reportNextMessages = newTTLStore(reportNextMessageTTL)
 
 // awaitReport waits for the user's answer to a sent prompt; a send without a
 // message id (failed) is ignored. It reports whether it waits.
-func awaitReport(chat *response.TgChat, user *response.TgUser, sent *response.TgMessage, context string, claimKey string) bool {
+func awaitReport(chat *response.TgChat, user *response.TgUser, sent *response.TgMessage, context string, claimKey string, replyToID int) bool {
 	result := (sent != nil) && (sent.MessageId != 0)
 
 	if result == true {
-		pending := pendingReport{UserID: user.Id, Context: context, PromptID: sent.MessageId, ClaimKey: claimKey}
+		pending := pendingReport{UserID: user.Id, Context: context, PromptID: sent.MessageId, ClaimKey: claimKey, ReplyToID: replyToID}
 		setPendingReport(chat, pending)
 		pointNextMessage(chat, pending)
 	}
@@ -356,11 +367,24 @@ func handleReportPromptReply(origMessage *response.TgMessage, origChat *response
 	if isAwaited == true {
 		description := messageText(origMessage)
 		reportText := joinReportParts(description, pending.Context)
-		outcome := submitReport(origChat, origUser, reportText)
+		replyToID := answerReplyToID(pending, origMessage)
+		outcome := submitReport(origChat, origUser, reportText, replyToID)
 		finishPendingReport(origChat, pending, outcome, origMessage.MessageId)
 	}
 
 	result := (isAwaited == true) || (isExpired == true)
+
+	return result
+}
+
+// answerReplyToID is the message a reply to an answered report answers: the
+// reported message, else the user's answer.
+func answerReplyToID(pending pendingReport, answer *response.TgMessage) int {
+	result := pending.ReplyToID
+
+	if result == 0 {
+		result = answer.MessageId
+	}
 
 	return result
 }
@@ -522,7 +546,8 @@ func handleReportFailedCallback(callbackQuery *response.TgCallbackQuery) {
 
 	if isClaimed == true {
 		reportText := failedDownloadReportText(&errorMessage)
-		outcome := submitReport(&errorMessage.Chat, &callbackQuery.From, reportText)
+		replyToID := reportedMessageID(&errorMessage)
+		outcome := submitReport(&errorMessage.Chat, &callbackQuery.From, reportText, replyToID)
 		finishFailedReport(&errorMessage, claimKey, outcome)
 	}
 
@@ -576,7 +601,8 @@ func startPostReport(post *response.TgMessage, user *response.TgUser, claimKey s
 		ReplyMarkup:         reportPromptMarkup(),
 	}
 	sent := message.NewSendMessage(prompt)
-	isWaiting := awaitReport(&post.Chat, user, sent.ResponsePayload, context, claimKey)
+	replyToID := reportedMessageID(post)
+	isWaiting := awaitReport(&post.Chat, user, sent.ResponsePayload, context, claimKey, replyToID)
 	result := reportPostStartToast
 
 	if isWaiting == false {
@@ -626,7 +652,7 @@ func handleReportPromptCallback(callbackQuery *response.TgCallbackQuery) {
 
 	if (isMine == true) && (isSend == true) {
 		reportText := joinReportParts("", pending.Context)
-		outcome := submitReport(&prompt.Chat, &user, reportText)
+		outcome := submitReport(&prompt.Chat, &user, reportText, pending.ReplyToID)
 		finishPendingReport(&prompt.Chat, pending, outcome, 0)
 		toast = reportSendToast(outcome)
 	}
@@ -674,6 +700,19 @@ func finishFailedReport(errorMessage *response.TgMessage, claimKey string, outco
 	if outcome.IsDelivered == false {
 		reportClaims.remove(claimKey)
 	}
+}
+
+// reportedMessageID is the message a reply to a report about the bot's
+// message answers: the user's message (with the link) it replies to, else the
+// bot's message itself.
+func reportedMessageID(botMessage *response.TgMessage) int {
+	result := botMessage.MessageId
+
+	if botMessage.ReplyToMessage != nil {
+		result = botMessage.ReplyToMessage.MessageId
+	}
+
+	return result
 }
 
 // postReportText describes a reported post and the user's message with the
@@ -803,8 +842,9 @@ type reportOutcome struct {
 	IsDelivered bool
 }
 
-// submitReport saves the report and sends it to the owner with a /reply hint.
-func submitReport(chat *response.TgChat, user *response.TgUser, reportText string) reportOutcome {
+// submitReport saves the report and sends it to the owner with a /reply hint;
+// replyToID is the message a reply posted in the report's chat answers.
+func submitReport(chat *response.TgChat, user *response.TgUser, reportText string, replyToID int) reportOutcome {
 	adminUserID := config.GetAdminUserID()
 	chatTitle := chat.Title
 	isPrivate := (chat.Type == chatTypePrivate)
@@ -814,7 +854,7 @@ func submitReport(chat *response.TgChat, user *response.TgUser, reportText strin
 	}
 
 	userID := int64(user.Id)
-	reportID, dbErr := createReport(userID, user.Username, user.FirstName, chat.Id, chatTitle, reportText)
+	reportID, dbErr := createReport(userID, user.Username, user.FirstName, chat.Id, chatTitle, reportText, replyToID)
 
 	if dbErr != nil {
 		log.Printf("❌ Failed to save report to DB: %v", dbErr)

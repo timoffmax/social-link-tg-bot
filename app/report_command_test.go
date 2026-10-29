@@ -11,6 +11,9 @@ import (
 
 const reportTestBotUsername = "fix_link_test_bot"
 
+// filedReplyToIDs are the reply-to messages of the reports filed in a test.
+var filedReplyToIDs []int
+
 // startReportTest records Bot API calls, makes the owner 1 and names the bot.
 func startReportTest(t *testing.T) *botAPIRecorder {
 	recorder := startTestBotAPI(t, false)
@@ -25,8 +28,10 @@ func startReportTest(t *testing.T) *botAPIRecorder {
 	reportReplies = newTTLStore(reportReplyTTL)
 	reportNextMessages = newTTLStore(reportReplyTTL)
 	nextReportID := 0
-	createReport = func(int64, string, string, int64, string, string) (int, error) {
+	filedReplyToIDs = nil
+	createReport = func(_ int64, _ string, _ string, _ int64, _ string, _ string, replyToID int) (int, error) {
 		nextReportID++
+		filedReplyToIDs = append(filedReplyToIDs, replyToID)
 		return nextReportID, nil
 	}
 	t.Cleanup(func() {
@@ -226,7 +231,7 @@ func TestInAGroupOnlyTheReportersReplyIsTheNote(t *testing.T) {
 func TestUndeliveredNoteKeepsThePromptWaiting(t *testing.T) {
 	recorder := startReportTest(t)
 	t.Setenv("ADMIN_USER_ID", "")
-	createReport = func(int64, string, string, int64, string, string) (int, error) {
+	createReport = func(int64, string, string, int64, string, string, int) (int, error) {
 		return 0, errors.New("db down")
 	}
 	chat := response.TgChat{Id: 42, Type: chatTypePrivate}
@@ -436,4 +441,74 @@ func TestReplyToOtherBotMessageIsNotExpired(t *testing.T) {
 	if isExpiredReportReply(reply, &chat) == true {
 		t.Fatalf("a reply to a non-report message must not be expired")
 	}
+}
+
+// assertFiledReplyTo fails unless one report was filed with the reply-to message.
+func assertFiledReplyTo(t *testing.T, expected int) {
+	if (len(filedReplyToIDs) != 1) || (filedReplyToIDs[0] != expected) {
+		t.Fatalf("expected one report answering message %d, got %v", expected, filedReplyToIDs)
+	}
+}
+
+func TestPostReportSentAsIsStoresTheUsersLinkMessage(t *testing.T) {
+	recorder := startReportTest(t)
+	group := response.TgChat{Id: -110, Type: "supergroup", Title: "G"}
+	prompt := tapReportUnderPost(t, recorder, group, response.TgUser{Id: 42}, 10)
+
+	handleReportPromptCallback(&response.TgCallbackQuery{Id: "c2", From: response.TgUser{Id: 42}, Message: *prompt, Data: reportSendCallback})
+
+	assertFiledReplyTo(t, 9)
+}
+
+func TestPostReportAnsweredInAGroupStoresTheUsersLinkMessage(t *testing.T) {
+	recorder := startReportTest(t)
+	group := response.TgChat{Id: -110, Type: "supergroup", Title: "G"}
+	prompt := tapReportUnderPost(t, recorder, group, response.TgUser{Id: 42}, 10)
+	answer := &response.TgMessage{MessageId: 23, Text: "no sound", ReplyToMessage: prompt}
+
+	handleReportPromptReply(answer, &group, &response.TgUser{Id: 42})
+
+	assertFiledReplyTo(t, 9)
+}
+
+func TestMenuReportAnsweredInAGroupStoresTheAnswer(t *testing.T) {
+	recorder := startReportTest(t)
+	group := response.TgChat{Id: -110, Type: "supergroup", Title: "G"}
+	sendReportPrompt(&group, &response.TgUser{Id: 42, Username: "ann"}, 0)
+	prompt := reportBotMessage(sentMessageID(lastSendIndex(recorder.all(), -110)), reportPromptTitle)
+	answer := &response.TgMessage{MessageId: 31, Text: "stories never load", ReplyToMessage: prompt}
+
+	handleReportPromptReply(answer, &group, &response.TgUser{Id: 42})
+
+	assertFiledReplyTo(t, 31)
+}
+
+func TestReportCommandWithTextStoresItsOwnMessage(t *testing.T) {
+	startReportTest(t)
+
+	handleReportCommand(&response.TgMessage{MessageId: 8, Text: "/report stories never load"}, &response.TgChat{Id: -100, Type: "supergroup", Title: "Group"}, &response.TgUser{Id: 42})
+
+	assertFiledReplyTo(t, 8)
+}
+
+func TestReportFailedButtonStoresTheUsersLinkMessage(t *testing.T) {
+	startReportTest(t)
+	original := &response.TgMessage{MessageId: 3, Text: "https://www.tiktok.com/@a/video/1"}
+	errorMessage := response.TgMessage{MessageId: 4, Date: 1, Text: "❌ Failed", Chat: response.TgChat{Id: -100, Type: "supergroup", Title: "Group"}, ReplyToMessage: original}
+
+	handleReportFailedCallback(&response.TgCallbackQuery{Id: "c1", From: response.TgUser{Id: 42}, Message: errorMessage, Data: reportFailedCallback})
+
+	assertFiledReplyTo(t, 3)
+}
+
+func TestBareReportAnsweredInAGroupStoresTheAnswer(t *testing.T) {
+	recorder := startReportTest(t)
+	group := response.TgChat{Id: -110, Type: "supergroup", Title: "G"}
+	handleReportCommand(&response.TgMessage{MessageId: 30, Text: "/report"}, &group, &response.TgUser{Id: 42})
+	prompt := reportBotMessage(sentMessageID(lastSendIndex(recorder.all(), -110)), reportPromptTitle)
+	answer := &response.TgMessage{MessageId: 31, Text: "stories never load", ReplyToMessage: prompt}
+
+	handleReportPromptReply(answer, &group, &response.TgUser{Id: 42})
+
+	assertFiledReplyTo(t, 31)
 }

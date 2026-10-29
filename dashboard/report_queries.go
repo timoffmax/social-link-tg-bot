@@ -159,6 +159,7 @@ func scanReportReply(row rowScanner, reportID *int64) (ReportReply, error) {
 		&replyError,
 		&createdAt,
 		&sentAt,
+		&result.SentInGroup,
 	)
 
 	if err == nil {

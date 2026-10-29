@@ -64,10 +64,15 @@ type ReportReply struct {
 	SentAt            sql.NullTime
 }
 
-// ClaimedReportReply is a reply claimed for sending, with the reporter it goes to.
+// ClaimedReportReply is a reply claimed for sending, with its report's
+// reporter, chat and the message a reply posted in that chat answers.
 type ClaimedReportReply struct {
-	Reply  ReportReply
-	UserID int64
+	Reply            ReportReply
+	UserID           int64
+	Username         string
+	FirstName        string
+	ChatID           int64
+	ReplyToMessageID int
 }
 
 // rowScanner is a *sql.Row or *sql.Rows.
@@ -121,8 +126,8 @@ func CreateReportReply(reportID int, text, source, status string) (ReportReply, 
 }
 
 // claimReportReplyQuery moves the oldest queued reply that is due to
-// 'sending', stamps claimed_at and returns it with the reporter's user id;
-// SKIP LOCKED keeps two senders apart: $1 'sending', $2 'queued'.
+// 'sending', stamps claimed_at and returns it with its report's reporter,
+// chat and reply-to message; SKIP LOCKED keeps two senders apart: $1 'sending', $2 'queued'.
 const claimReportReplyQuery = `
 WITH claimed AS (
     UPDATE report_replies SET status = $1, claimed_at = now()
@@ -135,7 +140,7 @@ WITH claimed AS (
     )
     RETURNING ` + reportReplyColumns + `
 )
-SELECT claimed.*, reports.user_id
+SELECT claimed.*, reports.user_id, COALESCE(reports.username, ''), COALESCE(reports.first_name, ''), reports.chat_id, COALESCE(reports.reply_to_message_id, 0)
 FROM claimed
 JOIN reports ON reports.id = claimed.report_id`
 
@@ -148,7 +153,7 @@ func ClaimNextQueuedReportReply() (ClaimedReportReply, bool, error) {
 
 	if IsDBInitialized() == true {
 		row := GetDB().QueryRow(claimReportReplyQuery, ReportReplyStatusSending, ReportReplyStatusQueued)
-		result.Reply, err = scanReportReply(row, &result.UserID)
+		result.Reply, err = scanReportReply(row, &result.UserID, &result.Username, &result.FirstName, &result.ChatID, &result.ReplyToMessageID)
 		isClaimed = (err == nil)
 	}
 
@@ -162,11 +167,11 @@ func ClaimNextQueuedReportReply() (ClaimedReportReply, bool, error) {
 // markReportReplySentQuery records the delivered message and, for a reply
 // queued with resolve_on_send, resolves its report (keeping an earlier
 // resolved_at) in the same statement, so both or neither are stored:
-// $1 id, $2 message id, $3 'sent'.
+// $1 id, $2 message id, $3 'sent', $4 sent in the report's group.
 const markReportReplySentQuery = `
 WITH sent AS (
     UPDATE report_replies
-    SET status = $3, error = NULL, telegram_message_id = $2, sent_at = now()
+    SET status = $3, error = NULL, telegram_message_id = $2, sent_in_group = $4, sent_at = now()
     WHERE id = $1
     RETURNING report_id, resolve_on_send
 )
@@ -175,14 +180,15 @@ SET resolved = true, resolved_at = COALESCE(reports.resolved_at, now())
 FROM sent
 WHERE reports.id = sent.report_id AND sent.resolve_on_send`
 
-// MarkReportReplySent records the delivered message and resolves the report
+// MarkReportReplySent records the delivered message, in the reporter's
+// private chat or in the report's group (isInGroup), and resolves the report
 // when the reply asked for it. It is not limited to 'sending' rows: when a
 // reply did reach the user, 'sent' is the truth.
-func MarkReportReplySent(id int, telegramMessageID int64) error {
+func MarkReportReplySent(id int, telegramMessageID int64, isInGroup bool) error {
 	err := errDatabaseNotInitialized
 
 	if IsDBInitialized() == true {
-		_, err = GetDB().Exec(markReportReplySentQuery, id, telegramMessageID, ReportReplyStatusSent)
+		_, err = GetDB().Exec(markReportReplySentQuery, id, telegramMessageID, ReportReplyStatusSent, isInGroup)
 	}
 
 	return err

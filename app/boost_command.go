@@ -379,8 +379,12 @@ func sendBoostGroupNotice(chatID int64, notice string) {
 // moveGroupCredits moves a group's paid rows; a variable for tests.
 var moveGroupCredits = services.MoveGroupCredits
 
+// moveGroupReports moves a group's reports; a variable for tests.
+var moveGroupReports = services.MoveGroupReports
+
 // moveUpgradedGroup moves a group's bonus downloads, its special-download
-// policy and its boosts to the supergroup's new id, logging the outcome.
+// policy, its boosts and its reports to the supergroup's new id, logging the
+// outcome.
 func moveUpgradedGroup(oldChatID int64, newChatID int64) {
 	err := moveGroupCredits(oldChatID, newChatID)
 
@@ -390,5 +394,11 @@ func moveUpgradedGroup(oldChatID int64, newChatID int64) {
 
 	if err == nil {
 		log.Printf("🚀 Moved group %d bonus downloads and policy to supergroup %d", oldChatID, newChatID)
+	}
+
+	reportsErr := moveGroupReports(oldChatID, newChatID)
+
+	if reportsErr != nil {
+		log.Printf("❌ Moving group %d reports to supergroup %d failed: %v", oldChatID, newChatID, reportsErr)
 	}
 }

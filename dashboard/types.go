@@ -253,7 +253,8 @@ type Report struct {
 // Telegram or never sent) or unknown (no answer from Telegram, so it may
 // have been delivered); Error is the reason, or the last passing refusal of
 // a queued reply waiting for its next attempt (NextAttemptAt). ResolveOnSend
-// resolves the report once the bot has delivered the reply.
+// resolves the report once the bot has delivered the reply. SentInGroup: the
+// reporter never started the bot, so it went to the report's group.
 type ReportReply struct {
 	ID            int64   `json:"id"`
 	Text          string  `json:"text"`
@@ -265,6 +266,7 @@ type ReportReply struct {
 	Error         *string `json:"error"`
 	CreatedAt     *string `json:"created_at"`
 	SentAt        *string `json:"sent_at"`
+	SentInGroup   bool    `json:"sent_in_group"`
 }
 
 // Reports is the /api/reports answer; Status is the filter of Latest.

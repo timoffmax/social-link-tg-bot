@@ -15,6 +15,7 @@ import (
 var reportRepliesTestMigrations = []string{
 	"../migrations/005_create_reports.up.sql",
 	"../migrations/009_report_replies.up.sql",
+	"../migrations/016_report_reply_in_group.up.sql",
 }
 
 // setupReportRepliesTestDB recreates the report tables and points the store at
@@ -57,7 +58,7 @@ func setupReportRepliesTestDB(t *testing.T) *sql.DB {
 
 // createTestReport files a report by userID, failing the test on errors.
 func createTestReport(t *testing.T, userID int64) int {
-	id, err := CreateReport(userID, "user", "User", userID, "chat", "it broke")
+	id, err := CreateReport(userID, "user", "User", userID, "chat", "it broke", 0)
 
 	if err != nil {
 		t.Fatalf("create report: %v", err)
@@ -165,7 +166,7 @@ func TestMarkReportReplySentStoresTheMessageAndFailedDoesNotOverwriteIt(t *testi
 	reportID := createTestReport(t, 503)
 	reply := createTestReply(t, reportID, "hi", ReportReplySourceTelegram, ReportReplyStatusSending)
 
-	sentErr := MarkReportReplySent(reply.ID, 777)
+	sentErr := MarkReportReplySent(reply.ID, 777, false)
 	failedErr := MarkReportReplyFailed(reply.ID, "late failure")
 	replies := listTestReplies(t, reportID)
 	stored := replies[0]
@@ -250,8 +251,8 @@ func TestMarkReportReplySentResolvesTheReportOnlyWhenTheReplyAskedForIt(t *testi
 	plain := createTestReply(t, plainID, "question", ReportReplySourceDashboard, ReportReplyStatusSending)
 	mustExec(t, db, "UPDATE report_replies SET resolve_on_send = true WHERE text = 'fixed'")
 
-	resolvingErr := MarkReportReplySent(resolving.ID, 1)
-	plainErr := MarkReportReplySent(plain.ID, 2)
+	resolvingErr := MarkReportReplySent(resolving.ID, 1, false)
+	plainErr := MarkReportReplySent(plain.ID, 2, false)
 	isResolved, resolvedAt := reportResolveState(t, db, resolvingID)
 	isPlainResolved, _ := reportResolveState(t, db, plainID)
 
@@ -267,7 +268,7 @@ func TestMarkReportReplySentKeepsAnEarlierResolveTime(t *testing.T) {
 	mustExec(t, db, "UPDATE report_replies SET resolve_on_send = true")
 	mustExec(t, db, "UPDATE reports SET resolved = true, resolved_at = '2026-01-02T03:04:05Z'")
 
-	err := MarkReportReplySent(reply.ID, 1)
+	err := MarkReportReplySent(reply.ID, 1, false)
 	_, resolvedAt := reportResolveState(t, db, reportID)
 	original := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 
@@ -411,5 +412,57 @@ func TestResolveReportRecordsTheResolveTime(t *testing.T) {
 
 	if (againErr != nil) || (kept.Time.Equal(original) == false) {
 		t.Fatalf("expected the original resolve time kept, got %+v %v", kept, againErr)
+	}
+}
+
+func TestClaimReturnsTheReportGroupAndReplyToMessageAndSentInGroupIsStored(t *testing.T) {
+	db := setupReportRepliesTestDB(t)
+	reportID, err := CreateReport(8785989499, "oleh", "Oleh", -5509608115, "group", "(no description)", 77629)
+
+	if err != nil {
+		t.Fatalf("create report: %v", err)
+	}
+
+	queued := createTestReply(t, reportID, "hello", ReportReplySourceDashboard, ReportReplyStatusQueued)
+	claimed, isClaimed, claimErr := ClaimNextQueuedReportReply()
+
+	if (claimErr != nil) || (isClaimed == false) || (claimed.UserID != 8785989499) || (claimed.Username != "oleh") || (claimed.FirstName != "Oleh") || (claimed.ChatID != -5509608115) || (claimed.ReplyToMessageID != 77629) {
+		t.Fatalf("expected the report's group and message on the claim, got %+v (%t, %v)", claimed, isClaimed, claimErr)
+	}
+
+	sentErr := MarkReportReplySent(queued.ID, 900, true)
+	var isInGroup bool
+	scanErr := db.QueryRow("SELECT sent_in_group FROM report_replies WHERE id = $1", queued.ID).Scan(&isInGroup)
+	report, getErr := GetReport(reportID)
+
+	if (sentErr != nil) || (scanErr != nil) || (isInGroup == false) || (getErr != nil) || (report.ReplyToMessageID != 77629) {
+		t.Fatalf("expected sent_in_group and the stored message, got %t %+v (%v, %v, %v)", isInGroup, report, sentErr, scanErr, getErr)
+	}
+}
+
+func TestReportWithoutAReplyToMessageReadsZero(t *testing.T) {
+	setupReportRepliesTestDB(t)
+	reportID := createTestReport(t, 42)
+
+	report, err := GetReport(reportID)
+
+	if (err != nil) || (report.ReplyToMessageID != 0) {
+		t.Fatalf("expected no reply-to message, got %+v (%v)", report, err)
+	}
+}
+
+func TestMoveGroupReportsPointsThemAtTheSupergroupWithoutTheReplyTo(t *testing.T) {
+	setupReportRepliesTestDB(t)
+	reportID, err := CreateReport(42, "ann", "Ann", -555, "group", "broken", 77)
+
+	if err != nil {
+		t.Fatalf("create report: %v", err)
+	}
+
+	moveErr := MoveGroupReports(-555, -1009999)
+	report, getErr := GetReport(reportID)
+
+	if (moveErr != nil) || (getErr != nil) || (report.ChatID != -1009999) || (report.ReplyToMessageID != 0) {
+		t.Fatalf("expected the report in the supergroup without reply-to, got %+v (%v, %v)", report, moveErr, getErr)
 	}
 }

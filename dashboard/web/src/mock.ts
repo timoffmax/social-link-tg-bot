@@ -752,6 +752,7 @@ function reply(id: number, text: string, source: ReportReply['source'], status: 
     error: REPLY_ERRORS[status] ?? null,
     created_at: hoursAgo(hours),
     sent_at: isSent ? hoursAgo(hours) : null,
+    sent_in_group: false,
   };
 }
 
@@ -888,6 +889,7 @@ function queueReply(id: number, body: ReportReplyRequest): ReportReplyResponse {
     error: null,
     created_at: now,
     sent_at: null,
+    sent_in_group: false,
   };
   store.nextReplyId += 1;
   store.queuedAt.set(item.id, Date.now());

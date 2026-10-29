@@ -784,28 +784,43 @@ func GetAllChatsWithStats(period string) ([]ChatStats, error) {
 	return result, nil
 }
 
-// Report represents a user report
+// Report represents a user report; ReplyToMessageID is the message in the
+// report's chat that a reply posted there answers (0 when unknown).
 type Report struct {
-	ID        int
-	UserID    int64
-	Username  string
-	FirstName string
-	ChatID    int64
-	ChatTitle string
-	Message   string
-	Resolved  bool
-	CreatedAt time.Time
+	ID               int
+	UserID           int64
+	Username         string
+	FirstName        string
+	ChatID           int64
+	ChatTitle        string
+	Message          string
+	Resolved         bool
+	CreatedAt        time.Time
+	ReplyToMessageID int
 }
 
-// CreateReport saves a user report to the database
-func CreateReport(userID int64, username, firstName string, chatID int64, chatTitle, msg string) (int, error) {
+// reportColumns are the columns GetReport and GetOpenReports read, in the
+// order scanReport reads them.
+const reportColumns = "id, user_id, username, first_name, chat_id, chat_title, message, resolved, created_at, COALESCE(reply_to_message_id, 0)"
+
+// scanReport reads one row of reportColumns.
+func scanReport(row rowScanner) (Report, error) {
+	var result Report
+	err := row.Scan(&result.ID, &result.UserID, &result.Username, &result.FirstName, &result.ChatID, &result.ChatTitle, &result.Message, &result.Resolved, &result.CreatedAt, &result.ReplyToMessageID)
+
+	return result, err
+}
+
+// CreateReport saves a user report to the database; replyToMessageID 0 is
+// stored as NULL
+func CreateReport(userID int64, username, firstName string, chatID int64, chatTitle, msg string, replyToMessageID int) (int, error) {
 	if !IsDBInitialized() {
 		return 0, fmt.Errorf("database not initialized")
 	}
 
 	var id int
-	query := `INSERT INTO reports (user_id, username, first_name, chat_id, chat_title, message) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`
-	err := GetDB().QueryRow(query, userID, username, firstName, chatID, chatTitle, msg).Scan(&id)
+	query := `INSERT INTO reports (user_id, username, first_name, chat_id, chat_title, message, reply_to_message_id) VALUES ($1, $2, $3, $4, $5, $6, NULLIF($7::bigint, 0)) RETURNING id`
+	err := GetDB().QueryRow(query, userID, username, firstName, chatID, chatTitle, msg, replyToMessageID).Scan(&id)
 
 	return id, err
 }
@@ -816,7 +831,7 @@ func GetOpenReports() ([]*Report, error) {
 		return nil, nil
 	}
 
-	query := `SELECT id, user_id, username, first_name, chat_id, chat_title, message, resolved, created_at FROM reports WHERE resolved = false ORDER BY created_at DESC`
+	query := fmt.Sprintf("SELECT %s FROM reports WHERE resolved = false ORDER BY created_at DESC", reportColumns)
 	rows, err := GetDB().Query(query)
 	if err != nil {
 		return nil, err
@@ -825,8 +840,9 @@ func GetOpenReports() ([]*Report, error) {
 
 	var result []*Report
 	for rows.Next() {
-		var r Report
-		if err := rows.Scan(&r.ID, &r.UserID, &r.Username, &r.FirstName, &r.ChatID, &r.ChatTitle, &r.Message, &r.Resolved, &r.CreatedAt); err != nil {
+		r, err := scanReport(rows)
+
+		if err != nil {
 			return nil, err
 		}
 		result = append(result, &r)
@@ -841,15 +857,31 @@ func GetReport(id int) (*Report, error) {
 		return nil, fmt.Errorf("database not initialized")
 	}
 
-	var r Report
-	query := `SELECT id, user_id, username, first_name, chat_id, chat_title, message, resolved, created_at FROM reports WHERE id = $1`
-	err := GetDB().QueryRow(query, id).Scan(&r.ID, &r.UserID, &r.Username, &r.FirstName, &r.ChatID, &r.ChatTitle, &r.Message, &r.Resolved, &r.CreatedAt)
+	query := fmt.Sprintf("SELECT %s FROM reports WHERE id = $1", reportColumns)
+	row := GetDB().QueryRow(query, id)
+	r, err := scanReport(row)
 
 	if err == sql.ErrNoRows {
 		return nil, fmt.Errorf("report %d not found", id)
 	}
 
 	return &r, err
+}
+
+// moveGroupReportsQuery points a group's reports at its supergroup; the
+// reply-to messages go, as message ids differ there: $1 old id, $2 new id.
+const moveGroupReportsQuery = `UPDATE reports SET chat_id = $2, reply_to_message_id = NULL WHERE chat_id = $1`
+
+// MoveGroupReports moves a group's reports to the new id Telegram gives it
+// when it becomes a supergroup, so replies posted in the group reach it.
+func MoveGroupReports(oldChatID int64, newChatID int64) error {
+	err := errDatabaseNotInitialized
+
+	if IsDBInitialized() == true {
+		_, err = GetDB().Exec(moveGroupReportsQuery, oldChatID, newChatID)
+	}
+
+	return err
 }
 
 // ResolveReport marks a report as resolved and records when; a report

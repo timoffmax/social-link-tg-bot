@@ -46,11 +46,11 @@ func (s *stubStore) SetReportResolved(ctx context.Context, id int64, resolved bo
 
 const validReplyBody = `{"text":"<b>Fixed</b>, thanks!","resolve":true}`
 
-func TestReplyTextLimitLeavesRoomForTheHeading(t *testing.T) {
+func TestReplyTextLimitLeavesRoomForTheHeadingAndAGroupMention(t *testing.T) {
 	result := ReplyTextLimit
 
-	if (result != 4066) || (ReplyMessagePrefix != reportreply.Prefix) {
-		t.Errorf("limit = %d, want 4066; prefix = %q", result, ReplyMessagePrefix)
+	if (result != 4000) || (ReplyMessagePrefix != reportreply.Prefix) {
+		t.Errorf("limit = %d, want 4000; prefix = %q", result, ReplyMessagePrefix)
 	}
 }
 
@@ -58,7 +58,7 @@ func TestReportsAnswerCarriesTheReplyHeadingAndLimit(t *testing.T) {
 	recorder := doRequest(newTestServer(&stubStore{}), http.MethodGet, "/api/reports")
 	body := decodeBody(t, recorder)
 
-	if (recorder.Code != http.StatusOK) || (body["reply_prefix"] != reportreply.Prefix) || (body["reply_text_limit"] != float64(4066)) {
+	if (recorder.Code != http.StatusOK) || (body["reply_prefix"] != reportreply.Prefix) || (body["reply_text_limit"] != float64(4000)) {
 		t.Errorf("status = %d, body = %v", recorder.Code, body)
 	}
 }
@@ -187,7 +187,7 @@ func TestReportBodyRules(t *testing.T) {
 }
 
 func TestReportValidationErrors(t *testing.T) {
-	atLimit := strings.Repeat("a", 4066)
+	atLimit := strings.Repeat("a", 4000)
 	cases := []struct {
 		target string
 		body   string
@@ -198,7 +198,7 @@ func TestReportValidationErrors(t *testing.T) {
 		{"/api/reports/1/replies", `{"text":"a\u0000","resolve":true}`, "text must not contain NUL characters"},
 		{"/api/reports/1/replies", `{"text":"<b>x</i>","resolve":true}`, "text: line 1, column 5: </i> closes <b> opened at line 1, column 1"},
 		{"/api/reports/1/replies", `{"text":"1 < 2","resolve":true}`, "text: line 1, column 3"},
-		{"/api/reports/1/replies", `{"text":"` + atLimit + `a","resolve":true}`, "text is too long: 4067 characters after formatting, at most 4066 (Telegram allows 4096, the reply's heading takes 30)"},
+		{"/api/reports/1/replies", `{"text":"` + atLimit + `a","resolve":true}`, "text is too long: 4001 characters after formatting, at most 4000 (Telegram allows 4096, the reply's heading and room for the reporter's mention in a group take 96)"},
 		{"/api/reports/1/replies", `{"text":"t"}`, "resolve is required"},
 		{"/api/reports/1/replies", `{"text":"t","resolve":null}`, "resolve is required"},
 		{"/api/reports/1/replies", `{"text":"t","resolve":"yes"}`, "invalid request body"},
@@ -227,7 +227,7 @@ func TestReportValidationErrors(t *testing.T) {
 
 func TestReportReplyAtTheLimitIsAccepted(t *testing.T) {
 	store := &stubStore{}
-	content := strings.Repeat("😀", 2033)
+	content := strings.Repeat("😀", 2000)
 	recorder := blogRequest{method: http.MethodPost, target: "/api/reports/1/replies", body: `{"text":"` + content + `","resolve":true}`}.do(newTestServer(store))
 
 	if recorder.Code != http.StatusCreated {

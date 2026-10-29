@@ -6,12 +6,14 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/timoffmax/social-link-bot/model/api/request"
 	"github.com/timoffmax/social-link-bot/model/api/request/message"
 	"github.com/timoffmax/social-link-bot/model/api/request/payload"
+	"github.com/timoffmax/social-link-bot/model/reportreply"
 	"github.com/timoffmax/social-link-bot/services"
 )
 
@@ -227,7 +229,8 @@ func sendNextReportReply() (bool, bool) {
 // whether Telegram rate-limited the send.
 func deliverQueuedReply(claimed services.ClaimedReportReply) bool {
 	reply := claimed.Reply
-	messageID, sendErr := sendReplyToReporter(claimed.UserID, reply.Text)
+	target := claimedReplyTarget(claimed)
+	delivery, sendErr := sendReplyToReporter(target, reply.Text)
 	var retryErr replyRetryableError
 	isRetryable := errors.As(sendErr, &retryErr)
 	attempt := reply.Attempts + 1
@@ -235,8 +238,8 @@ func deliverQueuedReply(claimed services.ClaimedReportReply) bool {
 	result := (isRetryable == true) && (retryErr.isRateLimited == true)
 
 	if sendErr == nil {
-		recordReplySent(reply.ID, messageID)
-		log.Printf("💬 Dashboard reply #%d sent to user %d (report #%d)", reply.ID, claimed.UserID, reply.ReportID)
+		recordReplySent(reply.ID, delivery)
+		log.Printf("💬 Dashboard reply #%d sent to user %d (report #%d, in the group: %t)", reply.ID, claimed.UserID, reply.ReportID, delivery.IsInGroup)
 	}
 
 	if canRetry == true {
@@ -328,17 +331,17 @@ func notifyReplyFailed(reply services.ReportReply, userID int64, alert string, r
 	}
 }
 
-// recordReplySent stores a delivered reply's message id, retrying a failed
-// write a few times.
-func recordReplySent(replyID int, messageID int) {
-	telegramMessageID := int64(messageID)
-	err := markReportReplySent(replyID, telegramMessageID)
+// recordReplySent stores a delivered reply's message id and where it went,
+// retrying a failed write a few times.
+func recordReplySent(replyID int, delivery reportReplyDelivery) {
+	telegramMessageID := int64(delivery.MessageID)
+	err := markReportReplySent(replyID, telegramMessageID, delivery.IsInGroup)
 	attempt := 1
 
 	for (err != nil) && (attempt < reportReplyMarkSentAttempts) {
 		log.Printf("⚠️ Failed to mark report reply #%d sent (attempt %d), retrying: %v", replyID, attempt, err)
 		time.Sleep(reportReplyMarkSentRetryDelay)
-		err = markReportReplySent(replyID, telegramMessageID)
+		err = markReportReplySent(replyID, telegramMessageID, delivery.IsInGroup)
 		attempt++
 	}
 
@@ -365,17 +368,131 @@ func recordReplyUnknown(replyID int, reason string) {
 	}
 }
 
-// sendReplyToReporter sends a reply to the reporter and returns the message id.
+// reportReplyNotStartedError is Telegram's refusal of a private message to a
+// user who never started the bot.
+const reportReplyNotStartedError = "bot can't initiate conversation with a user"
+
+// reportReplyGroupError joins the private chat's refusal and the group's
+// error: private reason, group error.
+const reportReplyGroupError = "%v; in the group: %w"
+
+// reportReplyTarget is where a reply to a report goes: the reporter's private
+// chat, else the report's group (ChatID) as a reply to ReplyToMessageID.
+type reportReplyTarget struct {
+	UserID           int64
+	Username         string
+	FirstName        string
+	ChatID           int64
+	ReplyToMessageID int
+}
+
+// reportReplyDelivery is a delivered reply: its message and whether it went
+// to the report's group.
+type reportReplyDelivery struct {
+	MessageID int
+	IsInGroup bool
+}
+
+// claimedReplyTarget is the target of a reply claimed by the outbox.
+func claimedReplyTarget(claimed services.ClaimedReportReply) reportReplyTarget {
+	result := reportReplyTarget{
+		UserID:           claimed.UserID,
+		Username:         claimed.Username,
+		FirstName:        claimed.FirstName,
+		ChatID:           claimed.ChatID,
+		ReplyToMessageID: claimed.ReplyToMessageID,
+	}
+
+	return result
+}
+
+// reportTargetOf is the target of a reply to the report.
+func reportTargetOf(report *services.Report) reportReplyTarget {
+	result := reportReplyTarget{
+		UserID:           report.UserID,
+		Username:         report.Username,
+		FirstName:        report.FirstName,
+		ChatID:           report.ChatID,
+		ReplyToMessageID: report.ReplyToMessageID,
+	}
+
+	return result
+}
+
+// sendReplyToReporter sends a reply to the reporter's private chat. When the
+// reporter never started the bot and reported from a group, it goes to that
+// group instead, as a reply to the report's message, mentioning the reporter.
 // The error carries Telegram's description (e.g. "Forbidden: bot was blocked
-// by the user"), or the transport error when there was no answer.
-func sendReplyToReporter(userID int64, text string) (int, error) {
-	var result int
-	msg := payload.TgPlSendMessage{
-		ChatId:    userID,
+// by the user"), or the transport error when there was no answer; a failed
+// group send keeps the group error's kind, after the private chat's refusal.
+func sendReplyToReporter(target reportReplyTarget, text string) (reportReplyDelivery, error) {
+	var result reportReplyDelivery
+	privateMessage := privateReplyMessage(target, text)
+	messageID, err := sendReportReplyMessage(privateMessage)
+	result.MessageID = messageID
+	privateErr := err
+	isGroupNeeded := (isNotStartedRefusal(err) == true) && (isGroupReport(target) == true)
+
+	if isGroupNeeded == true {
+		groupMessage := groupReplyMessage(target, text)
+		result.MessageID, err = sendReportReplyMessage(groupMessage)
+		result.IsInGroup = (err == nil)
+		log.Printf("💬 User %d never started the bot, report reply sent in the group %d: %t", target.UserID, target.ChatID, result.IsInGroup)
+	}
+
+	if (isGroupNeeded == true) && (err != nil) {
+		err = fmt.Errorf(reportReplyGroupError, privateErr, err)
+	}
+
+	return result, err
+}
+
+// privateReplyMessage is the reply in the reporter's private chat.
+func privateReplyMessage(target reportReplyTarget, text string) payload.TgPlSendMessage {
+	result := payload.TgPlSendMessage{
+		ChatId:    target.UserID,
 		ParseMode: payload.ParseModeHTML,
 		Text:      services.ReportReplyPrefix + text,
 	}
 
+	return result
+}
+
+// groupReplyMessage is the reply in the report's group: it mentions the
+// reporter and answers the report's message (sent without it when that
+// message is gone or unknown).
+func groupReplyMessage(target reportReplyTarget, text string) payload.TgPlSendMessage {
+	mention := reporterMention(target)
+	result := payload.TgPlSendMessage{
+		ChatId:                   target.ChatID,
+		ParseMode:                payload.ParseModeHTML,
+		Text:                     fmt.Sprintf("%s%s%s", mention, services.ReportReplyPrefix, text),
+		ReplyToMessageId:         target.ReplyToMessageID,
+		AllowSendingWithoutReply: true,
+	}
+
+	return result
+}
+
+// reporterMention mentions the reporter by user id, so a username given up
+// since the report can't point at someone else; it shows the @username, else
+// the name cut to reportreply.MentionNameLimit runes with the ellipsis (the
+// dashboard keeps room for it).
+func reporterMention(target reportReplyTarget) string {
+	shown := shortenRunes(target.FirstName, reportreply.MentionNameLimit-1)
+
+	if target.Username != "" {
+		shown = fmt.Sprintf("@%s", target.Username)
+	}
+
+	result := userLinkMention(target.UserID, shown)
+
+	return result
+}
+
+// sendReportReplyMessage sends a reply message and returns its message id.
+func sendReportReplyMessage(msg payload.TgPlSendMessage) (int, error) {
+	var result int
 	sent := message.NewSendMessage(msg)
 	err := telegramSendError(sent)
 
@@ -384,6 +501,21 @@ func sendReplyToReporter(userID int64, text string) (int, error) {
 	}
 
 	return result, err
+}
+
+// isNotStartedRefusal reports Telegram's refusal of a private message to a
+// user who never started the bot.
+func isNotStartedRefusal(err error) bool {
+	result := (err != nil) && (strings.Contains(err.Error(), reportReplyNotStartedError) == true)
+
+	return result
+}
+
+// isGroupReport reports a report filed in a group, not in a private chat.
+func isGroupReport(target reportReplyTarget) bool {
+	result := (target.ChatID != 0) && (target.ChatID != target.UserID)
+
+	return result
 }
 
 // telegramSendError returns a failed send's reason, nil when it was sent:

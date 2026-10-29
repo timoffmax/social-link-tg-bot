@@ -164,19 +164,28 @@ func TestNonMembersGetNoBoostScreenOrInvoice(t *testing.T) {
 	}
 }
 
-func TestUpgradedGroupMovesItsCredits(t *testing.T) {
+func TestUpgradedGroupMovesItsCreditsAndReports(t *testing.T) {
 	previous := moveGroupCredits
+	previousReports := moveGroupReports
 	moved := [2]int64{}
+	movedReports := [2]int64{}
 	moveGroupCredits = func(oldID int64, newID int64) error {
 		moved = [2]int64{oldID, newID}
 		return nil
 	}
-	t.Cleanup(func() { moveGroupCredits = previous })
+	moveGroupReports = func(oldID int64, newID int64) error {
+		movedReports = [2]int64{oldID, newID}
+		return nil
+	}
+	t.Cleanup(func() {
+		moveGroupCredits = previous
+		moveGroupReports = previousReports
+	})
 
 	processUpdate(&response.TgUpdate{UpdateId: 990777, Message: response.TgMessage{MessageId: 9, Chat: response.TgChat{Id: -555, Type: "group"}, MigrateToChatId: -1009999}})
 
-	if moved != [2]int64{-555, -1009999} {
-		t.Fatalf("expected the credits moved to the supergroup, got %v", moved)
+	if (moved != [2]int64{-555, -1009999}) || (movedReports != [2]int64{-555, -1009999}) {
+		t.Fatalf("expected the credits and reports moved to the supergroup, got %v %v", moved, movedReports)
 	}
 }
 
