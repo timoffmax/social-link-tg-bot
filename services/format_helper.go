@@ -55,6 +55,19 @@ func FormatProfileMention(platform, username string) string {
 	return result
 }
 
+// safeProfileUsername returns username when it is a plain profile name
+// (profileUsernamePattern), else "".
+func safeProfileUsername(username string) string {
+	result := ""
+	isSafe := profileUsernamePattern.MatchString(username)
+
+	if isSafe == true {
+		result = username
+	}
+
+	return result
+}
+
 // IsProfileMentionLine reports whether a caption line holds a profile link
 // made by FormatProfileMention (the author line).
 func IsProfileMentionLine(line string) bool {

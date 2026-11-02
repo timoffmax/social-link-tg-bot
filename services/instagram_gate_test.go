@@ -166,3 +166,150 @@ func TestAudienceGateAcceptsThriftAsString(t *testing.T) {
 		t.Fatalf("expected an audience gate from a string thrift, got %+v %v", gate, err)
 	}
 }
+
+// oembedPostBody is a trimmed oEmbed answer for an ungated photo post.
+const oembedPostBody = `{"version":"1.0","title":"Line one & <two>\n\nSecond paragraph","author_name":"some.author_1","author_url":"https://www.instagram.com/some.author_1","provider_name":"Instagram","type":"rich"}`
+
+func TestParseInstagramOEmbedReadsAuthorAndCaption(t *testing.T) {
+	post, err := parseInstagramOEmbed(http.StatusOK, []byte(oembedPostBody))
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if (post.Gate.Restricted == true) || (post.AuthorName != "some.author_1") {
+		t.Fatalf("unexpected post: %+v", post)
+	}
+
+	if post.Caption != "Line one & <two>\n\nSecond paragraph" {
+		t.Fatalf("unexpected caption: %q", post.Caption)
+	}
+}
+
+func TestParseInstagramOEmbedKeepsGateWithoutCaption(t *testing.T) {
+	post, err := parseInstagramOEmbed(http.StatusBadRequest, []byte(gateAgeLimitedBody))
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if (post.Gate.AgeLimited == false) || (post.Caption != "") || (post.AuthorName != "") {
+		t.Fatalf("expected an age gate without caption, got %+v", post)
+	}
+}
+
+func TestParseInstagramOEmbedRejectsBrokenAnswer(t *testing.T) {
+	_, err := parseInstagramOEmbed(http.StatusOK, []byte("<html>"))
+
+	if err == nil {
+		t.Fatal("expected an error for a non-JSON answer")
+	}
+}
+
+func TestInstagramPostCaptionHasAuthorAndEscapedText(t *testing.T) {
+	post := InstagramPost{AuthorName: "some.author_1", Caption: "Line one & <two>\n\nSecond paragraph"}
+	caption := instagramPostCaption(post, "https://www.instagram.com/p/ABC123/")
+
+	if strings.Contains(caption, `instagram.com/some.author_1`) == false {
+		t.Fatalf("expected the author's profile link, got %q", caption)
+	}
+
+	if strings.Contains(caption, "Line one &amp; &lt;two&gt;\n\nSecond paragraph") == false {
+		t.Fatalf("expected the escaped caption text, got %q", caption)
+	}
+}
+
+func TestInstagramPostCaptionDropsUnsafeAuthorName(t *testing.T) {
+	post := InstagramPost{AuthorName: `bad"name`, Caption: "Text"}
+	caption := instagramPostCaption(post, "https://www.instagram.com/p/ABC123/")
+
+	if caption != "Text" {
+		t.Fatalf("expected only the text, got %q", caption)
+	}
+}
+
+func TestInstagramPostCaptionIsEmptyWithoutAuthorAndText(t *testing.T) {
+	caption := instagramPostCaption(InstagramPost{}, "https://www.instagram.com/p/ABC123/")
+
+	if caption != "" {
+		t.Fatalf("expected no caption, got %q", caption)
+	}
+}
+
+func TestInstagramPostCaptionFitsTheCaptionLimit(t *testing.T) {
+	postURL := "https://www.instagram.com/p/ABC123/"
+	post := InstagramPost{AuthorName: "some.author_1", Caption: strings.Repeat("Дівчина & газ ", 300)}
+	caption := instagramPostCaption(post, postURL)
+	size := captionSize(caption, postURL)
+
+	if size > TelegramCaptionLimitBytes {
+		t.Fatalf("caption with link is %d bytes, over %d", size, TelegramCaptionLimitBytes)
+	}
+
+	if strings.HasPrefix(caption, "📷") == false {
+		t.Fatalf("expected the author line to stay, got %q", caption)
+	}
+}
+
+func TestOGPreviewCaptionPrefersOEmbedCaption(t *testing.T) {
+	htmlBody := `<meta property="og:title" content="OG title" />`
+	post := InstagramPost{AuthorName: "some.author_1", Caption: "oEmbed text"}
+	caption := ogPreviewCaption(post, "https://www.instagram.com/p/ABC123/", htmlBody)
+
+	if (strings.Contains(caption, "oEmbed text") == false) || (strings.Contains(caption, "OG title") == true) {
+		t.Fatalf("expected the oEmbed caption, got %q", caption)
+	}
+}
+
+func TestOGPreviewCaptionFallsBackToOGTitle(t *testing.T) {
+	htmlBody := `<meta property="og:title" content="Tom &amp; Jerry" />`
+	caption := ogPreviewCaption(InstagramPost{}, "https://www.instagram.com/p/ABC123/", htmlBody)
+
+	if caption != "Tom &amp; Jerry" {
+		t.Fatalf("expected the escaped og:title, got %q", caption)
+	}
+}
+
+func TestInstagramPostCaptionKeepsMentionsFromLinkingToTelegram(t *testing.T) {
+	post := InstagramPost{Caption: "@chef at @insight.gastrobar (@x)"}
+	caption := instagramPostCaption(post, "https://www.instagram.com/p/ABC123/")
+
+	if caption != "@\u2060chef at @\u2060insight.gastrobar (@\u2060x)" {
+		t.Fatalf("expected word joiners after each mention @, got %q", caption)
+	}
+}
+
+func TestInstagramPostCaptionLeavesEmailsAndURLsAlone(t *testing.T) {
+	post := InstagramPost{Caption: "mail info@shop.com, josé@shop.com or https://site.com/@user"}
+	caption := instagramPostCaption(post, "https://www.instagram.com/p/ABC123/")
+
+	if caption != "mail info@shop.com, josé@shop.com or https://site.com/@user" {
+		t.Fatalf("expected the text unchanged, got %q", caption)
+	}
+}
+
+func TestInstagramPostCaptionLinksNoMentionAfterAFullStop(t *testing.T) {
+	caption := instagramPostCaption(InstagramPost{Caption: "Thanks.@chef"}, "https://www.instagram.com/p/ABC123/")
+
+	if caption != "Thanks.@\u2060chef" {
+		t.Fatalf("expected a word joiner after the @, got %q", caption)
+	}
+}
+
+func TestBlursMediaOnlyForAGateOtherThanTheAudienceLimit(t *testing.T) {
+	cases := map[string]struct {
+		gate InstagramGate
+		want bool
+	}{
+		"ungated":        {gate: InstagramGate{}, want: false},
+		"age limit":      {gate: InstagramGate{Restricted: true, AgeLimited: true}, want: true},
+		"other gate":     {gate: InstagramGate{Restricted: true}, want: true},
+		"audience limit": {gate: InstagramGate{Restricted: true, AudienceLimited: true}, want: false},
+	}
+
+	for name, testCase := range cases {
+		if got := testCase.gate.BlursMedia(); got != testCase.want {
+			t.Errorf("%s: got %t, want %t", name, got, testCase.want)
+		}
+	}
+}

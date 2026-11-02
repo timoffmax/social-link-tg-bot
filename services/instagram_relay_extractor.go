@@ -57,13 +57,7 @@ func (e *InstagramRelayExtractor) ExtractMedia(ctx context.Context, instagramURL
 // room for the remaining-quota note; a user name that is not a plain
 // Instagram name is left out.
 func instagramRelayCaption(meta relayMeta, instagramURL string) string {
-	username := meta.Channel
-	isSafeUsername := profileUsernamePattern.MatchString(username)
-
-	if isSafeUsername == false {
-		username = ""
-	}
-
+	username := safeProfileUsername(meta.Channel)
 	caption := authorCaption{
 		Platform:    gatedPlatform,
 		DisplayName: meta.Uploader,

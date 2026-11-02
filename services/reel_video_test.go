@@ -118,3 +118,13 @@ func TestReelCoverNoteStandsAloneOnAnEmptyCaption(t *testing.T) {
 		t.Fatalf("expected only the note, got %q", cover.Caption)
 	}
 }
+
+func TestKeepCoverSpoilerBlursTheVideoOfABlurredCover(t *testing.T) {
+	video := []*MediaInfo{{Type: MediaTypeVideo}}
+
+	keepCoverSpoiler(video, &MediaInfo{Spoiler: true})
+
+	if video[0].Spoiler == false {
+		t.Fatal("expected the video blurred like its cover")
+	}
+}

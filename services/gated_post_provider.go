@@ -9,11 +9,13 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/timoffmax/social-link-bot/config"
+	"github.com/timoffmax/social-link-bot/model/settings"
 )
 
 // apifyEmptyRetryDelay is the pause before retrying an empty answer (a
@@ -392,6 +394,14 @@ type authorCaption struct {
 	PlainText bool
 }
 
+// instagramMentionPattern matches an "@" that Telegram would link: not after
+// a word character (an email address) or a "/" (a URL path).
+var instagramMentionPattern = regexp.MustCompile(`(^|[^\p{L}\p{N}_/@])@([A-Za-z0-9._])`)
+
+// instagramMentionReplacement puts a word joiner after the "@", so Telegram
+// doesn't link the Instagram name to a Telegram account of the same name.
+const instagramMentionReplacement = "$1@\u2060$2"
+
 // buildAuthorCaption formats the author line plus the post text (escaped for
 // HTML, spoiler-wrapped when Spoiler is set). The text is fitted into MaxText
 // bytes, or into what Telegram's caption limit leaves next to the author
@@ -400,6 +410,12 @@ type authorCaption struct {
 func buildAuthorCaption(caption authorCaption) string {
 	escape := captionEscaper(caption.PlainText)
 	displayName := escape(caption.DisplayName)
+	text := caption.Text
+
+	if settings.PlatformInstagram == caption.Platform {
+		text = instagramMentionPattern.ReplaceAllString(text, instagramMentionReplacement)
+	}
+
 	authorLine := FormatAuthorCaption(caption.Platform, displayName, caption.Username, "")
 	linkSuffix := FormatOriginalLink(caption.PostURL)
 	budget := caption.MaxText
@@ -408,7 +424,7 @@ func buildAuthorCaption(caption authorCaption) string {
 		budget = TelegramCaptionLimitBytes - len(authorLine) - len(gatedCaptionSeparator) - len(linkSuffix) - caption.Reserve
 	}
 
-	fittedText := fitEscapedCaption(caption.Text, budget, caption.Spoiler, escape)
+	fittedText := fitEscapedCaption(text, budget, caption.Spoiler, escape)
 	result := FormatAuthorCaption(caption.Platform, displayName, caption.Username, fittedText)
 
 	return result

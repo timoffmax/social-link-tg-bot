@@ -692,6 +692,7 @@ func otherPlatformDisplayName(originalURL string) string {
 }
 
 // FormatOriginalLink returns a formatted "View the original on Platform" HTML link
+// (originalLinkPattern in special_download.go matches its shape).
 func FormatOriginalLink(originalURL string) string {
 	cleanURL := cleanURLParams(originalURL)
 	platform := platformDisplayName(originalURL)

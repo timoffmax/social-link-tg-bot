@@ -48,6 +48,7 @@ func (sd *SmartDownloader) replaceReelCover(instagramURL string, cover *MediaInf
 
 	if err == nil {
 		os.Remove(cover.Filename)
+		keepCoverSpoiler(video, cover)
 		result = video
 	}
 
@@ -58,6 +59,14 @@ func (sd *SmartDownloader) replaceReelCover(instagramURL string, cover *MediaInf
 	}
 
 	return result, denial
+}
+
+// keepCoverSpoiler blurs the video that replaces a blurred cover (a gated
+// post), whose source may not know about the gate.
+func keepCoverSpoiler(video []*MediaInfo, cover *MediaInfo) {
+	for _, item := range video {
+		item.Spoiler = (item.Spoiler == true) || (cover.Spoiler == true)
+	}
 }
 
 // reelVideoSteps are the sources of a reel's video: the home relay, then the

@@ -10,6 +10,8 @@ import (
 	"net/url"
 	"strconv"
 	"time"
+
+	"github.com/timoffmax/social-link-bot/model/settings"
 )
 
 // instagramOEmbedEndpoint is Instagram's logged-out oEmbed API. For a post whose
@@ -22,8 +24,9 @@ const instagramOEmbedEndpoint = "https://i.instagram.com/api/v1/oembed/"
 // doesn't hold up the failure reply.
 const instagramGateTimeout = 5 * time.Second
 
-// instagramGateMaxBody caps how much of the oEmbed answer is read.
-const instagramGateMaxBody = 64 * 1024
+// instagramGateMaxBody caps how much of the oEmbed answer is read; its html
+// repeats the caption, escaped, so a long caption needs well over 64 KB.
+const instagramGateMaxBody = 256 * 1024
 
 // instagramAgeGateMarker is the blocks_logging_data value of an account-level
 // minimum age limit ("People under 15 can't see this content").
@@ -72,6 +75,29 @@ func (g InstagramGate) NeedsSpoiler() bool {
 	return result
 }
 
+// InstagramPost is what the oEmbed API tells about a post: its gate, and for
+// an ungated post the author's user name and the caption text (plain text).
+type InstagramPost struct {
+	Gate       InstagramGate
+	AuthorName string
+	Caption    string
+}
+
+// instagramOEmbedPost is the part of a 200 oEmbed answer the bot reads; the
+// title holds the full caption.
+type instagramOEmbedPost struct {
+	Title      string `json:"title"`
+	AuthorName string `json:"author_name"`
+}
+
+// BlursMedia reports whether media fetched for free is sent blurred: a gated
+// post, unless only its region/audience is limited.
+func (g InstagramGate) BlursMedia() bool {
+	result := (g.Restricted == true) && (g.NeedsSpoiler() == true)
+
+	return result
+}
+
 // InstagramGatedError is returned by the Instagram chain for a post its author
 // gated, so callers can explain the restriction instead of a generic failure.
 type InstagramGatedError struct {
@@ -85,11 +111,10 @@ func (e *InstagramGatedError) Error() string {
 	return result
 }
 
-// CheckInstagramGate asks Instagram's oEmbed API whether a post is gated. A
-// failed lookup or an ungated post yields a zero InstagramGate, so callers keep
-// their normal fallback.
-func CheckInstagramGate(instagramURL string) InstagramGate {
-	result := InstagramGate{}
+// LookupInstagramPost asks Instagram's oEmbed API for a post's gate, author and
+// caption; a failed lookup yields a zero InstagramPost.
+func LookupInstagramPost(instagramURL string) InstagramPost {
+	result := InstagramPost{}
 	status := 0
 	var body []byte
 	postURL, err := canonicalInstagramPostURL(instagramURL)
@@ -99,12 +124,29 @@ func CheckInstagramGate(instagramURL string) InstagramGate {
 	}
 
 	if err == nil {
-		result, err = parseInstagramGate(status, body)
+		result, err = parseInstagramOEmbed(status, body)
 	}
 
 	if err != nil {
-		log.Printf("⚠️ [instagram-gate] check failed for %s: %v", instagramURL, err)
+		log.Printf("⚠️ [instagram-oembed] lookup failed for %s: %v", instagramURL, err)
 	}
+
+	return result
+}
+
+// instagramPostCaption builds the author line and caption, fitted next to the
+// original link with room for a later note; "" when the post had neither.
+func instagramPostCaption(post InstagramPost, instagramURL string) string {
+	username := safeProfileUsername(post.AuthorName)
+	caption := authorCaption{
+		Platform:  settings.PlatformInstagram,
+		Username:  username,
+		Text:      post.Caption,
+		PostURL:   instagramURL,
+		Reserve:   gatedQuotaNoteReserve,
+		PlainText: true,
+	}
+	result := buildAuthorCaption(caption)
 
 	return result
 }
@@ -171,6 +213,24 @@ func fetchInstagramOEmbed(postURL string) (int, []byte, error) {
 	}
 
 	return result, body, err
+}
+
+// parseInstagramOEmbed reads an oEmbed answer: the gate (see
+// parseInstagramGate), plus the author and caption of an ungated post.
+func parseInstagramOEmbed(status int, body []byte) (InstagramPost, error) {
+	result := InstagramPost{}
+	post := instagramOEmbedPost{}
+	gate, err := parseInstagramGate(status, body)
+
+	if (err == nil) && (http.StatusOK == status) {
+		err = json.Unmarshal(body, &post)
+	}
+
+	if err == nil {
+		result = InstagramPost{Gate: gate, AuthorName: post.AuthorName, Caption: post.Title}
+	}
+
+	return result, err
 }
 
 // parseInstagramGate reads an oEmbed answer: 200 is an ungated post, 400 with a

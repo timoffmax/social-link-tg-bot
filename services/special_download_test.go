@@ -202,17 +202,67 @@ func TestAppendCaptionNoteFitsTheCaptionLimit(t *testing.T) {
 	}
 }
 
-func TestAppendCaptionNoteNeverLeavesALinkUnclosed(t *testing.T) {
+func TestAppendCaptionNoteKeepsTheOriginalLinkWhole(t *testing.T) {
 	link := FormatOriginalLink(reelVideoTestURL)
 	padding := strings.Repeat("b", 1000-len(link))
 	room := len(padding) + strings.Index(link, "View") + len("View")
 	noteLength := TelegramCaptionLimitBytes - len(captionNoteSeparator) - len(captionCutMark) - room
-	item := &MediaInfo{Caption: padding + link}
+	note := strings.Repeat("n", noteLength)
+	item := &MediaInfo{Caption: fmt.Sprintf("%s%s", padding, link)}
+
+	AppendCaptionNote(item, note)
+
+	want := fmt.Sprintf("%s%s%s%s", captionCutMark, link, captionNoteSeparator, note)
+
+	if (len(item.Caption) > TelegramCaptionLimitBytes) || (strings.HasSuffix(item.Caption, want) == false) {
+		t.Fatalf("expected the cut text, the whole link and the note, got %q", item.Caption)
+	}
+}
+
+func TestAppendCaptionNoteDropsALinkCutInside(t *testing.T) {
+	link := FormatOriginalLink(reelVideoTestURL)
+	padding := strings.Repeat("b", 10)
+	room := len(padding) + strings.Index(link, "View") + len("View")
+	noteLength := TelegramCaptionLimitBytes - len(captionNoteSeparator) - len(captionCutMark) - room
+	item := &MediaInfo{Caption: fmt.Sprintf("%s%s", padding, link)}
 
 	AppendCaptionNote(item, strings.Repeat("n", noteLength))
 
 	if (len(item.Caption) > TelegramCaptionLimitBytes) || (strings.Contains(item.Caption, "<a ") == true) {
 		t.Fatalf("expected the cut link dropped, got %q", item.Caption)
+	}
+}
+
+func TestLongNoteAfterALongInstagramCaptionKeepsTheOriginalLink(t *testing.T) {
+	post := InstagramPost{AuthorName: "some.author_1", Caption: strings.Repeat("word ", 300)}
+	item := &MediaInfo{Type: MediaTypePhoto, Filename: "cover.jpg", Caption: instagramPostCaption(post, reelVideoTestURL)}
+	link := FormatOriginalLink(reelVideoTestURL)
+	denialNote := fmt.Sprintf("%s%s%s", reelCoverNote, captionNoteSeparator, strings.Repeat("d", 300))
+
+	appendOriginalURL([]*MediaInfo{item}, reelVideoTestURL)
+	AppendCaptionNote(item, denialNote)
+
+	want := fmt.Sprintf("%s%s%s%s", captionCutMark, link, captionNoteSeparator, denialNote)
+
+	if (len(item.Caption) > TelegramCaptionLimitBytes) || (strings.HasSuffix(item.Caption, want) == false) {
+		t.Fatalf("expected the cut text, the link and the note, got %q", item.Caption)
+	}
+}
+
+func TestSecondCaptionNoteKeepsTheLinkAndTheFirstNote(t *testing.T) {
+	link := FormatOriginalLink(reelVideoTestURL)
+	firstNote := strings.Repeat("f", 80)
+	secondNote := strings.Repeat("s", 80)
+	padding := strings.Repeat("b", TelegramCaptionLimitBytes-len(link)-len(captionNoteSeparator)-len(firstNote))
+	item := &MediaInfo{Caption: fmt.Sprintf("%s%s", padding, link)}
+
+	AppendCaptionNote(item, firstNote)
+	AppendCaptionNote(item, secondNote)
+
+	want := fmt.Sprintf("%s%s%s%s%s%s", captionCutMark, link, captionNoteSeparator, firstNote, captionNoteSeparator, secondNote)
+
+	if (len(item.Caption) > TelegramCaptionLimitBytes) || (strings.HasSuffix(item.Caption, want) == false) {
+		t.Fatalf("expected the link and both notes whole, got %q", item.Caption)
 	}
 }
 
@@ -646,5 +696,17 @@ func TestStoryHighlightsNeverReserve(t *testing.T) {
 
 	if sd.canRunCostedMethod(MethodStoriesApify, "https://www.instagram.com/stories/someone/3400000000000000000/") == false {
 		t.Fatalf("a story link must be chargeable")
+	}
+}
+
+func TestOriginalLinkPatternMatchesFormatOriginalLink(t *testing.T) {
+	urls := []string{reelVideoTestURL, "https://www.tiktok.com/@a/video/1", "https://x.com/a/status/1?s=20", "https://www.reddit.com/r/a/comments/b/c/"}
+
+	for _, postURL := range urls {
+		caption := fmt.Sprintf("text%s", FormatOriginalLink(postURL))
+
+		if originalLinkPattern.MatchString(caption) == false {
+			t.Errorf("pattern misses the original link of %s: %q", postURL, caption)
+		}
 	}
 }

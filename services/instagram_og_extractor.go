@@ -35,20 +35,21 @@ func NewInstagramOGExtractor(tempDir string) *InstagramOGExtractor {
 
 // ExtractMedia first asks Instagram whether the author gated the post: a gated
 // post yields an InstagramGatedError (its og tags would be a login wall or an
-// unrelated image). Otherwise it downloads the og:image thumbnail as a photo,
-// marked as the video's cover for a reel or IGTV post (see markReelCover).
+// unrelated image). Otherwise it downloads the og:image thumbnail as a photo
+// with the oEmbed author and caption, marked as the video's cover for a reel
+// or IGTV post (see markReelCover).
 func (e *InstagramOGExtractor) ExtractMedia(instagramURL string) ([]*MediaInfo, error) {
 	var result []*MediaInfo
 	var err error
 	imageURL := ""
-	gate := CheckInstagramGate(instagramURL)
+	post := LookupInstagramPost(instagramURL)
 
-	if gate.Restricted == true {
-		err = &InstagramGatedError{Gate: gate}
+	if post.Gate.Restricted == true {
+		err = &InstagramGatedError{Gate: post.Gate}
 	}
 
-	if gate.Restricted == false {
-		result, imageURL, err = e.fetchPreview(instagramURL, false)
+	if post.Gate.Restricted == false {
+		result, imageURL, err = e.fetchPreview(instagramURL, false, post)
 	}
 
 	if err == nil {
@@ -79,13 +80,14 @@ func markReelCover(media []*MediaInfo, instagramURL, imageURL string) {
 // thumbnail as a photo. With requireMediaCDN, an og:image that is not on
 // Instagram's media CDN (a login wall or logo) is rejected.
 func (e *InstagramOGExtractor) extractPreview(instagramURL string, requireMediaCDN bool) ([]*MediaInfo, error) {
-	result, _, err := e.fetchPreview(instagramURL, requireMediaCDN)
+	result, _, err := e.fetchPreview(instagramURL, requireMediaCDN, InstagramPost{})
 
 	return result, err
 }
 
-// fetchPreview is extractPreview that also returns the og:image URL.
-func (e *InstagramOGExtractor) fetchPreview(instagramURL string, requireMediaCDN bool) ([]*MediaInfo, string, error) {
+// fetchPreview is extractPreview that also returns the og:image URL; the
+// caption comes from post (the oEmbed answer) when it has one.
+func (e *InstagramOGExtractor) fetchPreview(instagramURL string, requireMediaCDN bool, post InstagramPost) ([]*MediaInfo, string, error) {
 	var result []*MediaInfo
 	imageURL := ""
 	htmlBody, err := e.fetchHTML(instagramURL)
@@ -104,21 +106,33 @@ func (e *InstagramOGExtractor) fetchPreview(instagramURL string, requireMediaCDN
 	}
 
 	if err == nil {
-		result, err = e.downloadPreview(instagramURL, imageURL, htmlBody)
+		caption := ogPreviewCaption(post, instagramURL, htmlBody)
+		result, err = e.downloadPreview(instagramURL, imageURL, caption)
 	}
 
 	return result, imageURL, err
 }
 
-// downloadPreview downloads the og:image and builds the photo with the
-// og:title as caption.
-func (e *InstagramOGExtractor) downloadPreview(instagramURL, imageURL, htmlBody string) ([]*MediaInfo, error) {
+// ogPreviewCaption is the caption of the preview photo: the oEmbed author and
+// caption, else the og:title (Instagram no longer sends it to every crawler).
+func ogPreviewCaption(post InstagramPost, instagramURL, htmlBody string) string {
+	result := instagramPostCaption(post, instagramURL)
+
+	if result == "" {
+		rawTitle := firstSubmatch(ogTitlePattern, htmlBody)
+		// The unescaped title is plain text, escaped again and fitted like
+		// the oEmbed caption.
+		title := html.UnescapeString(rawTitle)
+		titlePost := InstagramPost{Caption: title}
+		result = instagramPostCaption(titlePost, instagramURL)
+	}
+
+	return result
+}
+
+// downloadPreview downloads the og:image and builds the photo with caption.
+func (e *InstagramOGExtractor) downloadPreview(instagramURL, imageURL, caption string) ([]*MediaInfo, error) {
 	var result []*MediaInfo
-	rawTitle := firstSubmatch(ogTitlePattern, htmlBody)
-	caption := html.UnescapeString(rawTitle)
-	// Captions are sent with HTML parse mode: the unescaped title must be
-	// escaped again, or a bare & or < gets the message rejected.
-	escapedCaption := EscapeForTelegramHTML(caption)
 	_, shortcode := instagramPostPath(instagramURL)
 	timestamp := time.Now().Unix()
 	filename := fmt.Sprintf("instagram_og_%s_%d.jpg", shortcode, timestamp)
@@ -132,11 +146,10 @@ func (e *InstagramOGExtractor) downloadPreview(instagramURL, imageURL, htmlBody 
 	if err == nil {
 		log.Printf("✅ [OG] Downloaded preview thumbnail for %s", instagramURL)
 
-		authorCaption := FormatAuthorCaption("instagram", "", "", escapedCaption)
 		result = []*MediaInfo{{
 			Type:     MediaTypePhoto,
 			URL:      instagramURL,
-			Caption:  authorCaption,
+			Caption:  caption,
 			Filename: filePath,
 		}}
 	}

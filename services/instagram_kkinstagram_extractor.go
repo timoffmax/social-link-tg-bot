@@ -98,12 +98,18 @@ func (e *InstagramKKInstagramExtractor) ExtractMedia(instagramURL string) ([]*Me
 		log.Printf("🎬 [kkinstagram] Got only the cover of %s %s", postType, shortcode)
 	}
 
+	// Looked up only after a download, so a kk failure leaves the one lookup
+	// to the OG fallback.
+	post := LookupInstagramPost(instagramURL)
+	caption := instagramPostCaption(post, instagramURL)
+	isSpoiler := post.Gate.BlursMedia()
 	result := []*MediaInfo{{
 		Type:       mediaType,
 		URL:        instagramURL,
-		Caption:    FormatAuthorCaption("instagram", "", "", ""),
+		Caption:    caption,
 		Filename:   filePath,
 		VideoCover: isVideoCover,
+		Spoiler:    isSpoiler,
 	}}
 
 	return result, nil

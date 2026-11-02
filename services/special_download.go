@@ -386,19 +386,58 @@ func AppendCaptionNote(item *MediaInfo, note string) {
 	item.Notes = append(item.Notes, note)
 }
 
-// withCaptionNote returns caption followed by "\n\n"+note, the caption body
-// cut first so the whole stays within TelegramCaptionLimitBytes.
+// originalLinkPattern matches the FormatOriginalLink suffix in a caption body.
+var originalLinkPattern = regexp.MustCompile(`\n\n🔗 <a href="[^"]*">[^<]*</a>`)
+
+// withCaptionNote returns caption followed by "\n\n"+note within the caption
+// limit, cutting the text before the original link, which stays whole.
 func withCaptionNote(caption, note string) string {
 	body := strings.TrimSpace(caption)
 	combined := fmt.Sprintf("%s%s%s", body, captionNoteSeparator, note)
 
 	if len(combined) > TelegramCaptionLimitBytes {
 		room := TelegramCaptionLimitBytes - len(note) - len(captionNoteSeparator) - len(captionCutMark)
-		cutBody := cutCaptionBody(body, room)
-		combined = fmt.Sprintf("%s%s%s%s", cutBody, captionCutMark, captionNoteSeparator, note)
+		cutBody := cutBodyKeepingLink(body, room)
+		combined = fmt.Sprintf("%s%s%s", cutBody, captionNoteSeparator, note)
 	}
 
 	result := strings.TrimSpace(combined)
+
+	return result
+}
+
+// cutBodyKeepingLink cuts body to room bytes plus the cut mark before the
+// last original link and the notes after it; a tail that does not fit is cut.
+func cutBodyKeepingLink(body string, room int) string {
+	link := lastOriginalLinkTail(body)
+	textRoom := room - len(link)
+	isLinkKept := (link != "") && (textRoom >= 0)
+	text := body
+	cutRoom := room
+	keptLink := ""
+
+	if isLinkKept == true {
+		text = strings.TrimSuffix(body, link)
+		cutRoom = textRoom
+		keptLink = link
+	}
+
+	cutText := cutCaptionBody(text, cutRoom)
+	result := fmt.Sprintf("%s%s%s", cutText, captionCutMark, keptLink)
+
+	return result
+}
+
+// lastOriginalLinkTail returns the body from its last original link on (the
+// link and any notes after it), or "".
+func lastOriginalLinkTail(body string) string {
+	result := ""
+	matches := originalLinkPattern.FindAllStringIndex(body, -1)
+
+	if len(matches) > 0 {
+		lastStart := matches[len(matches)-1][0]
+		result = body[lastStart:]
+	}
 
 	return result
 }
